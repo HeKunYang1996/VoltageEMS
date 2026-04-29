@@ -205,7 +205,8 @@ impl CanFrameData {
         &self.data[..self.len as usize]
     }
 
-    /// Get the length
+    /// Get the length (used by tracing-support diagnostic logging)
+    #[cfg(feature = "tracing-support")]
     pub fn len(&self) -> usize {
         self.len as usize
     }
@@ -237,12 +238,14 @@ impl CanFrameCache {
         self.frames.get(&can_id).map(|f| f.as_slice())
     }
 
-    /// Get number of cached CAN-IDs
+    /// Number of cached CAN-IDs (used by tracing-support diagnostic logging)
+    #[cfg(feature = "tracing-support")]
     pub fn len(&self) -> usize {
         self.frames.len()
     }
 
-    /// Get all frames (for debugging)
+    /// Iterate cached frames (used by tracing-support diagnostic logging)
+    #[cfg(feature = "tracing-support")]
     pub fn iter(&self) -> impl Iterator<Item = (&u32, &CanFrameData)> {
         self.frames.iter()
     }

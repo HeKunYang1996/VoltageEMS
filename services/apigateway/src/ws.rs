@@ -7,7 +7,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -103,14 +103,14 @@ impl WsHub {
         interval_ms: u64,
         homepage_points: Vec<HomepagePoint>,
     ) {
-        if let Some(handle) = self.clients.get(client_id) {
-            if let Ok(mut sub) = handle.sub.write() {
-                sub.source = source;
-                sub.channels = channels;
-                sub.data_types = data_types;
-                sub.interval_ms = interval_ms;
-                sub.homepage_points = homepage_points;
-            }
+        if let Some(handle) = self.clients.get(client_id)
+            && let Ok(mut sub) = handle.sub.write()
+        {
+            sub.source = source;
+            sub.channels = channels;
+            sub.data_types = data_types;
+            sub.interval_ms = interval_ms;
+            sub.homepage_points = homepage_points;
         }
     }
 
@@ -123,10 +123,9 @@ impl WsHub {
     }
 
     pub fn send_to(&self, client_id: &str, msg: String) -> bool {
-        if let Some(handle) = self.clients.get(client_id) {
-            handle.tx.send(msg).is_ok()
-        } else {
-            false
+        match self.clients.get(client_id) {
+            Some(handle) => handle.tx.send(msg).is_ok(),
+            _ => false,
         }
     }
 
@@ -153,7 +152,9 @@ impl WsHub {
 
         for entry in self.clients.iter() {
             let id = entry.key();
-            let sub = entry.sub.read().map(|s| s.clone()).unwrap_or_default();
+            let Ok(sub) = entry.sub.read() else {
+                continue;
+            };
 
             connections.insert(
                 id.clone(),
@@ -167,9 +168,9 @@ impl WsHub {
             subscriptions_map.insert(
                 id.clone(),
                 json!({
-                    "source": sub.source,
-                    "channels": sub.channels,
-                    "data_types": sub.data_types,
+                    "source": &sub.source,
+                    "channels": &sub.channels,
+                    "data_types": &sub.data_types,
                     "interval": sub.interval_ms,
                 }),
             );
@@ -615,24 +616,16 @@ async fn handle_client_message(hub: &WsHub, client_id: &str, text: &str) {
                 })
                 .unwrap_or_else(|| vec!["T".to_string()]);
             let interval_ms: u64 = data["data"]["interval"].as_u64().unwrap_or(1000);
+            let is_homepage = source == "homepage";
 
             // Load homepage points once from DB when subscribing to "homepage" source.
-            let homepage_points = if source == "homepage" {
+            let homepage_points = if is_homepage {
                 load_homepage_points(&hub.db).await
             } else {
                 Vec::new()
             };
 
-            hub.update_subscription(
-                client_id,
-                source.clone(),
-                channels.clone(),
-                data_types,
-                interval_ms,
-                homepage_points,
-            );
-
-            let ack = if source == "homepage" {
+            let ack = if is_homepage {
                 json!({
                     "type": "subscribe_ack",
                     "id": format!("{}_ack", data["id"].as_str().unwrap_or("sub")),
@@ -644,9 +637,17 @@ async fn handle_client_message(hub: &WsHub, client_id: &str, text: &str) {
                     "type": "subscribe_ack",
                     "id": format!("{}_ack", data["id"].as_str().unwrap_or("sub")),
                     "timestamp": Utc::now().timestamp(),
-                    "data": { "subscribed": channels, "failed": [] }
+                    "data": { "subscribed": &channels, "failed": [] }
                 })
             };
+            hub.update_subscription(
+                client_id,
+                source,
+                channels,
+                data_types,
+                interval_ms,
+                homepage_points,
+            );
             hub.send_to(client_id, ack.to_string());
         },
 
@@ -688,7 +689,19 @@ async fn handle_control(hub: &WsHub, client_id: &str, data: &Value) {
     let command_type = control["command_type"].as_str();
     let value = &control["value"];
 
-    if channel_id.is_none() || point_id.is_none() || command_type.is_none() || value.is_null() {
+    let (Some(channel_id), Some(point_id), Some(_command_type)) =
+        (channel_id, point_id, command_type)
+    else {
+        let err = error_msg(
+            "CONTROL_ERROR",
+            "Missing required control parameters",
+            data["id"].as_str(),
+        );
+        hub.send_to(client_id, err);
+        return;
+    };
+
+    if value.is_null() {
         let err = error_msg(
             "CONTROL_ERROR",
             "Missing required control parameters",
@@ -713,8 +726,20 @@ async fn handle_control(hub: &WsHub, client_id: &str, data: &Value) {
         "timestamp": Utc::now().timestamp(),
     });
 
-    let trigger_key = format!("{}:trigger:{}:C", source, channel_id.unwrap());
-    let cmd_bytes = Bytes::from(serde_json::to_vec(&cmd_data).unwrap_or_default());
+    let trigger_key = format!("{}:trigger:{}:C", source, channel_id);
+    let cmd_bytes = match serde_json::to_vec(&cmd_data) {
+        Ok(bytes) => Bytes::from(bytes),
+        Err(e) => {
+            error!("Failed to encode WS control command: {}", e);
+            let err = error_msg(
+                "CONTROL_ERROR",
+                "Failed to encode control command",
+                data["id"].as_str(),
+            );
+            hub.send_to(client_id, err);
+            return;
+        },
+    };
 
     match hub.rtdb.list_rpush(&trigger_key, cmd_bytes).await {
         Ok(_) => {

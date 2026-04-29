@@ -2,13 +2,13 @@
 //!
 //! Implements the protocol layer's Protocol traits for LYNK CAN communication.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use arc_swap::ArcSwapOption;
 use socketcan::{CanSocket, EmbeddedFrame, Frame, Socket};
-use tokio::sync::broadcast;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use voltage_model::PointType;
 
@@ -188,6 +188,7 @@ impl CanClient {
             #[cfg(feature = "tracing-support")]
             tracing::info!("Interval created, starting receive loop");
 
+            #[cfg(feature = "tracing-support")]
             let mut poll_count = 0u64;
             loop {
                 #[cfg(feature = "tracing-support")]
