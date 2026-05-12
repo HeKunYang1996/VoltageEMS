@@ -213,36 +213,48 @@ export const dynamicRoutes: RouteItem[] = [
   {
     path: '/control',
     name: 'control',
+    component: () => import('@/views/Control/ControlRecord/index.vue'),
     meta: {
       title: 'Control',
-      isSubMenu: true,
+      isSubMenu: false,
       activeNav: '/control',
       icon: controlIcon,
       roles: ['Admin', 'Viewer', 'Engineer'],
     },
-    children: [
-      {
-        path: 'controlRecord',
-        name: 'controlRecord',
-        component: () => import('@/views/Control/ControlRecord/index.vue'),
-        meta: {
-          title: 'Control Record',
-          activeNav: '/control/controlRecord',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
-      {
-        path: 'controlManagement',
-        name: 'controlManagement',
-        component: () => import('@/views/Control/ControlManagement/index.vue'),
-        meta: {
-          title: 'Control Management',
-          activeNav: '/control/controlManagement',
-          roles: ['Admin'],
-        },
-      },
-    ],
   },
+  // {
+  //   path: '/control',
+  //   name: 'control',
+  //   meta: {
+  //     title: 'Control',
+  //     isSubMenu: true,
+  //     activeNav: '/control',
+  //     icon: controlIcon,
+  //     roles: ['Admin', 'Viewer', 'Engineer'],
+  //   },
+  //   children: [
+  //     {
+  //       path: 'controlRecord',
+  //       name: 'controlRecord',
+  //       component: () => import('@/views/Control/ControlRecord/index.vue'),
+  //       meta: {
+  //         title: 'Control Record',
+  //         activeNav: '/control/controlRecord',
+  //         roles: ['Admin', 'Viewer', 'Engineer'],
+  //       },
+  //     },
+  //     {
+  //       path: 'controlManagement',
+  //       name: 'controlManagement',
+  //       component: () => import('@/views/Control/ControlManagement/index.vue'),
+  //       meta: {
+  //         title: 'Control Management',
+  //         activeNav: '/control/controlManagement',
+  //         roles: ['Admin'],
+  //       },
+  //     },
+  //   ],
+  // },
   {
     path: '/statistics',
     name: 'statistics',
@@ -276,26 +288,26 @@ export const dynamicRoutes: RouteItem[] = [
           roles: ['Admin', 'Viewer', 'Engineer'],
         },
       },
-      {
-        path: 'operationLog',
-        name: 'statisticsOperationLog',
-        component: () => import('@/views/Statistics/OperationLog.vue'),
-        meta: {
-          title: 'Operation Log',
-          activeNav: '/statistics/operationLog',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
-      {
-        path: 'runingLog',
-        name: 'statisticsRuningLog',
-        component: () => import('@/views/Statistics/RuningLog.vue'),
-        meta: {
-          title: 'Runing Log',
-          activeNav: '/statistics/runingLog',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
+      // {
+      //   path: 'operationLog',
+      //   name: 'statisticsOperationLog',
+      //   component: () => import('@/views/Statistics/OperationLog.vue'),
+      //   meta: {
+      //     title: 'Operation Log',
+      //     activeNav: '/statistics/operationLog',
+      //     roles: ['Admin', 'Viewer', 'Engineer'],
+      //   },
+      // },
+      // {
+      //   path: 'runingLog',
+      //   name: 'statisticsRuningLog',
+      //   component: () => import('@/views/Statistics/RuningLog.vue'),
+      //   meta: {
+      //     title: 'Runing Log',
+      //     activeNav: '/statistics/runingLog',
+      //     roles: ['Admin', 'Viewer', 'Engineer'],
+      //   },
+      // },
     ],
   },
   {

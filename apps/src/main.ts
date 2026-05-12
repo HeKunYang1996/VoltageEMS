@@ -45,4 +45,13 @@ initResponsive()
 // 启动应用
 app.mount('#app')
 
-// 应用启动后初始化WebSocket
+// 过滤 Chrome 扩展引起的 message channel 误报错误
+window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+  const msg: string = event.reason?.message ?? ''
+  if (
+    msg.includes('message channel closed') ||
+    msg.includes('listener indicated an asynchronous')
+  ) {
+    event.preventDefault()
+  }
+})

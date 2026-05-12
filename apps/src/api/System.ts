@@ -5,7 +5,7 @@ export const getMqttConfig = () => {
 }
 
 export const updateMqttConfig = (params: any) => {
-  return Request.post('/netApi/mqtt/config', params)
+  return Request.put('/netApi/mqtt/config', params)
 }
 
 export const disconnectMqtt = () => {

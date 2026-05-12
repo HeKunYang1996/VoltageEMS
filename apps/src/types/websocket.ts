@@ -28,7 +28,7 @@ export type ServerMessageType =
   | 'alarm_num'
 
 // 数据类型枚举
-export type DataType = 'T' | 'S' | 'C' | 'A' // T=遥测, S=遥信, C=遥控, A=遥调
+export type DataType = 'T' | 'S' | 'C' | 'A' | 'M' // T=遥测, S=遥信, C=遥控, A=遥调, M=测量
 
 // 告警级别枚举
 export type AlarmLevel = 0 | 1 | 2 | 3 // 0=低, 1=中, 2=高, 3=紧急

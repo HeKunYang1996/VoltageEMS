@@ -1,17 +1,10 @@
 <template>
   <div class="voltage-class curves">
-    <!-- 表格区域 -->
     <div class="curves__content">
-      <!-- 表格工具栏 -->
+      <!-- 工具栏 -->
       <div class="curves__toolbar">
         <div class="curves__toolbar-right">
           <div class="curves__toolbar-time-btns" @click="handleTimeBtnClick">
-            <div
-              v-show="selectedTimeBtn === 'custom'"
-              class="curves__toolbar-time-interval"
-              ref="toolbarRightRef"
-            >
-            </div>
             <el-date-picker
               v-if="selectedTimeBtn === 'custom'"
               v-model="rangeArray"
@@ -39,6 +32,8 @@
       </div>
 
       <!-- 图表区域 -->
+      <div class="curves__charts-outer">
+      <LoadingBg :loading="isLoading">
       <div class="curves__charts">
         <!-- 概览卡片 -->
         <div class="curves__chart-item">
@@ -46,7 +41,7 @@
             <div class="chart__review-header">
               <div class="chart__review-header-title">Energy consumption</div>
               <div class="chart__review-header-value">
-                1000 &nbsp;<span class="chart__review-header-unit">kWh</span>
+                {{ totalLoadEnergy }}&nbsp;<span class="chart__review-header-unit">kWh</span>
               </div>
             </div>
             <div class="chart__review-content">
@@ -68,45 +63,58 @@
           </div>
         </div>
 
-        <!-- 饼图卡片 -->
+        <!-- Load Energy 柱状图 -->
         <div class="curves__chart-item">
-          <ModuleCard title="Energy Distribution">
+          <ModuleCard title="Load Energy">
+            <StackedBarChart
+              :xAxiosOption="{ xAxiosData: xAxisData }"
+              :yAxiosOption="{ yUnit: 'kWh' }"
+              :series="loadEnergySeriesData"
+            />
+          </ModuleCard>
+        </div>
+
+        <!-- Energy 柱状图 (PV + Diesel) -->
+        <div class="curves__chart-item">
+          <ModuleCard title="Energy">
+            <StackedBarChart
+              :xAxiosOption="{ xAxiosData: xAxisData }"
+              :yAxiosOption="{ yUnit: 'kWh' }"
+              :series="energySeriesData"
+            />
+          </ModuleCard>
+        </div>
+
+        <!-- 饼图卡片（保持原样，暂不接入真实数据） -->
+        <div class="curves__chart-item">
+          <ModuleCard title="Running Statistics">
             <DoughnutChart :series="energyDistributionData" />
           </ModuleCard>
         </div>
 
-        <!-- 折线图卡片 -->
+        <!-- SOC 折线图 -->
         <div class="curves__chart-item">
-          <ModuleCard title="Power Trend">
+          <ModuleCard title="SOC Curve">
             <lineChart
-              :xAxiosOption="powerTrendXAxis"
-              :yAxiosOption="powerTrendYAxis"
-              :series="powerTrendSeries"
+              :xAxiosOption="{ xAxiosData: xAxisData }"
+              :yAxiosOption="{ yUnit: '%' }"
+              :series="socSeriesData"
             />
           </ModuleCard>
         </div>
 
-        <!-- 堆叠柱状图卡片 -->
+        <!-- Power 折线图 (PV + ESS + DG) -->
         <div class="curves__chart-item">
-          <ModuleCard title="Energy Chart">
-            <StackedBarChart
-              :xAxiosOption="xAxiosOption"
-              :yAxiosOption="yAxiosOption"
-              :series="exampleSeries"
+          <ModuleCard title="Power Curve">
+            <lineChart
+              :xAxiosOption="{ xAxiosData: xAxisData }"
+              :yAxiosOption="{ yUnit: 'kW' }"
+              :series="powerSeriesData"
             />
           </ModuleCard>
         </div>
-
-        <!-- 其余图表卡片 -->
-        <div class="curves__chart-item" v-for="(item, idx) in 2" :key="idx">
-          <ModuleCard title="Energy Chart">
-            <StackedBarChart
-              :xAxiosOption="xAxiosOption"
-              :yAxiosOption="yAxiosOption"
-              :series="exampleSeries"
-            />
-          </ModuleCard>
-        </div>
+      </div>
+      </LoadingBg>
       </div>
     </div>
   </div>
@@ -116,25 +124,24 @@
 import PVEnergy from '@/assets/icons/icon-pv-energy.svg'
 import ESS from '@/assets/icons/icon-ess-energy.svg'
 import DG from '@/assets/icons/DGEnergy.svg'
-import { queryPowerTrend } from '@/api/Statistic/overview'
+import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
-import { getRecentHoursRange, getRecentWeekRange, getRecentDaysRange } from '@/utils/date.ts'
-import type { QueryPowerTrendParams } from '@/types/Statistics/OverView'
+import { getRecentHoursRange, getRecentDaysRange, getRecentWeekRange } from '@/utils/date.ts'
+import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import useWebSocket from '@/composables/useWebSocket'
+import { formatNumber } from '@/utils/common'
 
-interface TrendPoint {
-  timestamp: string
-  value: number
-}
-
-interface LineSeries {
+interface ChartSeries {
   name: string
   data: number[]
   color: string
 }
 
-const toolbarRightRef = ref<HTMLElement | null>(null)
+// 时间选择
+const defaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
+const rangeArray = ref<string[]>([])
+const selectedTimeBtn = ref<'6h' | '1d' | '1w' | '1m' | 'custom'>('6h')
 
-// 时间按钮列表
 const timeBtnList: { label: string; value: '6h' | '1d' | '1w' | '1m' | 'custom' }[] = [
   { label: 'Custom', value: 'custom' },
   { label: '6 Hour', value: '6h' },
@@ -143,237 +150,226 @@ const timeBtnList: { label: string; value: '6h' | '1d' | '1w' | '1m' | 'custom' 
   { label: '1 Month', value: '1m' },
 ]
 
-const defaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
-const timeInterval = ref('15m')
-const rangeArray = ref<string[]>([])
-const intervalList = ref([
-  { label: '30 Seconds', value: '30s' },
-  { label: '1 Minute', value: '1m' },
-  { label: '15 Minutes', value: '15m' },
-  { label: '1 Hour', value: '1h' },
-  { label: '6 Hours', value: '6h' },
-  { label: '1 Day', value: '1d' },
-  { label: '1 Week', value: '1w' },
-  { label: '1 Month', value: '1M' },
-  { label: '1 Year', value: '1y' },
-])
-
+// 概览卡片数据
+const totalLoadEnergy = ref(0)
 const stationInfoList = reactive([
-  {
-    title: 'PV',
-    icon: PVEnergy,
-    value: '150',
-    unit: 'kWh',
-  },
-  {
-    title: 'ESS',
-    icon: ESS,
-    value: '150',
-    unit: 'kWh',
-  },
-  {
-    title: 'DG',
-    icon: DG,
-    value: '145',
-    unit: 'kWh', // 修正单位大小写
-  },
+  { title: 'PV', icon: PVEnergy, value: '--', unit: 'kW' },
+  { title: 'ESS', icon: ESS, value: '--', unit: 'kW' },
+  { title: 'DG', icon: DG, value: '--', unit: 'kW' },
 ])
-// 当前选中的时间按钮
-const selectedTimeBtn = ref<'6h' | '1d' | '1w' | '1m' | 'custom'>('6h')
 
-// 事件代理处理时间按钮点击
+// 加载状态 & 请求取消
+const isLoading = ref(false)
+let fetchAbortController: AbortController | null = null
+
+// 图表公共 X 轴
+const xAxisData = ref<string[]>([])
+
+// Load Energy 柱状图 series
+const loadEnergySeriesData = ref<ChartSeries[]>([
+  { name: 'Load', data: [], color: '#4FADF7' },
+])
+
+// Energy 柱状图 series (PV + DG)
+const energySeriesData = ref<ChartSeries[]>([
+  { name: 'Pv', data: [], color: '#69CBFF' },
+  { name: 'DG', data: [], color: '#1D86FF' },
+])
+
+// SOC 折线图 series
+const socSeriesData = ref<ChartSeries[]>([
+  { name: 'SOC', data: [], color: '#6DD400' },
+])
+
+// Power 折线图 series (PV + ESS + DG)
+const powerSeriesData = ref<ChartSeries[]>([
+  { name: 'Pv', data: [], color: '#69CBFF' },
+  { name: 'ESS', data: [], color: '#4FADF7' },
+  { name: 'DG', data: [], color: '#F6C85F' },
+])
+
+// 饼图：设备运行状态（Online / Offline / Alarm）
+const energyDistributionData = [
+  { name: 'Online', value: 0, color: '#6DD400' },
+  { name: 'Offline', value: 100, color: '#4FADF7' },
+  { name: 'Alarm', value: 0, color: '#FF4D4F' },
+]
+
+// WebSocket 订阅 inst 通道 1(ESS)/2(DG)/4(PV)/9(Load)，获取实时功率和负荷电能
+const applyChannelValues = (channelId: number, values: Record<string, number>) => {
+  switch (channelId) {
+    case 4: // PV: pt7 = 功率
+      if (values['7'] !== undefined) stationInfoList[0].value = formatNumber(values['7'])
+      break
+    case 1: // ESS: pt9 = 功率
+      if (values['9'] !== undefined) stationInfoList[1].value = formatNumber(values['9'])
+      break
+    case 2: // DG: pt1 = 功率
+      if (values['1'] !== undefined) stationInfoList[2].value = formatNumber(values['1'])
+      break
+    case 9: // Load: pt2 = 电能（Energy consumption）
+      if (values['2'] !== undefined) totalLoadEnergy.value = Math.round(Number(values['2']))
+      break
+  }
+}
+
+useWebSocket(
+  { source: 'inst', channels: [1, 2, 4, 9], dataTypes: ['M'], interval: 2000 },
+  {
+    onDataUpdate: (data) => {
+      applyChannelValues(data.channel_id, data.values)
+    },
+    onBatchDataUpdate: (data: any) => {
+      for (const item of data?.updates ?? []) {
+        applyChannelValues(item.channel_id, item.values)
+      }
+    },
+  },
+)
+
+// 获取当前时间范围（ISO 格式）
+const getTimeRange = (): { start_time: string; end_time: string } => {
+  if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
+    return {
+      start_time: dayjs(rangeArray.value[0]).toISOString(),
+      end_time: dayjs(rangeArray.value[1]).toISOString(),
+    }
+  }
+  const rangeMap: Record<string, { start?: string; end?: string }> = {
+    '6h': getRecentHoursRange(6),
+    '1d': getRecentDaysRange(1),
+    '1w': getRecentWeekRange(),
+    '1m': getRecentDaysRange(30),
+  }
+  const range = rangeMap[selectedTimeBtn.value] || getRecentHoursRange(6)
+  return {
+    start_time: range.start!,
+    end_time: range.end!,
+  }
+}
+
+// 格式化时间戳为 x 轴标签
+const formatLabel = (ts: string): string => {
+  const btn = selectedTimeBtn.value
+  if (btn === '6h' || btn === '1d') return dayjs(ts).format('HH:mm')
+  return dayjs(ts).format('MM-DD HH:mm')
+}
+
+const formatValue = (v: number | null | undefined): number =>
+  Number(Number(v ?? 0).toFixed(3))
+
+// 批量查询并更新所有图表
+const fetchAllChartData = async () => {
+  // 取消上一次未完成的请求
+  fetchAbortController?.abort()
+  fetchAbortController = new AbortController()
+  const signal = fetchAbortController.signal
+
+  isLoading.value = true
+  const { start_time, end_time } = getTimeRange()
+
+  try {
+    const res = await batchQueryHistory(
+      {
+        start_time,
+        end_time,
+        limit_per_series: 500,
+        series: [
+          { redis_key: 'inst:6:M', point_id: '2' },  // 0: Load Energy
+          { redis_key: 'inst:4:M', point_id: '15' }, // 1: Energy PV
+          { redis_key: 'inst:2:M', point_id: '2' },  // 2: Energy DG
+          { redis_key: 'inst:1:M', point_id: '7' },  // 3: SOC
+          { redis_key: 'inst:4:M', point_id: '7' },  // 4: Power PV
+          { redis_key: 'inst:1:M', point_id: '5' },  // 5: Power ESS
+          { redis_key: 'inst:2:M', point_id: '1' },  // 6: Power DG
+        ],
+      },
+      signal,
+    )
+
+    const responses: BatchQueryResponse[] = res.data?.series || []
+
+    const findSeries = (redisKey: string, pointId: string) =>
+      responses.find((r) => r.redis_key === redisKey && r.point_id === pointId)
+
+    // 合并所有时间戳并排序
+    const allTimestamps = new Set<string>()
+    responses.forEach((r) => (r.data || []).forEach((p) => allTimestamps.add(p.timestamp)))
+    const sortedTimestamps = [...allTimestamps].sort(
+      (a, b) => new Date(a).getTime() - new Date(b).getTime(),
+    )
+
+    xAxisData.value = sortedTimestamps.map(formatLabel)
+
+    const makeValueArray = (s: BatchQueryResponse | undefined): number[] => {
+      if (!s) return sortedTimestamps.map(() => 0)
+      const map = new Map((s.data || []).map((p) => [p.timestamp, p.value]))
+      return sortedTimestamps.map((ts) => formatValue(map.get(ts)))
+    }
+
+    const loadEnergyData = makeValueArray(findSeries('inst:6:M', '2'))
+    const pvEnergyData = makeValueArray(findSeries('inst:4:M', '15'))
+    const dieselEnergyData = makeValueArray(findSeries('inst:2:M', '2'))
+    const socData = makeValueArray(findSeries('inst:1:M', '7'))
+    const pvPowerData = makeValueArray(findSeries('inst:4:M', '7'))
+    const essPowerData = makeValueArray(findSeries('inst:1:M', '5'))
+    const dieselPowerData = makeValueArray(findSeries('inst:2:M', '1'))
+
+    // 更新总负荷电能
+    totalLoadEnergy.value = Math.round(loadEnergyData.reduce((a, b) => a + b, 0))
+
+    // 更新 Load Energy 图表
+    loadEnergySeriesData.value = [{ name: 'Load', data: loadEnergyData, color: '#4FADF7' }]
+
+    // 更新 Energy 图表
+    energySeriesData.value = [
+      { name: 'Pv', data: pvEnergyData, color: '#69CBFF' },
+      { name: 'DG', data: dieselEnergyData, color: '#1D86FF' },
+    ]
+
+    // 更新 SOC 图表
+    socSeriesData.value = [{ name: 'SOC', data: socData, color: '#6DD400' }]
+
+    // 更新 Power 图表
+    powerSeriesData.value = [
+      { name: 'Pv', data: pvPowerData, color: '#69CBFF' },
+      { name: 'ESS', data: essPowerData, color: '#4FADF7' },
+      { name: 'DG', data: dieselPowerData, color: '#F6C85F' },
+    ]
+  } catch (error: any) {
+    // AbortError / CanceledError 表示请求被主动取消，静默处理
+    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') return
+    console.error('Failed to load overview chart data:', error)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+onUnmounted(() => {
+  fetchAbortController?.abort()
+})
+
+// 时间按钮点击（事件代理）
 const handleTimeBtnClick = (event: MouseEvent) => {
-  const target = event.target as HTMLElement
-  // 查找最近的按钮元素
-  const btn = target.closest('.curves__toolbar-time-btn') as HTMLElement | null
-  if (btn && btn.dataset.value) {
+  const btn = (event.target as HTMLElement).closest('.curves__toolbar-time-btn') as HTMLElement | null
+  if (btn?.dataset.value) {
     selectedTimeBtn.value = btn.dataset.value as '6h' | '1d' | '1w' | '1m' | 'custom'
     rangeArray.value = []
     if (selectedTimeBtn.value !== 'custom') {
-      fetchPowerTrendData()
+      fetchAllChartData()
     }
   }
 }
 
-// 处理日期范围变化
+// 自定义时间范围变化
 const handleDateRangeChange = () => {
   if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
-    fetchPowerTrendData()
+    fetchAllChartData()
   }
 }
-
-// 能源分布数据 - 用于饼图
-const energyDistributionData = [
-  {
-    name: 'pv',
-    value: 45,
-    color: '#4FADF7',
-  },
-  {
-    name: 'diesel generator',
-    value: 30,
-    color: '#F6C85F',
-  },
-  {
-    name: 'ess',
-    value: 25,
-    color: '#6DD400',
-  },
-]
-
-// 功率趋势数据 - 用于折线图
-const powerTrendYAxis = {
-  yUnit: 'kW',
-}
-const powerTrendXAxis = reactive({
-  xAxiosData: [] as string[],
-})
-const powerTrendSeries = ref<LineSeries[]>([
-  {
-    name: 'Point 1',
-    data: [],
-    color: 'rgba(105, 203, 255, 1)',
-  },
-  {
-    name: 'Point 2',
-    data: [],
-    color: 'rgba(29, 134, 255, 1)',
-  },
-])
-
-const formatTimestampLabel = (timestamp: string) => dayjs(timestamp).format('YYYY-MM-DD\nHH:mm:ss')
-const formatValue = (value: number | string | undefined | null) =>
-  Number(Number(value ?? 0).toFixed(3))
-
-const fetchPowerTrendData = async () => {
-  try {
-    const requestPayload: QueryPowerTrendParams = {
-      redis_key: 'inst:1:M',
-      point_id: '',
-    }
-
-    if (selectedTimeBtn.value === 'custom') {
-      // 自定义时间范围
-      if (rangeArray.value.length === 2) {
-        requestPayload.start_time = rangeArray.value[0]
-        requestPayload.end_time = rangeArray.value[1]
-        // 根据时间间隔设置 interval（这里需要根据实际需求调整）
-        // 暂时使用固定值，后续可以根据时间范围和间隔动态计算
-        requestPayload.interval = 720
-      } else {
-        return // 如果没有选择完整的时间范围，不执行请求
-      }
-    } else {
-      // 预设时间范围
-      switch (selectedTimeBtn.value) {
-        case '6h': {
-          const range = getRecentHoursRange(6)
-          requestPayload.interval = 720
-          requestPayload.start_time = range.start
-          requestPayload.end_time = range.end
-          break
-        }
-        case '1d': {
-          requestPayload.interval = 2880
-          break
-        }
-        case '1w': {
-          const range = getRecentWeekRange()
-          requestPayload.interval = 21600
-          requestPayload.start_time = range.start
-          requestPayload.end_time = range.end
-          break
-        }
-        case '1m': {
-          const range = getRecentDaysRange(7) // 按需求：最近一周
-          requestPayload.interval = 86400
-          requestPayload.start_time = range.start
-          requestPayload.end_time = range.end
-          break
-        }
-        default:
-          break
-      }
-    }
-    const [point1Res, point2Res] = await Promise.all([
-      queryPowerTrend({ ...requestPayload, point_id: '1' }),
-      queryPowerTrend({ ...requestPayload, point_id: '2' }),
-    ])
-
-    const point1Data: TrendPoint[] = [...(point1Res.data || [])].reverse()
-    const point2Data: TrendPoint[] = [...(point2Res.data || [])].reverse()
-
-    const orderedTimestamps = Array.from(
-      new Set(
-        [...point1Data, ...point2Data]
-          .map((item) => item.timestamp)
-          .filter((item): item is string => Boolean(item)),
-      ),
-    ).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
-    powerTrendXAxis.xAxiosData = orderedTimestamps.map((timestamp) =>
-      formatTimestampLabel(timestamp),
-    )
-
-    const point1Map = new Map(point1Data.map((item) => [item.timestamp, item.value]))
-    const point2Map = new Map(point2Data.map((item) => [item.timestamp, item.value]))
-
-    powerTrendSeries.value = [
-      {
-        name: 'Point 1',
-        data: orderedTimestamps.map((timestamp) => formatValue(point1Map.get(timestamp))),
-        color: 'rgba(105, 203, 255, 1)',
-      },
-      {
-        name: 'Point 2',
-        data: orderedTimestamps.map((timestamp) => formatValue(point2Map.get(timestamp))),
-        color: 'rgba(29, 134, 255, 1)',
-      },
-    ]
-  } catch (error) {
-    console.error('Failed to load power trend data:', error)
-  }
-}
-
-const exampleXAxisData = [
-  '0:00',
-  '2:00',
-  '4:00',
-  '6:00',
-  '8:00',
-  '10:00',
-  '12:00',
-  '14:00',
-  '16:00',
-  '18:00',
-  '20:00',
-  '22:00',
-]
-const xAxiosOption = {
-  xAxiosData: exampleXAxisData,
-}
-const yAxiosOption = {
-  yUnit: 'kWh',
-}
-const exampleSeries = [
-  {
-    name: 'Diesel',
-    data: [120, 135, 140, 160, 180, 200, 210, 190, 170, 160, 150, 140],
-    color: 'rgb(3, 93, 239)',
-  },
-  {
-    name: 'ESS',
-    data: [80, 90, 100, 110, 120, 130, 140, 135, 130, 125, 120, 115],
-    color: 'rgb(29, 134, 255)',
-  },
-  {
-    name: 'PV',
-    data: [0, 10, 30, 60, 100, 130, 150, 140, 120, 80, 30, 5],
-    color: 'rgb(105, 203, 255)',
-  },
-]
 
 onMounted(() => {
-  fetchPowerTrendData()
+  fetchAllChartData()
 })
 </script>
 
@@ -406,11 +402,6 @@ onMounted(() => {
         display: flex;
         align-items: center;
 
-        .curves__toolbar-time-interval {
-          position: relative;
-          margin-right: 0.2rem;
-        }
-
         .curves__toolbar-time-btn {
           height: 0.32rem;
           line-height: 0.32rem;
@@ -432,8 +423,13 @@ onMounted(() => {
     }
   }
 
+  .curves__charts-outer {
+    flex: 1;
+    min-height: 0;
+  }
+
   .curves__charts {
-    height: calc(100% - 0.52rem);
+    flex: 1;
     display: flex;
     flex-wrap: wrap;
     gap: 0.2rem;
@@ -526,9 +522,5 @@ onMounted(() => {
       }
     }
   }
-
-  // :deep(.el-select__popper.el-popper) {
-  //   top: 1.49rem !important;
-  // }
 }
 </style>

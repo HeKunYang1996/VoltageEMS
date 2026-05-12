@@ -43,15 +43,22 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     EnergyCard: typeof import('./src/components/card/EnergyCard.vue')['default']
+    ForecastLineChart: typeof import('./src/components/charts/ForecastLineChart.vue')['default']
     FormDialog: typeof import('./src/components/dialog/FormDialog.vue')['default']
     FullSceenDialog: typeof import('./src/components/dialog/fullSceenDialog.vue')['default']
     IconButton: typeof import('./src/components/common/IconButton.vue')['default']
+    LineAndBarChart: typeof import('./src/components/charts/LineAndBarChart.vue')['default']
     LineChart: typeof import('./src/components/charts/lineChart.vue')['default']
     LoadingBg: typeof import('./src/components/common/LoadingBg.vue')['default']
     ModuleCard: typeof import('./src/components/card/ModuleCard.vue')['default']
+    MultiBarChar: typeof import('./src/components/charts/MultiBarChar.vue')['default']
     PVCard: typeof import('./src/components/card/PVCard.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SingleBarChart: typeof import('./src/components/charts/SingleBarChart.vue')['default']
     StackedBarChart: typeof import('./src/components/charts/StackedBarChart.vue')['default']
+  }
+  export interface GlobalDirectives {
+    vLoading: typeof import('element-plus/es')['ElLoadingDirective']
   }
 }

@@ -1,13 +1,13 @@
 <template>
-  <div class="line-chart">
-    <div class="line-chart-container" ref="chartRef"></div>
-    <div v-if="showToolbox" class="line-chart-toolbox">
-      <div v-if="showFullScreen" class="line-chart-toolbox-item" @click="handleFullScreen">
+  <div class="forecast-line-chart">
+    <div class="forecast-line-chart-container" ref="chartRef"></div>
+    <div v-if="showToolbox" class="forecast-line-chart-toolbox">
+      <div v-if="showFullScreen" class="forecast-line-chart-toolbox-item" @click="handleFullScreen">
         <el-icon>
           <ZoomIn />
         </el-icon>
       </div>
-      <div v-if="showDownload" class="line-chart-toolbox-item" @click="handleExport">
+      <div v-if="showDownload" class="forecast-line-chart-toolbox-item" @click="handleExport">
         <el-icon>
           <Download />
         </el-icon>
@@ -15,15 +15,15 @@
     </div>
     <FullSceenDialog
       ref="fullScreenDialogRef"
-      :title="props.title || 'Line Chart Full Screen'"
+      :title="props.title || 'Forecast Chart Full Screen'"
       fullscreen
       :append-to-body="true"
       :modal-append-to-body="true"
       :close-on-click-modal="false"
     >
       <template #dialog-body>
-        <div class="line-chart-full-screen">
-          <div class="line-chart-full-screen__container" ref="fullScreenChartRef"></div>
+        <div class="forecast-line-chart-full-screen">
+          <div class="forecast-line-chart-full-screen__container" ref="fullScreenChartRef"></div>
         </div>
       </template>
     </FullSceenDialog>
@@ -39,6 +39,7 @@ import {
   LegendComponent,
   DataZoomComponent,
   ToolboxComponent,
+  MarkLineComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
@@ -52,20 +53,6 @@ const fullScreenChartRef = ref<HTMLDivElement | null>(null)
 const globalStore = useGlobalStore()
 let fullScreenChartInstance: echarts.ECharts | null = null
 
-// 监听侧边栏折叠状态变化
-watch(
-  () => globalStore.isCollapse,
-  () => {
-    // 延迟重新绘制，确保DOM更新完成
-    nextTick(() => {
-      setTimeout(() => {
-        chartInstance?.dispose()
-        initChart()
-      }, 300)
-    })
-  },
-)
-
 echarts.use([
   LineChart,
   BarChart,
@@ -75,13 +62,27 @@ echarts.use([
   CanvasRenderer,
   DataZoomComponent,
   ToolboxComponent,
+  MarkLineComponent,
 ])
 
-// 定义数据类型
-export interface SeriesData {
-  name: string
-  data: number[]
-  color: string
+/**
+ * 分段数据接口
+ * 支持多段数据，每段有独立的名称、数据和颜色
+ */
+export interface SegmentData {
+  name: string // 段名称（如 "History", "Forecast"）
+  data: number[] // 该段的数据
+  color: string // 该段的颜色
+  lineType?: 'solid' | 'dashed' | 'dotted' // 线条类型，默认 solid
+}
+
+/**
+ * 系列数据接口
+ * 一个系列可以有多个分段
+ */
+export interface ForecastSeriesData {
+  name: string // 系列名称（如 "PV Power"）
+  segments: SegmentData[] // 分段数据数组
 }
 
 export interface XAxisOption {
@@ -93,7 +94,6 @@ export interface YAxisOption {
   yUnit?: string
 }
 
-// Grid配置接口
 export interface GridConfig {
   left?: number
   right?: number
@@ -101,11 +101,21 @@ export interface GridConfig {
   bottom?: number
 }
 
+/**
+ * 分界线配置
+ */
+export interface SplitLineConfig {
+  index: number // 分界点在 X 轴数据中的索引
+  label?: string // 分界线标签
+}
+
 const props = withDefaults(
   defineProps<{
     xAxiosOption: XAxisOption
     yAxiosOption: YAxisOption
-    series: SeriesData[]
+    series: ForecastSeriesData[]
+    // 分界线配置数组（支持多个分界线）
+    splitLines?: SplitLineConfig[]
     // Grid配置参数
     gridConfig?: GridConfig
     // 全屏模式Grid配置参数
@@ -115,9 +125,10 @@ const props = withDefaults(
     showFullScreen?: boolean
     showDownload?: boolean
     title?: string
+    // 是否显示区域填充颜色
+    showAreaStyle?: boolean
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
@@ -133,13 +144,53 @@ const props = withDefaults(
     showToolbox: true,
     showFullScreen: true,
     showDownload: true,
+    showAreaStyle: true,
+    splitLines: () => [],
   },
 )
 
 const chartRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 
-// 通用tooltip formatter，支持自定义大小
+// 监听侧边栏折叠状态变化
+watch(
+  () => globalStore.isCollapse,
+  () => {
+    nextTick(() => {
+      setTimeout(() => {
+        chartInstance?.dispose()
+        initChart()
+      }, 300)
+    })
+  },
+)
+
+/**
+ * 调整颜色透明度
+ */
+function adjustColorOpacity(color: string, opacity: number): string {
+  if (color.startsWith('#')) {
+    const hex = color.replace('#', '')
+    const r = parseInt(hex.substring(0, 2), 16)
+    const g = parseInt(hex.substring(2, 4), 16)
+    const b = parseInt(hex.substring(4, 6), 16)
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`
+  }
+  if (color.startsWith('rgb(')) {
+    const rgb = color.replace('rgb(', '').replace(')', '').split(',')
+    return `rgba(${rgb[0].trim()}, ${rgb[1].trim()}, ${rgb[2].trim()}, ${opacity})`
+  }
+  if (color.startsWith('rgba(')) {
+    const parts = color.replace('rgba(', '').replace(')', '').split(',')
+    return `rgba(${parts[0].trim()}, ${parts[1].trim()}, ${parts[2].trim()}, ${opacity})`
+  }
+  return color
+}
+
+/**
+ * 自定义 Tooltip formatter
+ * 只显示当前悬停点所属分段的数据
+ */
 function customTooltipFormatter(
   params: any,
   sizeConfig: {
@@ -150,9 +201,19 @@ function customTooltipFormatter(
     dotSize: number
     gap: number
   },
+  yUnit: string,
 ) {
   const { width, fontSize, itemFontSize, itemLineHeight, dotSize, gap } = sizeConfig
   const name = params[0]?.axisValueLabel || params[0]?.name || ''
+
+  // 过滤掉 null 值和背景系列
+  const validParams = params.filter(
+    (item: any) =>
+      item.value !== null && item.value !== undefined && item.seriesName !== 'background',
+  )
+
+  if (validParams.length === 0) return ''
+
   let html = `
     <div style="
       max-width:${width}px;
@@ -169,7 +230,7 @@ function customTooltipFormatter(
         margin-bottom:${gap / 2}px;
       ">${name}</div>
   `
-  params.forEach((item: any) => {
+  validParams.forEach((item: any) => {
     html += `
       <div style="
         display:flex;
@@ -193,7 +254,7 @@ function customTooltipFormatter(
           "></span>
           <span>${item.seriesName}</span>
         </div>
-        <div style="font-weight:600;">${item.value}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
+        <div style="font-weight:600;">${item.value}${yUnit ? ' ' + yUnit : ''}</div>
       </div>
     `
   })
@@ -220,7 +281,6 @@ function getGridConfig(isFullScreen: boolean) {
 
 // 统一生成option的方法
 function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
-  // 配置参数
   const xUnit = props.xAxiosOption.xUnit ?? ''
   const yUnit = props.yAxiosOption.yUnit ?? ''
 
@@ -243,7 +303,18 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         gap: pxToResponsive(8),
       }
 
-  // legend/grid/axis样式参数
+  // 生成图例数据
+  const legendData: string[] = []
+  props.series.forEach((s) => {
+    s.segments.forEach((seg) => {
+      const legendName = `${s.name} (${seg.name})`
+      if (!legendData.includes(legendName)) {
+        legendData.push(legendName)
+      }
+    })
+  })
+
+  // legend样式参数
   const legend = isFullScreen
     ? {
         icon: 'circle',
@@ -261,7 +332,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
           fontFamily: 'Arimo',
           fontWeight: 400,
         },
-        data: props.series.map((s: SeriesData) => s.name),
+        data: legendData,
       }
     : {
         icon: 'circle',
@@ -279,7 +350,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
           fontFamily: 'Arimo',
           fontWeight: 400,
         },
-        data: props.series.map((s: SeriesData) => s.name),
+        data: legendData,
       }
 
   const grid = getGridConfig(isFullScreen)
@@ -395,8 +466,8 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         },
       }
 
-  // series
-  const seriesData = [
+  // 生成系列数据
+  const seriesData: any[] = [
     // {
     //   name: 'background',
     //   type: 'bar',
@@ -416,30 +487,91 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
     //   label: { show: false },
     //   z: 0,
     // },
-    ...props.series.map((s: SeriesData) => ({
-      name: s.name,
-      type: 'line',
-      data: s.data,
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: isFullScreen ? pxToResponsive(8) : pxToResponsive(0),
-      areaStyle: {},
-      lineStyle: {
-        color: s.color,
-        width: isFullScreen ? pxToResponsive(6) : pxToResponsive(4),
-      },
-      itemStyle: {
-        color: s.color,
-        borderColor: s.color,
-        borderWidth: isFullScreen ? 3 : 2,
-      },
-      emphasis: {
-        focus: 'series',
-        scale: false,
-      },
-      z: 1,
-    })),
   ]
+
+  // 是否已添加分界线标记
+  let markLineAdded = false
+
+  // 为每个系列的每个分段创建独立的线条
+  props.series.forEach((s, seriesIndex) => {
+    s.segments.forEach((seg, segIndex) => {
+      const seriesItem: any = {
+        name: `${s.name} (${seg.name})`,
+        type: 'line',
+        data: seg.data,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: isFullScreen ? pxToResponsive(6) : pxToResponsive(0),
+        lineStyle: {
+          color: seg.color,
+          width: isFullScreen ? pxToResponsive(6) : pxToResponsive(4),
+          type: seg.lineType || 'solid',
+        },
+        itemStyle: {
+          color: seg.color,
+          borderColor: seg.color,
+          borderWidth: isFullScreen ? 3 : 2,
+        },
+        emphasis: {
+          focus: 'series',
+          scale: false,
+        },
+        z: seriesIndex + segIndex + 1,
+      }
+
+      // 添加区域样式（可选）
+      if (props.showAreaStyle) {
+        seriesItem.areaStyle = {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: adjustColorOpacity(seg.color, 0.3) },
+              { offset: 1, color: adjustColorOpacity(seg.color, 0.05) },
+            ],
+          },
+        }
+      }
+
+      // 只在第一个系列上添加分界线标记
+      if (!markLineAdded && props.splitLines && props.splitLines.length > 0) {
+        seriesItem.markLine = {
+          silent: true,
+          symbol: 'none',
+          lineStyle: {
+            color: 'rgba(255, 255, 255, 0.8)',
+            type: 'dashed',
+            width: isFullScreen ? pxToResponsive(2) : pxToResponsive(1),
+          },
+          label: {
+            show: true,
+            position: 'start',
+            color: 'rgba(255, 255, 255, 0.85)',
+            fontSize: isFullScreen ? pxToResponsive(14) : pxToResponsive(12),
+            fontFamily: 'Arimo',
+            fontWeight: 600,
+            backgroundColor: 'rgba(63, 79, 117, 0.9)',
+            padding: isFullScreen
+              ? [pxToResponsive(6), pxToResponsive(10)]
+              : [pxToResponsive(4), pxToResponsive(8)],
+            borderRadius: pxToResponsive(4),
+          },
+          data: props.splitLines.map((sl) => ({
+            xAxis: sl.index,
+            label: {
+              formatter: sl.label ?? '',
+            },
+          })),
+        }
+        markLineAdded = true
+      }
+
+      seriesData.push(seriesItem)
+    })
+  })
 
   // tooltip
   const tooltip = isFullScreen
@@ -471,7 +603,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
             width: pxToResponsive(2),
           },
         },
-        formatter: (params: any) => customTooltipFormatter(params, tooltipSize),
+        formatter: (params: any) => customTooltipFormatter(params, tooltipSize, yUnit),
       }
     : {
         trigger: 'axis',
@@ -501,14 +633,16 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
             width: pxToResponsive(1),
           },
         },
-        formatter: (params: any) => customTooltipFormatter(params, tooltipSize),
+        formatter: (params: any) => customTooltipFormatter(params, tooltipSize, yUnit),
       }
+
   const dataZoom = [
     {
       type: 'inside',
       show: true,
     },
   ]
+
   const toolbox = isFullScreen
     ? {
         itemSize: pxToResponsive(20),
@@ -516,13 +650,11 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         top: pxToResponsive(-10),
         right: pxToResponsive(40),
         iconStyle: {
-          // color: '#fff',
           borderColor: '#fff',
           borderWidth: pxToResponsive(1),
         },
         emphasis: {
           iconStyle: {
-            // color: '#fff',
             borderColor: '#fff',
             borderWidth: pxToResponsive(1),
           },
@@ -546,6 +678,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         },
       }
     : {}
+
   return {
     legend,
     grid,
@@ -591,56 +724,38 @@ const handleFullScreen = () => {
 }
 
 const handleExport = () => {
-  // 准备导出数据
   const exportData: (string | number)[][] = []
 
   // 添加表头
-  const headers: (string | number)[] = [
-    'time',
-    ...props.series.map(
-      (s: SeriesData) =>
-        `${s.name}${props.yAxiosOption.yUnit ? ' (' + props.yAxiosOption.yUnit + ')' : ''}`,
-    ),
-  ]
+  const headers: (string | number)[] = ['time']
+  props.series.forEach((s) => {
+    s.segments.forEach((seg) => {
+      headers.push(
+        `${s.name} (${seg.name})${props.yAxiosOption.yUnit ? ' (' + props.yAxiosOption.yUnit + ')' : ''}`,
+      )
+    })
+  })
   exportData.push(headers)
 
   // 添加数据
   props.xAxiosOption.xAxiosData.forEach((time: string, index: number) => {
     const row: (string | number)[] = [time]
-    props.series.forEach((series: SeriesData) => {
-      row.push(series.data[index] || 0)
+    props.series.forEach((s) => {
+      s.segments.forEach((seg) => {
+        row.push(seg.data[index] ?? '')
+      })
     })
     exportData.push(row)
   })
 
-  // 创建工作簿
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.aoa_to_sheet(exportData)
-
-  // 添加工作表到工作簿
-  XLSX.utils.book_append_sheet(wb, ws, 'line_chart_data')
-
-  // 生成文件名
-  const fileName = `line_chart_data_${new Date().toISOString().slice(0, 10)}.xlsx`
-
-  // 导出文件
+  XLSX.utils.book_append_sheet(wb, ws, 'forecast_chart_data')
+  const fileName = `forecast_chart_data_${new Date().toISOString().slice(0, 10)}.xlsx`
   XLSX.writeFile(wb, fileName)
 }
 
-// 监听侧边栏折叠状态变化
-watch(
-  () => globalStore.isCollapse,
-  () => {
-    nextTick(() => {
-      setTimeout(() => {
-        chartInstance?.dispose()
-        initChart()
-      }, 300)
-    })
-  },
-)
-
-// 监听窗口大小变化，重新调整全屏图表
+// 监听窗口大小变化
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
@@ -678,17 +793,17 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.line-chart {
+.forecast-line-chart {
   width: 100%;
   height: 100%;
   position: relative;
 
-  .line-chart-container {
+  .forecast-line-chart-container {
     width: 100%;
     height: 100%;
   }
 
-  .line-chart-toolbox {
+  .forecast-line-chart-toolbox {
     position: absolute;
     top: -0.2rem;
     right: 0;
@@ -696,7 +811,7 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 0.2rem;
 
-    .line-chart-toolbox-item {
+    .forecast-line-chart-toolbox-item {
       width: 0.14rem;
       height: 0.14rem;
       cursor: pointer;
@@ -704,8 +819,7 @@ onBeforeUnmount(() => {
   }
 }
 
-// 全屏图表样式
-.line-chart-full-screen {
+.forecast-line-chart-full-screen {
   width: 100%;
   height: 100%;
   display: flex;
@@ -714,7 +828,7 @@ onBeforeUnmount(() => {
   background: #212c49;
   overflow: hidden;
 
-  .line-chart-full-screen__container {
+  .forecast-line-chart-full-screen__container {
     width: 100%;
     height: calc(100vh - 1.1rem);
     overflow: hidden;
