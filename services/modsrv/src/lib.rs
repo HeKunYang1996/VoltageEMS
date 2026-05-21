@@ -22,6 +22,7 @@ pub mod api {
     pub mod instance_management_handlers;
     pub mod instance_query_handlers;
     pub mod product_handlers;
+    pub mod property_handlers;
     pub mod routing_management_handlers;
     pub mod routing_query_handlers;
     pub mod single_point_handlers;
@@ -32,6 +33,7 @@ pub mod api {
 // Map dto module to api/dto.rs while keeping crate::dto path stable
 pub mod infra {
     //! Infrastructure layer — external side effects (SHM, Redis)
+    pub mod channel_health;
     pub mod shm_dispatch;
 }
 pub mod runtime {

@@ -45,7 +45,14 @@ fn extract_description_from_config(
         .map(String::from))
 }
 
-/// List all channels with pagination and filtering
+/// List all channels with pagination (configuration and runtime status summary).
+///
+/// Results are ordered by `channel_id` ascending by default. Supports filtering by
+/// `enabled`, `protocol`, and `keyword` (fuzzy match on name / address). Each record
+/// includes connection state (connected / disconnected), last successful poll time, and
+/// cumulative error counts, but **excludes** the full point list (query points via
+/// `/channels/{id}` or `/points`). The response is moderately heavy; always supply a
+/// `page_size` limit from the frontend list page.
 #[utoipa::path(
     get,
     path = "/api/channels",
@@ -168,7 +175,13 @@ pub async fn get_all_channels<R: Rtdb>(
     Ok(Json(SuccessResponse::new(paginated_response)))
 }
 
-/// Get channel status
+/// Current channel runtime status (lightweight).
+///
+/// Returns only `is_connected` and `last_update` timestamp without querying channel
+/// configuration or points — intended for frontend status indicator polling. For full
+/// information use `/channels/{id}/details`. Note: `is_connected` checks both TCP state
+/// and data freshness; a channel that is TCP-connected but has not received data for
+/// 90 s will return `false`.
 #[utoipa::path(
     get,
     path = "/api/channels/{id}/status",
@@ -241,7 +254,14 @@ pub async fn get_channel_status<R: Rtdb>(
     }
 }
 
-/// Get complete channel details (configuration + runtime + statistics)
+/// Full channel details: configuration + runtime state + cumulative statistics.
+///
+/// Returns all operations-facing information for a channel in a single response:
+/// protocol configuration (driver, address, poll interval, timeouts), current connection
+/// state, cumulative read/write counts and error counts, the latest diagnostic snapshot,
+/// and registered point counts. Use this for the channel detail page in the frontend.
+/// The response is large — use `/channels` (paginated) for list summaries and call this
+/// only for the detail page.
 #[utoipa::path(
     get,
     path = "/api/channels/{id}",
@@ -451,8 +471,6 @@ pub async fn get_channel_detail_handler<R: Rtdb>(
 /// URL format: `/api/channels/search?{keyword}`
 /// - The keyword is passed directly as the raw query string (no parameter name needed)
 /// - Empty keyword returns all channels
-///
-/// @route GET /api/channels/search?{keyword}
 #[utoipa::path(
     get,
     path = "/api/channels/search",
@@ -659,9 +677,12 @@ pub async fn search_channels<R: Rtdb>(
     )))
 }
 
-/// List all channels (lightweight: id + name + protocol)
+/// Minimal channel list (id + name + protocol, no pagination).
 ///
-/// @route GET /api/channels/list
+/// Designed for "select a channel" scenarios such as frontend dropdowns and routing
+/// table association. Returns all channels but only three fields, avoiding a heavy
+/// query. For detailed configuration or runtime status use the paginated `/channels`
+/// endpoint or `/channels/{id}/details`.
 #[utoipa::path(
     get,
     path = "/api/channels/list",
@@ -713,9 +734,13 @@ pub struct PointsQuery {
     pub keyword: Option<String>,
 }
 
-/// List all points across channels (global search)
+/// Global cross-channel point search.
 ///
-/// @route GET /api/points
+/// Queries all four point tables (telemetry_points, signal_points, control_points,
+/// adjustment_points) across all channels, filtered by `keyword` (fuzzy match on
+/// `signal_name`) and optional `channel_id` / `point_type`. Use this to find a point
+/// by name when the owning channel is unknown. Each result record includes `channel_id`
+/// and `point_type` to help the frontend locate the point.
 #[utoipa::path(
     get,
     path = "/api/points",

@@ -212,16 +212,23 @@ fn build_config(
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct LanQuery {
-    /// LAN 口编号（1-4）
+    /// LAN port number (1–4)
     lan: u8,
 }
 
 // ── GET /api/v1/network ───────────────────────────────────────────────────────
 
+/// Retrieve the network interface configuration (LAN/WAN).
+///
+/// Parses the current systemd-networkd configuration and returns a structured
+/// result: interface name, IP address, subnet mask, gateway, DNS servers, and
+/// DHCP mode. Filter by `lan` query parameter to inspect a specific port.
+/// **Read-only** — apply changes via `PUT /network` followed by
+/// `POST /network/apply`.
 #[utoipa::path(get, path = "/api/v1/network", tag = "Network",
     security(("bearer_auth" = [])),
     params(LanQuery),
-    responses((status = 200, description = "网络配置", body = NetworkConfig), (status = 400, description = "无效 LAN 编号")))]
+    responses((status = 200, description = "Network configuration", body = NetworkConfig), (status = 400, description = "Invalid LAN number")))]
 pub async fn get_network_config(
     State(state): State<Arc<AppState>>,
     Query(q): Query<LanQuery>,
@@ -258,10 +265,17 @@ pub async fn get_network_config(
 
 // ── PUT /api/v1/network ───────────────────────────────────────────────────────
 
+/// Stage network interface configuration changes (not applied immediately).
+///
+/// Writes the request body to the configuration file as a draft but **does
+/// not restart the network stack**. Call `POST /network/apply` to activate the
+/// changes. This two-step design prevents accidental SSH disconnection when
+/// changing the management IP — the operator can review the draft before
+/// committing.
 #[utoipa::path(put, path = "/api/v1/network", tag = "Network",
     security(("bearer_auth" = [])),
     request_body = NetworkUpdateRequest,
-    responses((status = 200, description = "配置已保存"), (status = 400, description = "无效参数")))]
+    responses((status = 200, description = "Configuration staged"), (status = 400, description = "Invalid parameters")))]
 pub async fn update_network_config(
     State(state): State<Arc<AppState>>,
     Json(req): Json<NetworkUpdateRequest>,
@@ -349,9 +363,17 @@ pub async fn update_network_config(
 
 // ── POST /api/v1/network/apply ────────────────────────────────────────────────
 
+/// Apply staged network configuration to the kernel.
+///
+/// Restarts `systemd-networkd` to activate the most recent draft written by
+/// `PUT /network`. **This step may drop the HTTP connection** — if the
+/// management IP was changed the frontend must reconnect using the new address.
+/// A 500 response indicates the restart failed; the old configuration may still
+/// be active or the interface may be in a partial state requiring on-site
+/// investigation.
 #[utoipa::path(post, path = "/api/v1/network/apply", tag = "Network",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "网络配置已应用"), (status = 500, description = "操作失败")))]
+    responses((status = 200, description = "Network configuration applied"), (status = 500, description = "Operation failed")))]
 pub async fn apply_network_config() -> impl IntoResponse {
     use std::process::Command;
 

@@ -30,32 +30,62 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
 
     /// Load instance points with routing configuration (runtime merge)
     ///
-    /// Two-step query + in-memory merge:
-    /// 1. Product point definitions from built-in products (compile-time constants)
-    /// 2. Routing data from measurement_routing/action_routing tables (real tables)
-    /// 3. Merge in application layer using HashMap
+    /// Returns (measurements, actions, properties). Measurements/actions carry routing;
+    /// properties carry per-instance values from the `instance_properties` table
+    /// (no routing — properties are static metadata, not data-flow points).
+    ///
+    /// Query plan:
+    /// 1. Fetch `product_name` from `instances`
+    /// 2. Look up Product template (compile-time constants)
+    /// 3. Query routing data from `measurement_routing` / `action_routing` (parallel)
+    /// 4. Query property values from `instance_properties`
+    /// 5. Merge in application layer
     pub async fn load_instance_points(
         &self,
         instance_id: u32,
     ) -> Result<(
         Vec<crate::dto::InstanceMeasurementPoint>,
         Vec<crate::dto::InstanceActionPoint>,
+        Vec<crate::dto::InstancePropertyPoint>,
     )> {
-        use crate::dto::{InstanceActionPoint, InstanceMeasurementPoint, PointRouting};
+        use crate::dto::{
+            InstanceActionPoint, InstanceMeasurementPoint, InstancePropertyPoint, PointRouting,
+        };
 
-        // 1. Get product_name and product definition
-        let product_name = sqlx::query_scalar::<_, String>(
-            "SELECT product_name FROM instances WHERE instance_id = ?",
-        )
-        .bind(instance_id as i64)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| anyhow!("Instance {} not found: {}", instance_id, e))?;
+        let product_name: String =
+            sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
+                .bind(instance_id as i64)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| anyhow!("Instance {} not found: {}", instance_id, e))?;
 
         let product = self
             .product_loader
             .get_product(&product_name)
             .map_err(|e| anyhow!("Product '{}' not found: {}", product_name, e))?;
+
+        // Property values are keyed by property_id in the dedicated table.
+        // Build property_id -> JSON value so the template-driven merge below
+        // can look up directly (no name lookup needed).
+        let prop_rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT property_id, value_json FROM instance_properties WHERE instance_id = ?",
+        )
+        .bind(instance_id as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut instance_props_by_id: HashMap<i32, serde_json::Value> =
+            HashMap::with_capacity(prop_rows.len());
+        for (property_id, value_json) in prop_rows {
+            let value: serde_json::Value = serde_json::from_str(&value_json).map_err(|e| {
+                anyhow!(
+                    "Invalid value_json for instance {} property {}: {}",
+                    instance_id,
+                    property_id,
+                    e
+                )
+            })?;
+            instance_props_by_id.insert(property_id as i32, value);
+        }
 
         // 2. Query routing data from real tables (parallel)
         let m_routing_query = sqlx::query_as::<
@@ -169,7 +199,20 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
             })
             .collect();
 
-        Ok((measurements, actions))
+        // Properties: merge product template with per-instance value (no routing).
+        let properties = product
+            .properties
+            .iter()
+            .map(|pt| InstancePropertyPoint {
+                property_id: pt.property_id,
+                name: pt.name.clone(),
+                unit: pt.unit.clone(),
+                description: pt.description.clone(),
+                value: instance_props_by_id.remove(&pt.property_id),
+            })
+            .collect();
+
+        Ok((measurements, actions, properties))
     }
 
     /// Get instance points (built-in product definitions = single source of truth)
@@ -178,25 +221,47 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         instance_id: u32,
         data_type: Option<&str>,
     ) -> Result<serde_json::Value> {
-        // Get instance metadata (product_name, properties)
-        let instance_row: Option<(String, Option<String>)> =
-            sqlx::query_as("SELECT product_name, properties FROM instances WHERE instance_id = ?")
+        let product_name: Option<String> =
+            sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
                 .bind(instance_id as i64)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| anyhow!("Failed to load instance {} metadata: {}", instance_id, e))?;
 
-        let Some((product_name, properties_json)) = instance_row else {
+        let Some(product_name) = product_name else {
             return Err(anyhow!("Instance {} not found", instance_id));
         };
-
-        let properties_json = properties_json.unwrap_or_else(|| "{}".to_string());
 
         // Get product from built-in definitions (compile-time constants)
         let product = self
             .product_loader
             .get_product(&product_name)
             .map_err(|e| anyhow!("Product '{}' not found: {}", product_name, e))?;
+
+        // Load property values from instance_properties table when needed.
+        // Returns a map keyed by property name so the JSON response mirrors
+        // the legacy `instances.properties` JSON shape callers expect.
+        let load_props_map = || async {
+            let rows: Vec<(i64, String)> = sqlx::query_as(
+                "SELECT property_id, value_json FROM instance_properties WHERE instance_id = ?",
+            )
+            .bind(instance_id as i64)
+            .fetch_all(&self.pool)
+            .await?;
+            let mut props = serde_json::Map::new();
+            for (property_id, value_json) in rows {
+                let Some(tpl) = product
+                    .properties
+                    .iter()
+                    .find(|p| i64::from(p.property_id) == property_id)
+                else {
+                    continue;
+                };
+                let value: serde_json::Value = serde_json::from_str(&value_json)?;
+                props.insert(tpl.name.clone(), value);
+            }
+            Ok::<_, anyhow::Error>(props)
+        };
 
         match data_type {
             Some("measurement") => {
@@ -226,19 +291,10 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
                 Ok(serde_json::Value::Object(result))
             },
             Some("property") => {
-                // Return instance properties (stored as JSON in instances table)
-                let properties: serde_json::Value = serde_json::from_str(&properties_json)
-                    .map_err(|e| {
-                        anyhow!(
-                            "Invalid properties JSON for instance {}: {}",
-                            instance_id,
-                            e
-                        )
-                    })?;
-                Ok(properties)
+                let props = load_props_map().await?;
+                Ok(serde_json::Value::Object(props))
             },
             None => {
-                // Return all three: measurements, actions, properties
                 let mut m_map = serde_json::Map::new();
                 for m in &product.measurements {
                     let point = serde_json::json!({
@@ -261,14 +317,7 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
                     a_map.insert(a.name.clone(), point);
                 }
 
-                let properties: serde_json::Value = serde_json::from_str(&properties_json)
-                    .map_err(|e| {
-                        anyhow!(
-                            "Invalid properties JSON for instance {}: {}",
-                            instance_id,
-                            e
-                        )
-                    })?;
+                let properties = load_props_map().await?;
 
                 Ok(serde_json::json!({
                     "measurements": m_map,
@@ -302,14 +351,53 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         action_id: &str,
         value: f64,
     ) -> crate::error::Result<()> {
-        // Route via application-layer cache, dispatch via SHM+UDS to comsrv
+        // Route via application-layer cache, dispatch via SHM+UDS to comsrv.
+        //
+        // Routing is resolved ONCE here and threaded through both the gate and
+        // the write path via `set_action_point_with_target`. A second internal
+        // lookup inside set_action_point would race with `monarch sync`
+        // reloading the routing cache between our check and the write — the
+        // TOCTOU window silently degrades a routed action to a local-only
+        // store, returning Ok(()) to the caller while the command never
+        // reaches the device. Snapshotting once eliminates that window: the
+        // routing decision in flight is whatever we saw at gate time.
+        //
+        // Non-numeric action_id can't reach a channel: RoutingCache stores
+        // structured keys (instance_id:point_type:point_id where point_id is
+        // u32), and lookup_m2c() rejects unparseable keys. So an action_id
+        // that doesn't parse resolves to None, the gate has nothing to check,
+        // and the local-only write path runs.
+        let m2c_target = if let Ok(point_id_u32) = action_id.parse::<u32>() {
+            self.routing_cache.lookup_m2c_by_parts(
+                instance_id,
+                voltage_model::PointType::Adjustment,
+                point_id_u32,
+            )
+        } else {
+            None
+        };
 
-        let outcome = voltage_routing::set_action_point(
+        // M2C control gate: reject writes to offline channels before they hit
+        // the routing/SHM path. Without this the command is silently dropped
+        // by the device while modsrv thinks the write succeeded.
+        if let Some(target) = &m2c_target
+            && !self.health_cache.is_online(target.channel_id)
+        {
+            warn!(
+                "Action rejected: channel {} offline (instance {} action {})",
+                target.channel_id, instance_id, action_id
+            );
+            return Err(ModSrvError::ChannelUnreachable {
+                channel_id: target.channel_id,
+            });
+        }
+
+        let outcome = voltage_routing::set_action_point_with_target(
             self.rtdb.as_ref(),
-            &self.routing_cache,
             instance_id,
             action_id,
             value,
+            m2c_target,
         )
         .await
         .map_err(|e| ModSrvError::InternalError(e.to_string()))?;

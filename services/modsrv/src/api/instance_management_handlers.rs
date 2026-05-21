@@ -22,14 +22,6 @@ use crate::error::ModSrvError;
 /// Create a new model instance
 ///
 /// Creates an instance from a product template with optional property overrides.
-///
-/// @route POST /api/instances
-/// @input Json(dto): CreateInstanceDto - Instance configuration
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Created instance details
-/// @status 200 - Success with instance data
-/// @status 400 - Invalid product_name or duplicate instance_name
-/// @status 500 - Database error
-/// @side-effects Creates instance in database and initializes Redis keys
 #[utoipa::path(
     post,
     path = "/api/instances",
@@ -76,16 +68,6 @@ pub async fn create_instance(
 ///
 /// Updates the instance_name and/or properties of an existing instance.
 /// At least one field (instance_name or properties) must be provided.
-///
-/// @route PUT /api/instances/{id}
-/// @input Path(id): u16 - Instance ID
-/// @input Json(dto): UpdateInstanceDto - Fields to update
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Updated instance
-/// @status 200 - Success with updated instance details
-/// @status 400 - No fields to update or invalid request
-/// @status 404 - Instance not found
-/// @status 409 - Instance name already exists (conflict)
-/// @status 500 - Database or Redis error
 #[utoipa::path(
     put,
     path = "/api/instances/{id}",
@@ -168,31 +150,75 @@ pub async fn update_instance(
         }
     }
 
-    // Handle properties update
+    // Handle properties update.
+    //
+    // Semantics: this endpoint replaces the property map atomically — keys
+    // omitted from `dto.properties` are removed. (For single-point edits use
+    // PUT /api/instances/{id}/properties/{property_id}, which does not touch
+    // sibling properties.)
     if let Some(ref properties) = dto.properties {
-        let properties_json = match serde_json::to_string(properties) {
-            Ok(j) => j,
-            Err(e) => {
-                return Err(ModSrvError::InternalError(format!(
-                    "Failed to serialize properties: {}",
-                    e
-                )));
-            },
-        };
+        let product_name: String =
+            match sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
+                .bind(id as i64)
+                .fetch_one(&state.instance_manager.pool)
+                .await
+            {
+                Ok(name) => name,
+                Err(_) => return Err(ModSrvError::InstanceNotFound(id.to_string())),
+            };
 
-        // Update properties in SQLite
-        let result = sqlx::query(
-            r#"UPDATE instances SET properties = ?, updated_at = CURRENT_TIMESTAMP WHERE instance_id = ?"#,
-        )
-        .bind(&properties_json)
-        .bind(id as i32)
-        .execute(&state.instance_manager.pool)
-        .await;
+        let mut tx = state
+            .instance_manager
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ModSrvError::DatabaseError(format!("Failed to begin tx: {}", e)))?;
 
-        if let Err(e) = result {
-            error!("Failed to update properties for instance {}: {}", id, e);
-            return Err(ModSrvError::InternalError(format!(
+        // Wipe existing rows so omitted keys disappear (replace, not merge).
+        if let Err(e) = sqlx::query("DELETE FROM instance_properties WHERE instance_id = ?")
+            .bind(id as i64)
+            .execute(&mut *tx)
+            .await
+        {
+            error!("Failed to clear properties for instance {}: {}", id, e);
+            let _ = tx.rollback().await;
+            return Err(ModSrvError::DatabaseError(format!(
                 "Database update failed: {}",
+                e
+            )));
+        }
+
+        if let Err(e) = state
+            .instance_manager
+            .write_properties_tx(&mut tx, id, &product_name, properties)
+            .await
+        {
+            error!("Failed to write properties for instance {}: {}", id, e);
+            let _ = tx.rollback().await;
+            return Err(ModSrvError::InvalidData(format!(
+                "Failed to write properties: {}",
+                e
+            )));
+        }
+
+        if let Err(e) =
+            sqlx::query("UPDATE instances SET updated_at = CURRENT_TIMESTAMP WHERE instance_id = ?")
+                .bind(id as i64)
+                .execute(&mut *tx)
+                .await
+        {
+            error!("Failed to bump updated_at for instance {}: {}", id, e);
+            let _ = tx.rollback().await;
+            return Err(ModSrvError::DatabaseError(format!(
+                "Database update failed: {}",
+                e
+            )));
+        }
+
+        if let Err(e) = tx.commit().await {
+            error!("Failed to commit properties tx for instance {}: {}", id, e);
+            return Err(ModSrvError::DatabaseError(format!(
+                "Database commit failed: {}",
                 e
             )));
         }
@@ -237,13 +263,6 @@ pub async fn update_instance(
 /// Delete an instance
 ///
 /// Removes an instance from both SQLite and Redis.
-///
-/// @route DELETE /api/instances/{id}
-/// @input Path(id): u16 - Instance ID
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Deletion result
-/// @status 200 - Success with deletion confirmation
-/// @status 404 - Instance not found
-/// @status 500 - Database error
 #[utoipa::path(
     delete,
     path = "/api/instances/{id}",
@@ -272,15 +291,6 @@ pub async fn delete_instance(
 /// Sync measurement data to an instance
 ///
 /// Updates measurement point values in Redis for the instance.
-///
-/// @route POST /api/instances/{id}/sync
-/// @input Path(id): u16 - Instance ID
-/// @input Json(data): HashMap - Measurement point values
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Sync result
-/// @status 200 - Success confirmation
-/// @status 404 - Instance not found
-/// @status 500 - Database error
-/// @side-effects Updates Redis measurement keys
 #[utoipa::path(
     post,
     path = "/api/instances/{id}/sync",
@@ -316,11 +326,6 @@ pub async fn sync_instance_measurement(
 ///
 /// Reloads all instance configurations from SQLite to Redis.
 ///
-/// @route POST /api/instances/sync/all
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Sync result
-/// @status 200 - Success confirmation
-/// @status 500 - Sync error
-/// @side-effects Overwrites all instance keys in Redis
 pub async fn sync_all_instances(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
@@ -340,10 +345,6 @@ pub async fn sync_all_instances(
 /// Forces a reload of all instances from SQLite to Redis.
 /// Useful after manual database updates.
 ///
-/// @route POST /api/instances/reload
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Reload result
-/// @status 200 - Success confirmation
-/// @status 500 - Database error
 pub async fn reload_instances_from_db(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
@@ -385,15 +386,6 @@ pub async fn reload_instances_from_db(
 /// Execute an action on an instance
 ///
 /// Triggers an action point with the specified value.
-///
-/// @route POST /api/instances/{id}/action
-/// @input Path(id): u16 - Instance ID
-/// @input Json(req): ActionRequest - Action details
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Execution result
-/// @status 200 - Success confirmation
-/// @status 404 - Instance or action not found
-/// @status 500 - Database error
-/// @side-effects Writes to Redis action keys and may trigger downstream routing
 #[utoipa::path(
     post,
     path = "/api/instances/{id}/action",

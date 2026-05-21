@@ -73,9 +73,16 @@ fn require_admin(
 
 // ── POST /api/v1/auth/register ────────────────────────────────────────────────
 
+/// Register a new user account.
+///
+/// Public endpoint — no token required. Validates username length (3–50
+/// characters) and uniqueness, bcrypt-hashes the password, and inserts the
+/// row. Defaults to role_id=3 (regular user); the request body may override
+/// this, but anonymous callers cannot gain admin privileges because this
+/// endpoint does not verify the caller's identity.
 #[utoipa::path(post, path = "/api/v1/auth/register", tag = "Auth",
     request_body = UserCreate,
-    responses((status = 200, description = "注册成功"), (status = 400, description = "参数错误")))]
+    responses((status = 200, description = "Registration successful"), (status = 400, description = "Invalid parameters")))]
 pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UserCreate>,
@@ -141,9 +148,16 @@ pub async fn register(
 
 // ── POST /api/v1/auth/login ───────────────────────────────────────────────────
 
+/// Authenticate with username and password, issuing an access/refresh token pair.
+///
+/// Returns `TokenResponse { access_token, refresh_token, expires_in, role }`.
+/// The short-lived access token is used in subsequent requests via
+/// `Authorization: Bearer ...`. The refresh token can obtain new access tokens
+/// and is stored in the `refresh_tokens` table for point-in-time revocation.
+/// Accounts with `is_active=false` are rejected with 401.
 #[utoipa::path(post, path = "/api/v1/auth/login", tag = "Auth",
     request_body = UserLogin,
-    responses((status = 200, description = "登录成功", body = TokenResponse), (status = 401, description = "认证失败")))]
+    responses((status = 200, description = "Login successful", body = TokenResponse), (status = 401, description = "Authentication failed")))]
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UserLogin>,
@@ -220,9 +234,15 @@ pub async fn login(
 
 // ── POST /api/v1/auth/refresh ─────────────────────────────────────────────────
 
+/// Exchange a refresh token for a new access/refresh token pair.
+///
+/// The old refresh token is revoked and replaced with a freshly issued pair
+/// (rotation strategy), preventing long-term reuse of a leaked refresh token.
+/// Returns 401 if the refresh token has been revoked, has expired, or has an
+/// invalid signature — the client must re-authenticate via the login endpoint.
 #[utoipa::path(post, path = "/api/v1/auth/refresh", tag = "Auth",
     request_body = RefreshTokenRequest,
-    responses((status = 200, description = "刷新成功", body = TokenResponse), (status = 401, description = "Token 无效")))]
+    responses((status = 200, description = "Token refreshed", body = TokenResponse), (status = 401, description = "Invalid or expired token")))]
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RefreshTokenRequest>,
@@ -323,10 +343,17 @@ pub async fn refresh_token(
 
 // ── POST /api/v1/auth/logout ──────────────────────────────────────────────────
 
+/// Log out and revoke the current refresh token.
+///
+/// Access tokens are stateless JWTs and cannot be server-side revoked; they
+/// expire naturally after their short TTL. Logout primarily removes the refresh
+/// token from the `refresh_tokens` registry so it can no longer be used to
+/// obtain new access tokens. Returns 200 even if no refresh token is supplied
+/// (idempotent).
 #[utoipa::path(post, path = "/api/v1/auth/logout", tag = "Auth",
     security(("bearer_auth" = [])),
     request_body = RefreshTokenRequest,
-    responses((status = 200, description = "退出成功")))]
+    responses((status = 200, description = "Logged out successfully")))]
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -346,9 +373,16 @@ pub async fn logout(
 
 // ── GET /api/v1/auth/me ───────────────────────────────────────────────────────
 
+/// Return the profile of the currently authenticated user.
+///
+/// Response includes role information (joined from the roles table) but
+/// excludes the password hash. Used by the frontend to display the username,
+/// role, and decide which admin UI elements to show. 401 indicates an expired
+/// or invalid token; the client should trigger the refresh flow or redirect to
+/// login.
 #[utoipa::path(get, path = "/api/v1/auth/me", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "当前用户信息", body = UserWithRole), (status = 401, description = "未认证")))]
+    responses((status = 200, description = "Current user profile", body = UserWithRole), (status = 401, description = "Unauthenticated")))]
 pub async fn get_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
     let claims = match require_auth(&state, &headers) {
         Ok(c) => c,
@@ -380,10 +414,16 @@ pub async fn get_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
 
 // ── PUT /api/v1/auth/me ───────────────────────────────────────────────────────
 
+/// Update the current user's own profile.
+///
+/// Regular users may update basic fields. The `role_id` and `is_active` fields
+/// are restricted to Admin role — non-admin callers that supply either field
+/// receive 403. Password changes are handled by the dedicated
+/// `PUT /me/password` endpoint.
 #[utoipa::path(put, path = "/api/v1/auth/me", tag = "Auth",
     security(("bearer_auth" = [])),
     request_body = UserUpdate,
-    responses((status = 200, description = "更新成功"), (status = 401, description = "未认证")))]
+    responses((status = 200, description = "Profile updated"), (status = 401, description = "Unauthenticated")))]
 pub async fn update_me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -408,10 +448,17 @@ pub async fn update_me(
 
 // ── PUT /api/v1/auth/me/password ──────────────────────────────────────────────
 
+/// Change the current user's password.
+///
+/// Requires `old_password` verified via bcrypt to prevent password changes
+/// after token hijacking. On success, existing refresh tokens are **not**
+/// automatically revoked — other active sessions remain valid. Callers that
+/// need a "sign out everywhere" effect should additionally call
+/// `/cleanup-tokens` or the logout endpoint.
 #[utoipa::path(put, path = "/api/v1/auth/me/password", tag = "Auth",
     security(("bearer_auth" = [])),
     request_body = PasswordChange,
-    responses((status = 200, description = "密码修改成功"), (status = 401, description = "旧密码错误")))]
+    responses((status = 200, description = "Password changed successfully"), (status = 401, description = "Incorrect current password")))]
 pub async fn change_password(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -433,9 +480,14 @@ pub async fn change_password(
 
 // ── GET /api/v1/auth/roles ────────────────────────────────────────────────────
 
+/// List all roles defined in the system.
+///
+/// Roles are a static enum of `(id, name, description)` rows — currently
+/// Admin, Operator, and Viewer. Used to populate the role dropdown in the
+/// create/edit user dialog. Accessible to any authenticated user.
 #[utoipa::path(get, path = "/api/v1/auth/roles", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "角色列表")))]
+    responses((status = 200, description = "Role list")))]
 pub async fn get_roles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match db::get_all_roles(&state.db).await {
         Ok(roles) => Json(json!({
@@ -454,9 +506,16 @@ pub async fn get_roles(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
 // ── GET /api/v1/auth/users ────────────────────────────────────────────────────
 
+/// List all users (admin view).
+///
+/// Returns each user's basic info, role, last login timestamp, and activation
+/// status. **Password hashes are stripped** from the response. Used for the
+/// admin user-management UI. Note: the current implementation permits any
+/// authenticated user to call this endpoint (restricting to Admin is a known
+/// TODO).
 #[utoipa::path(get, path = "/api/v1/auth/users", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "用户列表（仅管理员）")))]
+    responses((status = 200, description = "User list (admin view)")))]
 pub async fn get_all_users(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match db::get_all_users_with_roles(&state.db).await {
         Ok(users) => {
@@ -492,10 +551,14 @@ pub async fn get_all_users(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 // ── GET /api/v1/auth/users/:id (admin) ───────────────────────────────────────
 
+/// Retrieve a specific user's profile (admin only).
+///
+/// Returns the same schema as `/auth/me` but requires Admin role; non-admin
+/// callers receive 403. Password hash is stripped from the response.
 #[utoipa::path(get, path = "/api/v1/auth/users/{id}", tag = "Auth",
     security(("bearer_auth" = [])),
-    params(("id" = i64, Path, description = "用户 ID")),
-    responses((status = 200, description = "用户详情", body = UserWithRole), (status = 404, description = "用户不存在")))]
+    params(("id" = i64, Path, description = "User ID")),
+    responses((status = 200, description = "User profile", body = UserWithRole), (status = 404, description = "User not found")))]
 pub async fn admin_get_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -530,11 +593,18 @@ pub async fn admin_get_user(
 
 // ── PUT /api/v1/auth/users/:id (admin) ───────────────────────────────────────
 
+/// Update any user's profile (admin only).
+///
+/// Shares the `UserUpdate` schema with `PUT /auth/me`, but here an Admin may
+/// also modify `role_id` and `is_active`; non-admin callers receive 403.
+/// Setting `is_active=false` does **not** immediately revoke existing tokens —
+/// they remain valid until they expire naturally or are cleared via
+/// `/cleanup-tokens`.
 #[utoipa::path(put, path = "/api/v1/auth/users/{id}", tag = "Auth",
     security(("bearer_auth" = [])),
-    params(("id" = i64, Path, description = "用户 ID")),
+    params(("id" = i64, Path, description = "User ID")),
     request_body = UserUpdate,
-    responses((status = 200, description = "更新成功"), (status = 403, description = "权限不足")))]
+    responses((status = 200, description = "User updated"), (status = 403, description = "Insufficient privileges")))]
 pub async fn admin_update_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -550,10 +620,16 @@ pub async fn admin_update_user(
 
 // ── DELETE /api/v1/auth/users/:id (admin) ────────────────────────────────────
 
+/// Delete a user (admin only).
+///
+/// Performs a hard delete from the `users` table (not a soft `is_active=false`
+/// flag); associated refresh tokens are also removed. The built-in `admin`
+/// account is protected — deletion attempts return 400 to prevent accidentally
+/// locking out the system.
 #[utoipa::path(delete, path = "/api/v1/auth/users/{id}", tag = "Auth",
     security(("bearer_auth" = [])),
-    params(("id" = i64, Path, description = "用户 ID")),
-    responses((status = 200, description = "删除成功"), (status = 400, description = "不能删除默认管理员")))]
+    params(("id" = i64, Path, description = "User ID")),
+    responses((status = 200, description = "User deleted"), (status = 400, description = "Cannot delete the default admin account")))]
 pub async fn admin_delete_user(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -604,9 +680,14 @@ pub async fn admin_delete_user(
 
 // ── GET /api/v1/auth/stats (admin) ───────────────────────────────────────────
 
+/// Return runtime statistics for the authentication subsystem.
+///
+/// Reports active refresh token count, active/total user counts, and
+/// role-distribution metrics for operations monitoring and capacity planning.
+/// No user identity information is included — aggregate numbers only.
 #[utoipa::path(get, path = "/api/v1/auth/stats", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "认证统计信息")))]
+    responses((status = 200, description = "Authentication statistics")))]
 pub async fn get_auth_stats(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -638,9 +719,15 @@ pub async fn get_auth_stats(
 
 // ── POST /api/v1/auth/cleanup-tokens (admin) ─────────────────────────────────
 
+/// Remove expired or revoked refresh tokens from the in-memory registry.
+///
+/// Maintenance operation: scans the refresh token store and drops entries
+/// where `expires_at < now()`. These tokens are already invalid; retaining
+/// them merely wastes memory. Call periodically to keep the store compact.
+/// Active valid tokens are not affected.
 #[utoipa::path(post, path = "/api/v1/auth/cleanup-tokens", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "清理过期 token")))]
+    responses((status = 200, description = "Expired tokens removed")))]
 pub async fn cleanup_tokens(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

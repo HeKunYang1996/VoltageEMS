@@ -17,42 +17,29 @@ use voltage_rtdb::Rtdb;
 
 use crate::config::TopologyNode;
 use crate::error::ModSrvError;
+use crate::infra::channel_health::ChannelHealthCache;
 use crate::infra::shm_dispatch::ActionDispatch;
 use crate::product_loader::{CreateInstanceRequest, Instance, ProductLoader};
 
 /// Row type returned by SQLite instance queries
-type InstanceRow = (u32, String, String, Option<u32>, Option<String>, String);
+/// Row shape for instance SELECTs (post v5 migration, no `properties` column).
+type InstanceRow = (u32, String, String, Option<u32>, String);
 
-/// Parse properties JSON string into HashMap
-fn parse_properties_json(
-    json: Option<String>,
-    instance_id: u32,
-) -> Result<HashMap<String, serde_json::Value>> {
-    match json {
-        Some(s) => serde_json::from_str(&s).map_err(|e| {
-            anyhow!(
-                "Invalid properties JSON for instance {}: {}",
-                instance_id,
-                e
-            )
-        }),
-        None => Ok(HashMap::new()),
-    }
-}
-
-/// Build Instance from database row tuple
-fn build_instance_from_row(
-    row: (u32, String, String, Option<u32>, Option<String>, String),
-) -> Result<Instance> {
-    let (instance_id, instance_name, product_name, parent_id, properties_json, _created_at) = row;
-    let properties = parse_properties_json(properties_json, instance_id)?;
+/// Build a partial Instance from a database row.
+///
+/// `core.properties` is left empty here — callers must fill it with
+/// `fill_properties` / `fill_properties_batch` after the SELECT. We do not
+/// load properties inside this helper to avoid hidden N+1 queries when
+/// building a list of instances.
+fn build_instance_from_row(row: InstanceRow) -> Result<Instance> {
+    let (instance_id, instance_name, product_name, parent_id, _created_at) = row;
     Ok(Instance {
         core: crate::config::InstanceCore {
             instance_id,
             instance_name,
             product_name,
             parent_id,
-            properties,
+            properties: HashMap::new(),
         },
         measurement_mappings: None,
         action_mappings: None,
@@ -81,6 +68,10 @@ pub struct InstanceManager<R: Rtdb> {
     // ========== Action Dispatch (SHM/UDS or Noop) ==========
     /// Dispatches M2C action commands via SHM+UDS (production) or noop (tests)
     pub(crate) dispatch: Arc<dyn ActionDispatch>,
+    // ========== Channel Online Gate ==========
+    /// Mirrors `comsrv:online` so `execute_action()` can reject writes targeting
+    /// offline channels without per-call Redis round-trips. See `infra::channel_health`.
+    pub(crate) health_cache: Arc<ChannelHealthCache>,
 }
 
 impl<R: Rtdb + 'static> InstanceManager<R> {
@@ -99,7 +90,300 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
             name_cache: DashMap::new(),
             slot_runtime: crate::runtime::dynamic_slot_runtime::DynamicSlotRuntime::new(),
             dispatch,
+            health_cache: Arc::new(ChannelHealthCache::new()),
         }
+    }
+
+    /// Replace the channel health cache (production wires the shared instance
+    /// also driven by the background refresh task; tests inject one with
+    /// pre-seeded offline channels).
+    pub fn with_channel_health(mut self, cache: Arc<ChannelHealthCache>) -> Self {
+        self.health_cache = cache;
+        self
+    }
+
+    /// Load per-instance property values from `instance_properties`, resolving
+    /// each `property_id` back to its `name` via the product PropertyTemplate
+    /// (compile-time constants). Returns `name -> value` for use as
+    /// `InstanceCore.properties`.
+    pub(crate) async fn fetch_properties(
+        &self,
+        instance_id: u32,
+        product_name: &str,
+    ) -> Result<HashMap<String, serde_json::Value>> {
+        let product = self
+            .product_loader
+            .get_product(product_name)
+            .map_err(|e| anyhow!("Product '{}' not found: {}", product_name, e))?;
+
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT property_id, value_json FROM instance_properties WHERE instance_id = ?",
+        )
+        .bind(instance_id as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = HashMap::with_capacity(rows.len());
+        for (property_id, value_json) in rows {
+            let Some(tpl) = product
+                .properties
+                .iter()
+                .find(|p| i64::from(p.property_id) == property_id)
+            else {
+                warn!(
+                    "Instance {} has property_id={} not in product '{}' template, dropping from response",
+                    instance_id, property_id, product_name
+                );
+                continue;
+            };
+            let value: serde_json::Value = serde_json::from_str(&value_json).map_err(|e| {
+                anyhow!(
+                    "Invalid value_json for instance {} property {}: {}",
+                    instance_id,
+                    property_id,
+                    e
+                )
+            })?;
+            out.insert(tpl.name.clone(), value);
+        }
+        Ok(out)
+    }
+
+    /// Bulk variant of `fetch_properties` — one query for all instances, then
+    /// group by `instance_id`. Used by `list_instances_paginated` /
+    /// `search_instances` / `get_children` to avoid N+1.
+    pub(crate) async fn fetch_properties_batch(
+        &self,
+        instances: &[(u32, String)],
+    ) -> Result<HashMap<u32, HashMap<String, serde_json::Value>>> {
+        if instances.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = instances.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT instance_id, property_id, value_json FROM instance_properties \
+             WHERE instance_id IN ({})",
+            placeholders
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String)>(&sql);
+        for (id, _) in instances {
+            q = q.bind(*id as i64);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+
+        // Group rows by instance_id, resolve property_id -> name per product.
+        let product_by_instance: HashMap<u32, &str> =
+            instances.iter().map(|(id, p)| (*id, p.as_str())).collect();
+        let mut out: HashMap<u32, HashMap<String, serde_json::Value>> = HashMap::new();
+        for (instance_id, property_id, value_json) in rows {
+            let instance_id = instance_id as u32;
+            let Some(product_name) = product_by_instance.get(&instance_id) else {
+                continue;
+            };
+            let Ok(product) = self.product_loader.get_product(product_name) else {
+                continue;
+            };
+            let Some(tpl) = product
+                .properties
+                .iter()
+                .find(|p| i64::from(p.property_id) == property_id)
+            else {
+                continue;
+            };
+            let value: serde_json::Value = serde_json::from_str(&value_json).map_err(|e| {
+                anyhow!(
+                    "Invalid value_json for instance {} property {}: {}",
+                    instance_id,
+                    property_id,
+                    e
+                )
+            })?;
+            out.entry(instance_id)
+                .or_default()
+                .insert(tpl.name.clone(), value);
+        }
+        Ok(out)
+    }
+
+    /// Upsert a single property value by `property_id`. Validates the id
+    /// against the instance's product PropertyTemplate (400 on unknown id;
+    /// 404 on unknown instance).
+    pub async fn upsert_single_property(
+        &self,
+        instance_id: u32,
+        property_id: i32,
+        value: serde_json::Value,
+    ) -> Result<crate::dto::InstancePropertyPoint, ModSrvError> {
+        let product_name: String =
+            sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
+                .bind(instance_id as i64)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| ModSrvError::DatabaseError(format!("DB error: {}", e)))?
+                .ok_or_else(|| ModSrvError::InstanceNotFound(instance_id.to_string()))?;
+
+        let product = self
+            .product_loader
+            .get_product(&product_name)
+            .map_err(|e| {
+                ModSrvError::InternalError(format!("Product '{}' not found: {}", product_name, e))
+            })?;
+
+        let tpl = product
+            .properties
+            .iter()
+            .find(|p| p.property_id == property_id)
+            .ok_or_else(|| {
+                ModSrvError::InvalidData(format!(
+                    "property_id {} not in product '{}' template",
+                    property_id, product_name
+                ))
+            })?
+            .clone();
+
+        let value_json = serde_json::to_string(&value)
+            .map_err(|e| ModSrvError::InternalError(format!("encode value: {}", e)))?;
+
+        sqlx::query(
+            "INSERT INTO instance_properties (instance_id, property_id, value_json) \
+             VALUES (?, ?, ?) \
+             ON CONFLICT(instance_id, property_id) DO UPDATE SET \
+                value_json = excluded.value_json, \
+                updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(instance_id as i64)
+        .bind(i64::from(property_id))
+        .bind(value_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ModSrvError::DatabaseError(format!("upsert property: {}", e)))?;
+
+        Ok(crate::dto::InstancePropertyPoint {
+            property_id: tpl.property_id,
+            name: tpl.name,
+            unit: tpl.unit,
+            description: tpl.description,
+            value: Some(value),
+        })
+    }
+
+    /// Delete a single property value by `property_id`. Returns the template
+    /// metadata with `value` absent (i.e. the post-delete state). 404 on
+    /// unknown instance or property_id not in template.
+    pub async fn delete_single_property(
+        &self,
+        instance_id: u32,
+        property_id: i32,
+    ) -> Result<crate::dto::InstancePropertyPoint, ModSrvError> {
+        let product_name: String =
+            sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
+                .bind(instance_id as i64)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| ModSrvError::DatabaseError(format!("DB error: {}", e)))?
+                .ok_or_else(|| ModSrvError::InstanceNotFound(instance_id.to_string()))?;
+
+        let product = self
+            .product_loader
+            .get_product(&product_name)
+            .map_err(|e| {
+                ModSrvError::InternalError(format!("Product '{}' not found: {}", product_name, e))
+            })?;
+
+        let tpl = product
+            .properties
+            .iter()
+            .find(|p| p.property_id == property_id)
+            .ok_or_else(|| {
+                ModSrvError::InvalidData(format!(
+                    "property_id {} not in product '{}' template",
+                    property_id, product_name
+                ))
+            })?
+            .clone();
+
+        sqlx::query("DELETE FROM instance_properties WHERE instance_id = ? AND property_id = ?")
+            .bind(instance_id as i64)
+            .bind(i64::from(property_id))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ModSrvError::DatabaseError(format!("delete property: {}", e)))?;
+
+        Ok(crate::dto::InstancePropertyPoint {
+            property_id: tpl.property_id,
+            name: tpl.name,
+            unit: tpl.unit,
+            description: tpl.description,
+            value: None,
+        })
+    }
+
+    /// Hydrate `core.properties` on each instance in a slice using one batch
+    /// query — used after the SELECT in list/search/get_children paths.
+    pub(crate) async fn attach_properties_batch(&self, instances: &mut [Instance]) -> Result<()> {
+        if instances.is_empty() {
+            return Ok(());
+        }
+        let lookup: Vec<(u32, String)> = instances
+            .iter()
+            .map(|i| (i.core.instance_id, i.core.product_name.clone()))
+            .collect();
+        let mut grouped = self.fetch_properties_batch(&lookup).await?;
+        for inst in instances {
+            if let Some(map) = grouped.remove(&inst.core.instance_id) {
+                inst.core.properties = map;
+            }
+        }
+        Ok(())
+    }
+
+    /// Persist a properties map for an instance: validates each key against
+    /// the product's PropertyTemplate, then `INSERT OR REPLACE`s one row per
+    /// recognised key. Unknown keys are rejected (returns Err). Pass an
+    /// existing transaction so the write joins the surrounding atomic op.
+    pub(crate) async fn write_properties_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        instance_id: u32,
+        product_name: &str,
+        properties: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        if properties.is_empty() {
+            return Ok(());
+        }
+        let product = self
+            .product_loader
+            .get_product(product_name)
+            .map_err(|e| anyhow!("Product '{}' not found: {}", product_name, e))?;
+
+        for (name, value) in properties {
+            let Some(tpl) = product.properties.iter().find(|p| p.name == *name) else {
+                return Err(anyhow!(
+                    "Property '{}' not declared by product '{}' template",
+                    name,
+                    product_name
+                ));
+            };
+            let value_json = serde_json::to_string(value)?;
+            sqlx::query(
+                "INSERT INTO instance_properties (instance_id, property_id, value_json) \
+                 VALUES (?, ?, ?) \
+                 ON CONFLICT(instance_id, property_id) DO UPDATE SET \
+                    value_json = excluded.value_json, \
+                    updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind(instance_id as i64)
+            .bind(i64::from(tpl.property_id))
+            .bind(value_json)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Borrow the channel health cache (for the bootstrap refresh task).
+    pub fn channel_health(&self) -> &Arc<ChannelHealthCache> {
+        &self.health_cache
     }
 
     /// Configure dynamic slot allocation (optional feature)
@@ -217,13 +501,12 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         self.name_cache.remove(instance_name);
     }
 
-    /// Create a new instance based on a product template
+    /// Create a new instance based on a product template.
     ///
-    /// @input req: CreateInstanceRequest - Instance configuration
-    /// @output `Result<Instance>` - Created instance with all point routings
-    /// @throws anyhow::Error - Instance exists, product not found, database error
-    /// @side-effects Creates instance in SQLite, initializes Redis keys
-    /// @transaction Full creation is atomic
+    /// Writes the instance row to SQLite and initializes the corresponding
+    /// Redis keys (`inst:{id}:M`, `inst:{id}:A`, name index). The whole
+    /// creation is wrapped in a transaction so either everything lands or
+    /// nothing does — partial state never persists.
     pub async fn create_instance(
         &self,
         req: CreateInstanceRequest,
@@ -307,19 +590,18 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
 
         // 4. Create instance in SQLite within transaction
         // Bind instance_id as Option: NULL lets SQLite auto-assign via INTEGER PRIMARY KEY.
-        let properties_json = serde_json::to_string(&req.properties)?;
-
+        // Property values are written to `instance_properties` below — the
+        // `instances` table no longer carries them.
         let insert_result = sqlx::query(
             r#"
-            INSERT INTO instances (instance_id, instance_name, product_name, parent_id, properties)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO instances (instance_id, instance_name, product_name, parent_id)
+            VALUES (?, ?, ?, ?)
             "#,
         )
         .bind(req.instance_id.map(|id| id as i64))
         .bind(&req.instance_name)
         .bind(&req.product_name)
         .bind(req.parent_id.map(|id| id as i64))
-        .bind(&properties_json)
         .execute(&mut *tx)
         .await;
 
@@ -341,6 +623,25 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
                 )));
             },
         };
+
+        // 4a. Write property values to dedicated table (one row per property).
+        // Unknown property names fail the whole transaction — strict schema.
+        if let Err(e) = self
+            .write_properties_tx(&mut tx, instance_id, &req.product_name, &req.properties)
+            .await
+        {
+            error!(
+                "Failed to write properties for instance {}: {}",
+                req.instance_name, e
+            );
+            if let Err(rb_err) = tx.rollback().await {
+                error!("Transaction rollback failed: {}", rb_err);
+            }
+            return Err(ModSrvError::InvalidData(format!(
+                "Failed to write properties: {}",
+                e
+            )));
+        }
 
         // 5. Create point routings for measurement and action points within transaction
         // Measurement point routing - maps point IDs to Redis keys
@@ -450,7 +751,7 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
                 .await?;
 
         let rows: Vec<InstanceRow> = sqlx::query_as(
-            r#"SELECT instance_id, instance_name, product_name, parent_id, properties, created_at
+            r#"SELECT instance_id, instance_name, product_name, parent_id, created_at
                FROM instances
                WHERE (? IS NULL OR product_name = ?)
                ORDER BY instance_id ASC
@@ -463,10 +764,11 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         .fetch_all(&self.pool)
         .await?;
 
-        let instances = rows
+        let mut instances = rows
             .into_iter()
             .map(build_instance_from_row)
             .collect::<Result<Vec<_>>>()?;
+        self.attach_properties_batch(&mut instances).await?;
 
         Ok((u32::try_from(total).unwrap_or(u32::MAX), instances))
     }
@@ -495,7 +797,7 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         .await?;
 
         let rows: Vec<InstanceRow> = sqlx::query_as(
-            r#"SELECT instance_id, instance_name, product_name, parent_id, properties, created_at
+            r#"SELECT instance_id, instance_name, product_name, parent_id, created_at
                FROM instances
                WHERE instance_name LIKE ? ESCAPE '\' AND (? IS NULL OR product_name = ?)
                ORDER BY instance_id ASC
@@ -509,10 +811,11 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         .fetch_all(&self.pool)
         .await?;
 
-        let instances = rows
+        let mut instances = rows
             .into_iter()
             .map(build_instance_from_row)
             .collect::<Result<Vec<_>>>()?;
+        self.attach_properties_batch(&mut instances).await?;
 
         Ok((u32::try_from(total).unwrap_or(u32::MAX), instances))
     }
@@ -581,9 +884,9 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
 
     /// Get instance by ID
     pub async fn get_instance(&self, instance_id: u32) -> Result<Instance> {
-        let row = sqlx::query_as::<_, (String, String, Option<u32>, Option<String>, String)>(
+        let row = sqlx::query_as::<_, (String, String, Option<u32>, String)>(
             r#"
-            SELECT instance_name, product_name, parent_id, properties, created_at
+            SELECT instance_name, product_name, parent_id, created_at
             FROM instances
             WHERE instance_id = ?
             "#,
@@ -594,8 +897,8 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
 
         let row = row.ok_or_else(|| anyhow!("Instance not found: {}", instance_id))?;
 
-        let (instance_name, product_name, parent_id, properties_json, _created_at) = row;
-        let properties = parse_properties_json(properties_json, instance_id)?;
+        let (instance_name, product_name, parent_id, _created_at) = row;
+        let properties = self.fetch_properties(instance_id, &product_name).await?;
 
         // Load point routings from routing tables and generate Redis keys dynamically
         let mut measurement_point_routings = HashMap::new();
@@ -871,7 +1174,7 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
     pub async fn get_children(&self, instance_id: u32) -> Result<Vec<Instance>> {
         let rows: Vec<InstanceRow> = sqlx::query_as(
             r#"
-                SELECT instance_id, instance_name, product_name, parent_id, properties, created_at
+                SELECT instance_id, instance_name, product_name, parent_id, created_at
                 FROM instances
                 WHERE parent_id = ?
                 ORDER BY instance_id ASC
@@ -881,9 +1184,12 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
+        let mut instances = rows
+            .into_iter()
             .map(build_instance_from_row)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>>>()?;
+        self.attach_properties_batch(&mut instances).await?;
+        Ok(instances)
     }
 
     /// Get full topology tree starting from all root instances (Station)

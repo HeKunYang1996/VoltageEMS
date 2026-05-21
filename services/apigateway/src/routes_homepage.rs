@@ -25,10 +25,16 @@ pub struct PointsQuery {
 
 // ── GET /api/v1/homepage ──────────────────────────────────────────────────────
 
+/// List homepage panel points (paginated).
+///
+/// "Homepage points" are the key metrics displayed on the operator's main
+/// dashboard (e.g. total power, total SOC, grid frequency). They are typically
+/// calculated points derived from instance measurements. Each point definition
+/// is stored in SQLite and can be filtered by the `name` keyword.
 #[utoipa::path(get, path = "/api/v1/homepage", tag = "Homepage",
     security(("bearer_auth" = [])),
     params(PointsQuery),
-    responses((status = 200, description = "计算点位列表")))]
+    responses((status = 200, description = "Calculated point list")))]
 pub async fn list_points(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PointsQuery>,
@@ -66,10 +72,15 @@ pub async fn list_points(
 
 // ── GET /api/v1/homepage/:id ──────────────────────────────────────────────────
 
+/// Retrieve the full definition of a single homepage point.
+///
+/// Includes display name, formula/source, unit, and threshold alarm settings.
+/// Used to pre-populate the "edit point" dialog. Returns 404 if the point ID
+/// does not exist.
 #[utoipa::path(get, path = "/api/v1/homepage/{id}", tag = "Homepage",
     security(("bearer_auth" = [])),
-    params(("id" = i64, Path, description = "点位 ID")),
-    responses((status = 200, description = "点位详情", body = CalculatedPoint), (status = 404, description = "不存在")))]
+    params(("id" = i64, Path, description = "Point ID")),
+    responses((status = 200, description = "Point definition", body = CalculatedPoint), (status = 404, description = "Not found")))]
 pub async fn get_point(
     State(state): State<Arc<AppState>>,
     Path(point_id): Path<i64>,
@@ -99,11 +110,17 @@ pub async fn get_point(
 
 // ── PUT /api/v1/homepage/:id ──────────────────────────────────────────────────
 
+/// Update a single homepage point (partial update).
+///
+/// All fields are optional; omitted fields retain their current values. Used
+/// for drag-and-drop layout changes, formula edits, and threshold updates.
+/// Changes take effect immediately — the next frontend poll or WebSocket push
+/// will use the new definition.
 #[utoipa::path(put, path = "/api/v1/homepage/{id}", tag = "Homepage",
     security(("bearer_auth" = [])),
-    params(("id" = i64, Path, description = "点位 ID")),
+    params(("id" = i64, Path, description = "Point ID")),
     request_body = CalculatedPointUpdate,
-    responses((status = 200, description = "更新成功", body = CalculatedPoint), (status = 404, description = "不存在")))]
+    responses((status = 200, description = "Point updated", body = CalculatedPoint), (status = 404, description = "Not found")))]
 pub async fn update_point(
     State(state): State<Arc<AppState>>,
     Path(point_id): Path<i64>,
@@ -166,9 +183,16 @@ pub async fn update_point(
 
 // ── POST /api/v1/homepage/reset ───────────────────────────────────────────────
 
+/// Reset homepage points to factory defaults.
+///
+/// Clears all current point definitions and re-inserts the built-in defaults
+/// (total plant power, SOC, temperature, grid-tie status, etc.). Use when the
+/// configuration has been corrupted or after an upgrade to pull in new default
+/// points. **Destructive operation** — all user-customised point definitions
+/// are overwritten and cannot be recovered.
 #[utoipa::path(post, path = "/api/v1/homepage/reset", tag = "Homepage",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "已恢复默认点位")))]
+    responses((status = 200, description = "Default points restored")))]
 pub async fn reset_points(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match db::reset_calculated_points(&state.db).await {
         Ok(count) => Json(json!({

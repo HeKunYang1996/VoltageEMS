@@ -319,10 +319,11 @@ async fn test_read_rule_variables_with_name_index() {
     }];
 
     let mut values = HashMap::new();
-    executor
+    let outcome = executor
         .read_rule_variables(&variables, &mut values)
         .await
         .unwrap();
+    assert!(outcome.missing.is_empty(), "no variables should be missing");
 
     assert_eq!(values.get("X1"), Some(&42.5));
 }
@@ -344,12 +345,166 @@ async fn test_read_variables_no_cache_uses_redis() {
     }];
 
     let mut values = HashMap::new();
-    executor
+    let outcome = executor
+        .read_rule_variables(&variables, &mut values)
+        .await
+        .unwrap();
+    assert!(outcome.missing.is_empty(), "no variables should be missing");
+
+    assert_eq!(values.get("DIRECT"), Some(&55.5));
+}
+
+/// Locking the contract: measurement variables that have never been written
+/// (Redis field absent) MUST appear in `outcome.missing` so callers can skip
+/// the cycle. Substituting 0.0 would silently fire conditions like
+/// "current < 5A" on devices that never reported.
+#[tokio::test]
+async fn test_missing_measurement_appears_in_outcome_missing() {
+    let (_rtdb, executor) = new_executor();
+
+    let variables = vec![RuleVariable {
+        name: "GHOST".to_string(),
+        instance: Some(999),
+        point_type: Some("measurement".to_string()),
+        point: Some(1),
+        formula: vec![],
+    }];
+
+    let mut values = HashMap::new();
+    let outcome = executor
         .read_rule_variables(&variables, &mut values)
         .await
         .unwrap();
 
-    assert_eq!(values.get("DIRECT"), Some(&55.5));
+    assert_eq!(outcome.missing, vec!["GHOST".to_string()]);
+    assert!(
+        !values.contains_key("GHOST"),
+        "missing measurement must NOT be inserted with a 0.0 fallback — \
+         that would silently trigger threshold conditions"
+    );
+}
+
+#[tokio::test]
+async fn test_non_finite_measurement_appears_in_outcome_missing() {
+    let (rtdb, executor) = new_executor();
+    rtdb.hash_set("inst:5:M", "3", Bytes::from("NaN"))
+        .await
+        .unwrap();
+
+    let variables = vec![RuleVariable {
+        name: "BAD".to_string(),
+        instance: Some(5),
+        point_type: Some("measurement".to_string()),
+        point: Some(3),
+        formula: vec![],
+    }];
+
+    let mut values = HashMap::new();
+    let outcome = executor
+        .read_rule_variables(&variables, &mut values)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.missing, vec!["BAD".to_string()]);
+    assert!(
+        !values.contains_key("BAD"),
+        "NaN/Inf measurements must be treated as missing, not valid rule input"
+    );
+}
+
+/// Action variables (write targets) that are not yet written are NOT missing —
+/// "never written" is the normal initial state for an action point. Caller
+/// proceeds to evaluate/write. Locks the asymmetric semantics with measurement.
+#[tokio::test]
+async fn test_unset_action_var_is_not_treated_as_missing() {
+    let (_rtdb, executor) = new_executor();
+
+    let variables = vec![RuleVariable {
+        name: "Y_TARGET".to_string(),
+        instance: Some(999),
+        point_type: Some("action".to_string()),
+        point: Some(1),
+        formula: vec![],
+    }];
+
+    let mut values = HashMap::new();
+    let outcome = executor
+        .read_rule_variables(&variables, &mut values)
+        .await
+        .unwrap();
+
+    assert!(
+        outcome.missing.is_empty(),
+        "unwritten action point is NOT a missing-variable error"
+    );
+    assert!(
+        !values.contains_key("Y_TARGET"),
+        "still don't fabricate a 0.0 — values stays empty until something writes"
+    );
+}
+
+/// Locks the contract: assignment.value referencing an unknown variable name
+/// must NOT silently write 0 — it produces ActionResult { success: false }
+/// with NaN value, so the rule's failure is observable in logs/UI.
+#[tokio::test]
+async fn test_assignment_unknown_variable_does_not_write_zero() {
+    let (rtdb, executor) = new_executor();
+    // Action target exists but the variable referenced by the assignment
+    // ("PHANTOM") was never read into `values`.
+    let target = RuleVariable {
+        name: "Y".to_string(),
+        instance: Some(42),
+        point_type: Some("action".to_string()),
+        point: Some(7),
+        formula: vec![],
+    };
+    let assignment = RuleValueAssignment {
+        variables: "Y".to_string(),
+        value: json!("PHANTOM"),
+    };
+    let values = HashMap::new(); // PHANTOM not present, no numeric literal
+
+    let result = executor
+        .execute_rule_change(&target, &assignment, &values)
+        .await;
+    assert!(!result.success, "missing-var assignment must not succeed");
+    assert!(
+        result.value.is_nan(),
+        "skipped action carries NaN, not 0.0 — caller can distinguish"
+    );
+
+    // Crucially, no field was written to Redis.
+    let written = rtdb.hash_get("inst:42:A", "7").await.unwrap();
+    assert!(
+        written.is_none(),
+        "Redis must NOT have a 0.0 field after a skipped action"
+    );
+}
+
+/// Numeric literals encoded as strings (some frontends do this) still resolve.
+#[tokio::test]
+async fn test_assignment_numeric_string_literal_resolves() {
+    let (_rtdb, executor) = new_executor();
+    let target = RuleVariable {
+        name: "Y".to_string(),
+        instance: Some(1),
+        point_type: Some("action".to_string()),
+        point: Some(1),
+        formula: vec![],
+    };
+    let assignment = RuleValueAssignment {
+        variables: "Y".to_string(),
+        value: json!("3.125"),
+    };
+    let values = HashMap::new();
+
+    let result = executor
+        .execute_rule_change(&target, &assignment, &values)
+        .await;
+    assert_eq!(
+        result.value, 3.125,
+        "numeric-literal string must parse, not be looked up as variable"
+    );
 }
 
 // =========================================================================

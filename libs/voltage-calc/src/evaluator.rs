@@ -292,14 +292,54 @@ impl<S: StateStore> CalcEngine<S> {
             }
         }
 
+        fn arg_count(args: &Value) -> usize {
+            match args {
+                Value::Tuple(tuple) => tuple.len(),
+                Value::Empty => 0,
+                _ => 1,
+            }
+        }
+
+        fn args2(args: &Value) -> std::result::Result<(&Value, &Value), EvalexprError> {
+            match args {
+                Value::Tuple(tuple) => match tuple.as_slice() {
+                    [a, b] => Ok((a, b)),
+                    slice => Err(EvalexprError::wrong_function_argument_amount(
+                        slice.len(),
+                        2,
+                    )),
+                },
+                _ => Err(EvalexprError::wrong_function_argument_amount(
+                    arg_count(args),
+                    2,
+                )),
+            }
+        }
+
+        fn args3(args: &Value) -> std::result::Result<(&Value, &Value, &Value), EvalexprError> {
+            match args {
+                Value::Tuple(tuple) => match tuple.as_slice() {
+                    [a, b, c] => Ok((a, b, c)),
+                    slice => Err(EvalexprError::wrong_function_argument_amount(
+                        slice.len(),
+                        3,
+                    )),
+                },
+                _ => Err(EvalexprError::wrong_function_argument_amount(
+                    arg_count(args),
+                    3,
+                )),
+            }
+        }
+
         // scale(value, factor)
         context
             .set_function(
                 "scale".to_string(),
                 Function::new(|args| {
-                    let tuple = args.as_tuple()?;
-                    let value = to_f64(&tuple[0])?;
-                    let factor = to_f64(&tuple[1])?;
+                    let (value_arg, factor_arg) = args2(args)?;
+                    let value = to_f64(value_arg)?;
+                    let factor = to_f64(factor_arg)?;
                     Ok(Value::Float(builtin_functions::scale(value, factor)))
                 }),
             )
@@ -310,10 +350,17 @@ impl<S: StateStore> CalcEngine<S> {
             .set_function(
                 "clamp".to_string(),
                 Function::new(|args| {
-                    let tuple = args.as_tuple()?;
-                    let value = to_f64(&tuple[0])?;
-                    let min = to_f64(&tuple[1])?;
-                    let max = to_f64(&tuple[2])?;
+                    let (value_arg, min_arg, max_arg) = args3(args)?;
+                    let value = to_f64(value_arg)?;
+                    let min = to_f64(min_arg)?;
+                    let max = to_f64(max_arg)?;
+                    // f64::clamp panics on min > max or NaN; surface as eval error.
+                    if min.is_nan() || max.is_nan() || min > max {
+                        return Err(EvalexprError::CustomMessage(format!(
+                            "clamp: invalid range [min={}, max={}] (min must be <= max, no NaN)",
+                            min, max
+                        )));
+                    }
                     Ok(Value::Float(builtin_functions::clamp(value, min, max)))
                 }),
             )
@@ -335,9 +382,9 @@ impl<S: StateStore> CalcEngine<S> {
             .set_function(
                 "min".to_string(),
                 Function::new(|args| {
-                    let tuple = args.as_tuple()?;
-                    let a = to_f64(&tuple[0])?;
-                    let b = to_f64(&tuple[1])?;
+                    let (a_arg, b_arg) = args2(args)?;
+                    let a = to_f64(a_arg)?;
+                    let b = to_f64(b_arg)?;
                     Ok(Value::Float(builtin_functions::min(a, b)))
                 }),
             )
@@ -348,9 +395,9 @@ impl<S: StateStore> CalcEngine<S> {
             .set_function(
                 "max".to_string(),
                 Function::new(|args| {
-                    let tuple = args.as_tuple()?;
-                    let a = to_f64(&tuple[0])?;
-                    let b = to_f64(&tuple[1])?;
+                    let (a_arg, b_arg) = args2(args)?;
+                    let a = to_f64(a_arg)?;
+                    let b = to_f64(b_arg)?;
                     Ok(Value::Float(builtin_functions::max(a, b)))
                 }),
             )
@@ -361,9 +408,9 @@ impl<S: StateStore> CalcEngine<S> {
             .set_function(
                 "round".to_string(),
                 Function::new(|args| {
-                    let tuple = args.as_tuple()?;
-                    let value = to_f64(&tuple[0])?;
-                    let decimals_i64 = tuple[1].as_int()?;
+                    let (value_arg, decimals_arg) = args2(args)?;
+                    let value = to_f64(value_arg)?;
+                    let decimals_i64 = decimals_arg.as_int()?;
                     // Clamp to valid i32 range for decimal places
                     let decimals = decimals_i64.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
                     Ok(Value::Float(builtin_functions::round(value, decimals)))
@@ -471,6 +518,30 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_clamp_min_gt_max_returns_err() {
+        // f64::clamp panics if min > max; verify we surface as eval error instead.
+        let engine = create_engine();
+        let vars = HashMap::new();
+        let err = engine
+            .evaluate_simple("clamp(50, 100, 0)", &vars)
+            .unwrap_err();
+        assert!(matches!(err, CalcError::Expression(_)), "got {:?}", err);
+    }
+
+    #[test]
+    fn test_builtin_arity_mismatch_returns_err() {
+        // Wrong argument count must surface as eval error, not panic on tuple[i].
+        let engine = create_engine();
+        let vars = HashMap::new();
+        // clamp expects 3 args; supply 2.
+        let err = engine.evaluate_simple("clamp(1, 2)", &vars).unwrap_err();
+        assert!(matches!(err, CalcError::Expression(_)), "got {:?}", err);
+        // scale expects 2; supply 1.
+        let err = engine.evaluate_simple("scale(5)", &vars).unwrap_err();
+        assert!(matches!(err, CalcError::Expression(_)), "got {:?}", err);
+    }
+
+    #[test]
     fn test_builtin_abs() {
         let engine = create_engine();
         let vars = HashMap::new();
@@ -563,9 +634,16 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("V".to_string(), 220.0);
 
-        // rate_of_change(V)
+        // First call: no prior sample → NaN sentinel (not 0.0). Locks the
+        // contract that rate-of-change cannot fabricate a finite "rate" with
+        // only one sample; downstream validate_value drops the action so a
+        // freshly-deployed system never writes a bogus zero rate.
         let result = engine.evaluate("rate_of_change(V)", &vars).await.unwrap();
-        assert_eq!(result, 0.0); // First call returns 0
+        assert!(
+            result.is_nan(),
+            "first rate_of_change must be NaN, got {}",
+            result
+        );
     }
 
     #[tokio::test]

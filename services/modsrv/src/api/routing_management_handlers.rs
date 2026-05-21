@@ -23,16 +23,6 @@ use crate::routing_loader::{ActionRoutingRow, MeasurementRoutingRow};
 ///
 /// Creates a new channel-to-instance point routing. Validates that both
 /// the channel and instance points exist before creating.
-///
-/// @route POST /api/instances/{id}/routing
-/// @input Path(id): u16 - Instance ID
-/// @input Json(routing): RoutingRequest - Routing configuration
-/// @output Json<SuccessResponse<serde_json::Value>> - Creation result
-/// @status 200 - Success with routing details
-/// @status 400 - Validation error
-/// @status 404 - Instance not found
-/// @status 500 - Database error
-/// @side-effects Inserts into point_routing table and Redis route:c2m
 #[utoipa::path(
     post,
     path = "/api/instances/{id}/routing",
@@ -218,14 +208,6 @@ pub async fn create_instance_routing(
 /// - Points NOT in the request: remain unchanged (not deleted)
 ///
 /// Uses a transaction to ensure atomic operation.
-///
-/// @route PUT /api/instances/{id}/routing
-/// @input Path(id): u16 - Instance ID
-/// @input Json(routings): `Vec<RoutingRequest>` - Routings to upsert
-/// @output Json<SuccessResponse<serde_json::Value>> - Update result
-/// @status 200 - Success with count
-/// @status 400 - Validation errors
-/// @status 500 - Transaction error
 #[utoipa::path(
     put,
     path = "/api/instances/{id}/routing",
@@ -453,15 +435,15 @@ pub async fn update_instance_routing(
     }
 }
 
-/// Delete all routings for an instance
+/// Delete all C2M and M2C routings for an instance.
 ///
-/// @route DELETE /api/instances/{id}/routing
-/// @input id: `Path<u32>` - Instance ID
-/// @output Json<SuccessResponse<serde_json::Value>> - Success status with deleted count
-/// @throws sqlx::Error - Database deletion error
-/// @redis-delete route:c2m - Removes all routings for instance
-/// @transaction Atomic deletion of all instance routings
-/// @side-effects Removes all channel-to-instance routing
+/// **Destructive**: removes every row matching `instance_id = ?` from both
+/// `measurement_routing` and `action_routing`. The instance itself is
+/// preserved (product model unchanged), but all channel associations are
+/// severed — measurements stop flowing in and control commands have no
+/// path to the device. Typical use: clear old routings before
+/// reconfiguring a replaced device. Triggers a routing-cache reload on
+/// completion.
 #[utoipa::path(
     delete,
     path = "/api/instances/{id}/routing",
@@ -509,15 +491,14 @@ pub async fn delete_instance_routing(
     }
 }
 
-/// Validate routing for an instance
+/// Validate routing completeness and integrity for an instance.
 ///
-/// @route POST /api/instances/{id}/routing/validate
-/// @input id: `Path<u32>` - Instance ID
-/// @input routings: `Json<Vec<RoutingRequest>>` - Routings to validate
-/// @output Json<SuccessResponse<serde_json::Value>> - Validation results for each routing
-/// @throws None - Validation errors are returned in response
-/// @redis-read Products and instance configurations
-/// @side-effects None (validation only)
+/// Checks that every `measurement_point` maps to a real channel point, that
+/// every `action_point` does the same, that the referenced channel is enabled,
+/// that each `point_id` exists in the corresponding `{type}_points` table, and
+/// that types are compatible (M must map to T/S; A must map to C/A). Returns
+/// an `issues` list for use in the configuration health-check UI. Read-only —
+/// no state is modified.
 #[utoipa::path(
     post,
     path = "/api/instances/{id}/routing/validate",

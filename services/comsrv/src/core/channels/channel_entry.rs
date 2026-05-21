@@ -97,6 +97,33 @@ pub struct ChannelEntry<R: Rtdb> {
     pub(crate) reconnect_total_attempts: Arc<AtomicU64>,
     /// Whether reconnection has permanently failed
     pub(crate) reconnect_failed: Arc<AtomicBool>,
+    /// Timestamp (millis since epoch) of the most recent poll cycle that
+    /// returned at least one successful point. 0 means no successful poll
+    /// has happened yet on this entry. Used by `is_connected()` to surface
+    /// "TCP up but Modbus dead" zombies as disconnected to the UI.
+    pub(crate) last_successful_read_ms: Arc<AtomicI64>,
+    /// Per-channel freshness window derived from poll interval.
+    data_freshness_timeout_ms: i64,
+    /// Per-channel first-poll grace window derived from poll interval.
+    first_poll_grace_ms: i64,
+}
+
+/// Minimum freshness window: preserves the old behavior for fast poll intervals.
+const MIN_DATA_FRESHNESS_TIMEOUT_MS: i64 = 90_000;
+/// Minimum first-poll grace window: avoids startup flapping for fast channels.
+const MIN_FIRST_POLL_GRACE_MS: i64 = 60_000;
+
+fn scaled_poll_window_ms(poll_interval_ms: u64, multiplier: u64, minimum_ms: i64) -> i64 {
+    let scaled = poll_interval_ms.saturating_mul(multiplier);
+    scaled.max(minimum_ms as u64).min(i64::MAX as u64) as i64
+}
+
+fn data_freshness_timeout_ms(poll_interval_ms: u64) -> i64 {
+    scaled_poll_window_ms(poll_interval_ms, 3, MIN_DATA_FRESHNESS_TIMEOUT_MS)
+}
+
+fn first_poll_grace_ms(poll_interval_ms: u64) -> i64 {
+    scaled_poll_window_ms(poll_interval_ms, 2, MIN_FIRST_POLL_GRACE_MS)
 }
 
 impl<R: Rtdb> std::fmt::Debug for ChannelEntry<R> {
@@ -174,10 +201,12 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
         let watchdog_heartbeat_ms = Arc::new(AtomicI64::new(0));
         let reconnect_total_attempts = Arc::new(AtomicU64::new(0));
         let reconnect_failed = Arc::new(AtomicBool::new(false));
+        let last_successful_read_ms = Arc::new(AtomicI64::new(0));
 
         let heartbeat_clone = Arc::clone(&watchdog_heartbeat_ms);
         let attempts_clone = Arc::clone(&reconnect_total_attempts);
         let failed_clone = Arc::clone(&reconnect_failed);
+        let last_read_clone = Arc::clone(&last_successful_read_ms);
 
         // Parse zero-data liveness threshold (consecutive zero-data polls → disconnect)
         let zero_data_threshold = channel_config
@@ -186,6 +215,8 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(5);
+        let data_freshness_timeout = data_freshness_timeout_ms(poll_interval_ms);
+        let first_poll_grace = first_poll_grace_ms(poll_interval_ms);
 
         // Spawn the unified channel task
         let ctx = ChannelPollContext {
@@ -198,6 +229,7 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
             watchdog_heartbeat_ms: heartbeat_clone,
             reconnect_total_attempts: attempts_clone,
             reconnect_failed: failed_clone,
+            last_successful_read_ms: last_read_clone,
             zero_data_threshold,
         };
         let task_handle = tokio::spawn(async move {
@@ -224,6 +256,9 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
             watchdog_heartbeat_ms,
             reconnect_total_attempts,
             reconnect_failed,
+            last_successful_read_ms,
+            data_freshness_timeout_ms: data_freshness_timeout,
+            first_poll_grace_ms: first_poll_grace,
         }
     }
 
@@ -259,11 +294,39 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
 
     /// Check if channel is connected.
     ///
-    /// Returns the cached connection state for non-blocking access.
-    /// The cache is updated by the unified channel task after each poll cycle.
+    /// Combines two signals so the UI cannot show "Connected" when reads have
+    /// silently stopped flowing:
+    ///
+    /// 1. The cached TCP-level connection state (set by the protocol runtime).
+    /// 2. Recency of the last successful poll — at least one point must come
+    ///    back within the per-channel freshness window.
+    ///
+    /// The first poll has a `FIRST_POLL_GRACE_MS` window after channel creation
+    /// so we don't flap to disconnected before the loop has a chance to run.
     pub fn is_connected(&self) -> bool {
         let state_u8 = self.cached_connection_state.load(Ordering::Relaxed);
-        super::types::ConnectionState::from_u8(state_u8).is_connected()
+        if !super::types::ConnectionState::from_u8(state_u8).is_connected() {
+            return false;
+        }
+
+        let last_read = self.last_successful_read_ms.load(Ordering::Relaxed);
+        if last_read == 0 {
+            // No successful poll yet on this entry. Trust TCP state only while
+            // we are still inside the first-poll grace window; after that, a
+            // protocol that has produced zero successful reads is treated as
+            // disconnected even if the TCP socket appears up.
+            let age_ms = self
+                .metadata
+                .created_at
+                .elapsed()
+                .as_millis()
+                .min(i64::MAX as u128) as i64;
+            return age_ms < self.first_poll_grace_ms;
+        }
+
+        // We have at least one historical successful poll — require freshness.
+        let age_ms = unix_timestamp_ms().saturating_sub(last_read);
+        age_ms < self.data_freshness_timeout_ms
     }
 
     /// Get channel status.
@@ -490,4 +553,21 @@ fn parse_auto_recovery_policy(
         cooldown: std::time::Duration::from_secs(cooldown_secs),
         max_recovery_rounds: max_rounds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn freshness_windows_keep_old_minimums_for_fast_polling() {
+        assert_eq!(data_freshness_timeout_ms(1_000), 90_000);
+        assert_eq!(first_poll_grace_ms(1_000), 60_000);
+    }
+
+    #[test]
+    fn freshness_windows_scale_for_slow_polling() {
+        assert_eq!(data_freshness_timeout_ms(120_000), 360_000);
+        assert_eq!(first_poll_grace_ms(120_000), 240_000);
+    }
 }

@@ -13,13 +13,12 @@ use crate::api::routes::{AppState, get_service_start_time};
 use crate::dto::{AppError, HealthStatus, ServiceStatus, SuccessResponse};
 use voltage_rtdb::Rtdb;
 
-/// Get service status endpoint
+/// comsrv runtime summary: total channels, active channels, uptime, and version.
 ///
-/// @route GET /api/status
-/// @input State(state): AppState - Application state with factory
-/// @output `Json<SuccessResponse<ServiceStatus>>` - Service status including channels
-/// @status 200 - Success with {total_channels, active_channels, uptime, version}
-/// @status 500 - Internal server error
+/// Does not perform dependency checks (no Redis / SQLite ping) — reads only the
+/// in-memory channel manager state. Use this to display "how long comsrv has been
+/// running / how many channels it manages" on the dashboard. For actual health checks
+/// use `/health`, which returns 503 on failure.
 #[utoipa::path(
     get,
     path = "/api/status",
@@ -57,12 +56,6 @@ pub async fn get_service_status<R: Rtdb>(
 ///
 /// Performs actual connectivity checks on Redis and SQLite dependencies.
 /// Returns 503 if any critical dependency is unhealthy.
-///
-/// @route GET /health
-/// @input State(state): AppState - Application state with rtdb and sqlite
-/// @output `Json<SuccessResponse<HealthStatus>>` - Health status with component checks
-/// @status 200 - Service is healthy (all dependencies reachable)
-/// @status 503 - Service is unhealthy (one or more dependencies failed)
 #[utoipa::path(
     get,
     path = "/health",

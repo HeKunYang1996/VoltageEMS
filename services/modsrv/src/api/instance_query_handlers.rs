@@ -42,14 +42,13 @@ fn default_page_size() -> u32 {
     20
 }
 
-/// List instances with optional product filter and pagination
+/// List instances with pagination (includes product-model summary per instance).
 ///
-/// @route GET /api/instances?product_name={optional}&page={optional}&page_size={optional}
-/// @input State(state): `Arc<AppState>` - Application state
-/// @input Query(query): PaginationQuery - Pagination and filter parameters
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Paginated instances
-/// @status 200 - Success with total, list, page, page_size
-/// @status 500 - Database error
+/// Optionally filter by `product_name` to narrow to a specific device type.
+/// Each record contains `instance_id`, `instance_name`, `product_name`,
+/// `parent_id`, and `properties` JSON. Does **not** include live measurement
+/// values — for runtime data use `/api/instances/{id}/data`. Intended for the
+/// instance-list view where a lightweight response is preferred.
 #[utoipa::path(
     get,
     path = "/api/instances",
@@ -124,13 +123,6 @@ pub async fn list_instances(
 /// URL format: `/api/instances/search?{keyword}`
 /// - The keyword is passed directly as the raw query string (no parameter name needed)
 /// - Empty keyword returns all instances
-///
-/// @route GET /api/instances/search?{keyword}
-/// @input State(state): `Arc<AppState>` - Application state
-/// @input RawQuery(raw_query): `Option<String>` - Raw query string as keyword
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> - Matching instances
-/// @status 200 - Success with list of matching instances
-/// @status 500 - Database error
 #[utoipa::path(
     get,
     path = "/api/instances/search",
@@ -291,9 +283,11 @@ pub async fn search_instances(
     Ok(Json(SuccessResponse::new(json!({ "list": list }))))
 }
 
-/// List all instances (lightweight: id + name only)
+/// Minimal instance list (id + name only, no pagination).
 ///
-/// @route GET /api/instances/list
+/// For dropdown menus, routing-bind pickers, and other "pick an instance"
+/// scenarios. Returns all instances in one shot with only two fields,
+/// minimising response size. For full details use the paginated endpoint.
 #[utoipa::path(
     get,
     path = "/api/instances/list",
@@ -326,13 +320,13 @@ pub async fn list_instances_slim(
     Ok(Json(SuccessResponse::new(json!({ "list": list }))))
 }
 
-/// Get a specific instance by ID
+/// Get product-model details for a single instance.
 ///
-/// @route GET /api/instances/{id}
-/// @input Path(id): u16 - Instance ID
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Instance details
-/// @status 200 - Success with instance data
-/// @status 404 - Instance not found
+/// Returns the full instance definition: base fields, properties, measurement
+/// point list (`measurement_mappings`), and action point list
+/// (`action_mappings`). This is the **product-model** view (structure
+/// definition) and contains no live values; for runtime data use
+/// `/api/instances/{id}/data`. Returns 404 when `instance_id` does not exist.
 #[utoipa::path(
     get,
     path = "/api/instances/{id}",
@@ -384,14 +378,6 @@ pub async fn get_instance(
 /// Get real-time data for an instance
 ///
 /// Returns current measurement, action, and property values from Redis.
-///
-/// @route GET /api/instances/{id}/data?data_type={optional}
-/// @input Path(id): u16 - Instance ID
-/// @input Query(query): DataTypeQuery - Optional data type filter (M/A/P)
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, AppError> - Instance data points
-/// @status 200 - Success with data points
-/// @status 404 - Instance not found
-/// @status 500 - Database error
 #[utoipa::path(
     get,
     path = "/api/instances/{id}/data",
@@ -446,16 +432,8 @@ pub async fn get_instance_data(
 
 /// Get point definitions with routing for an instance
 ///
-/// Returns measurement and action points with their routing configurations.
-/// Each point includes both the product template definition and the instance-specific
-/// routing configuration (if configured).
-///
-/// @route GET /api/instances/{id}/points
-/// @input Path(id): u16 - Instance ID
-/// @output `Result<Json<SuccessResponse<InstancePointsResponse>>, AppError>` - Points with routing
-/// @status 200 - Success with point definitions
-/// @status 404 - Instance not found
-/// @status 500 - Database error
+/// Returns measurement, action, and property points. Measurements and actions carry
+/// their routing configurations; properties carry the per-instance value (no routing).
 #[utoipa::path(
     get,
     path = "/api/instances/{id}/points",
@@ -463,7 +441,7 @@ pub async fn get_instance_data(
         ("id" = u16, Path, description = "Instance ID")
     ),
     responses(
-        (status = 200, description = "Instance points with routing configurations",
+        (status = 200, description = "Instance points with routing/values",
             body = InstancePointsResponse,
             example = json!({
                 "instance_name": "pv_inverter_01",
@@ -500,6 +478,20 @@ pub async fn get_instance_data(
                             "enabled": true
                         }
                     }
+                ],
+                "properties": [
+                    {
+                        "property_id": 1,
+                        "name": "rated_power",
+                        "unit": "kW",
+                        "description": "Rated active power",
+                        "value": 5000.0
+                    },
+                    {
+                        "property_id": 2,
+                        "name": "manufacturer",
+                        "description": "Device manufacturer"
+                    }
                 ]
             })
         ),
@@ -522,11 +514,12 @@ pub async fn get_instance_points(
     })?;
 
     match state.instance_manager.load_instance_points(id).await {
-        Ok((measurements, actions)) => {
+        Ok((measurements, actions, properties)) => {
             let response = InstancePointsResponse {
                 instance_name: instance.instance_name().to_string(),
                 measurements,
                 actions,
+                properties,
             };
             Ok(Json(SuccessResponse::new(response)))
         },
@@ -566,13 +559,6 @@ pub struct SetMeasurementRequest {
 /// Directly writes a measurement value to Redis, bypassing the normal
 /// data flow (channel → routing → instance). Useful for testing rules
 /// and calculations without actual device data.
-///
-/// @route POST /api/instances/{id}/measurement
-/// @input Path(id): u16 - Instance ID
-/// @input Json(req): SetMeasurementRequest - Point ID and value
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError>
-/// @status 200 - Measurement set successfully
-/// @status 500 - Redis error
 #[utoipa::path(
     post,
     path = "/api/instances/{id}/measurement",
@@ -638,13 +624,12 @@ pub async fn set_instance_measurement(
 // Topology Query Handlers
 // ============================================================================
 
-/// Get direct child instances of a given parent
+/// Get direct child instances of a given parent.
 ///
-/// @route GET /api/instances/{id}/children
-/// @input Path(id): u32 - Parent instance ID
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> - Child instances
-/// @status 200 - Success with list of children
-/// @status 500 - Database error
+/// One-level descent on the `parent_id` foreign key — does **not**
+/// recurse. Returns each child's full instance row. For deep
+/// hierarchies (Station → ESS → Battery → BMS) call this repeatedly
+/// or use a separate tree-walk endpoint.
 #[cfg_attr(feature = "swagger-ui", utoipa::path(
     get,
     path = "/api/instances/{id}/children",
@@ -680,10 +665,6 @@ pub async fn get_instance_children(
 /// Returns a flat list of topology nodes ordered for tree reconstruction:
 /// root nodes first, then children in parent_id order.
 ///
-/// @route GET /api/topology
-/// @output Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> - Topology tree
-/// @status 200 - Success with topology nodes
-/// @status 500 - Database error
 #[cfg_attr(feature = "swagger-ui", utoipa::path(
     get,
     path = "/api/topology",

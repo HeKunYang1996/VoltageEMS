@@ -11,6 +11,14 @@
 //!         → pipeline_hash_mset → Redis comsrv:{channel_id}:{T|S|C|A}
 //! ```
 //!
+//! # Authority
+//!
+//! SHM is the source of truth for current values. Redis is a derived cache
+//! consumed by other services (modsrv, apigateway, …). On comsrv startup the
+//! snapshot restore repopulates SHM and the first `flush_once()` does a
+//! `full_scan` (`tick_count == 0`), pushing every non-zero seq slot back into
+//! Redis — so Redis converges to SHM without any TTL bookkeeping.
+//!
 //! # Dirty detection
 //!
 //! `UnifiedWriter` keeps a process-local dirty bitmap for slots written by
@@ -18,12 +26,14 @@
 //! back to a full seq scan so cross-process or missed writes are still caught.
 //! `last_seq[slot]` is advanced only after Redis accepts the pipeline.
 //!
-//! # TTL refresh
+//! # No TTL
 //!
-//! Redis keys are refreshed with a 24h TTL every `TTL_REFRESH_INTERVAL` ticks
-//! (~60s at default 100ms flush interval) to match the old WriteBuffer behavior.
+//! Redis keys/fields are not given a TTL. Stale entries (deleted channels or
+//! removed point IDs) are reaped at startup by `voltage_rtdb::cleanup`, which
+//! is routing-driven and explicit. TTL would re-introduce the failure mode
+//! where a >24h device outage silently expires real values from Redis.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,18 +46,13 @@ use voltage_rtdb::Rtdb;
 use voltage_rtdb::numfmt::{f64_to_bytes, i64_to_bytes, precomputed};
 use voltage_rtdb_shm::ShmHandle;
 
-/// seq == 0 means the slot has never been written. Skip on scan to avoid
-/// flooding Redis with zero-value placeholders on startup.
+/// seq == 0 means the slot has never been written. Used as a fast-path
+/// pre-check; the canonical "unwritten" marker since SHM v3 is the NaN
+/// sentinel in `value_bits` (see `is_finite(value)` filter below).
 ///
 /// Note: after ~2^31 writes (~6.8 years at 10Hz), seq wraps back to 0 and
 /// this slot would be skipped until the next write (seq=2). Acceptable.
 const UNWRITTEN_SEQ: u32 = 0;
-
-/// TTL applied to each Redis key (24 hours), matching the old WriteBuffer config.
-const KEY_TTL_SECONDS: i64 = 86_400;
-
-/// Refresh TTL every N ticks. At 100ms flush interval this is ~60 seconds.
-const TTL_REFRESH_INTERVAL: u64 = 600;
 
 /// Force a full seq scan periodically as a safety net for external writers.
 const FULL_SCAN_INTERVAL: u64 = 600;
@@ -66,9 +71,7 @@ pub struct ShmRedisSync<R: Rtdb> {
     last_layout_ptr: usize,
     /// Slots that failed to flush to Redis and must be retried.
     retry_slots: Vec<usize>,
-    /// All Redis keys written since last TTL refresh.
-    ttl_keys: HashSet<String>,
-    /// Tick counter for TTL refresh cadence.
+    /// Tick counter for periodic full-scan cadence.
     tick_count: u64,
     key_space: &'static KeySpaceConfig,
     flush_interval: Duration,
@@ -88,7 +91,6 @@ impl<R: Rtdb> ShmRedisSync<R> {
             last_seq: vec![0u32; max_slots],
             last_layout_ptr: 0,
             retry_slots: Vec::new(),
-            ttl_keys: HashSet::new(),
             tick_count: 0,
             key_space: KeySpaceConfig::production_cached(),
             flush_interval: Duration::from_millis(100),
@@ -178,6 +180,17 @@ impl<R: Rtdb> ShmRedisSync<R> {
                 None => continue, // torn read, retry next tick
             };
 
+            // Skip slots whose value is the unwritten NaN sentinel (SHM v3).
+            // Defence-in-depth on top of the seq check: if a writer ever
+            // bumped seq without finishing the data write, or a v2 snapshot
+            // somehow leaked through, we still don't push NaN to Redis.
+            // batch_to_updates already rejects non-finite from the protocol
+            // side, so this is the only remaining ingress point.
+            if !value.is_finite() || !raw.is_finite() {
+                self.last_seq[slot_idx] = seq;
+                continue;
+            }
+
             let origin = match reverse_index.get(slot_idx) {
                 Some(o) => o,
                 None => {
@@ -242,7 +255,6 @@ impl<R: Rtdb> ShmRedisSync<R> {
             "ShmRedisSync: flushing dirty slots to Redis"
         );
 
-        let keys_to_track: Vec<String> = ops.keys().cloned().collect();
         let hash_ops: voltage_rtdb::traits::HashMsetOps = ops.into_iter().collect();
         if let Err(e) = self.rtdb.pipeline_hash_mset(hash_ops).await {
             warn!(error = %e, "ShmRedisSync: pipeline_hash_mset failed");
@@ -257,32 +269,8 @@ impl<R: Rtdb> ShmRedisSync<R> {
         for (slot_idx, seq) in synced_slots {
             self.last_seq[slot_idx] = seq;
         }
-        for key in keys_to_track {
-            self.ttl_keys.insert(key);
-        }
 
-        // Refresh TTL periodically (~60s at default interval).
         self.tick_count += 1;
-        if self.tick_count.is_multiple_of(TTL_REFRESH_INTERVAL) {
-            self.refresh_ttl().await;
-        }
-    }
-
-    /// EXPIRE all tracked keys with 24h TTL, then clear the set.
-    async fn refresh_ttl(&mut self) {
-        if self.ttl_keys.is_empty() {
-            return;
-        }
-        let count = self.ttl_keys.len();
-        for key in self.ttl_keys.drain() {
-            if let Err(e) = self.rtdb.expire(&key, KEY_TTL_SECONDS).await {
-                warn!(key = %key, error = %e, "ShmRedisSync: EXPIRE failed");
-            }
-        }
-        debug!(
-            keys = count,
-            "ShmRedisSync: refreshed TTL on {} keys", count
-        );
     }
 
     /// Background loop — runs until `shutdown` fires or sender is dropped.
@@ -295,9 +283,8 @@ impl<R: Rtdb> ShmRedisSync<R> {
                 biased;
                 result = shutdown.changed() => {
                     let _ = result;
-                    debug!("ShmRedisSync: shutdown, performing final flush + TTL refresh");
+                    debug!("ShmRedisSync: shutdown, performing final flush");
                     self.flush_once().await;
-                    self.refresh_ttl().await;
                     break;
                 }
                 _ = interval.tick() => {
@@ -606,7 +593,6 @@ mod tests {
         sync.flush_once().await;
         assert_eq!(sync.last_seq[0], 0);
         assert_eq!(sync.retry_slots, vec![0]);
-        assert!(sync.ttl_keys.is_empty());
 
         let key = sync.key_space.channel_key(1001, PointType::Telemetry);
         assert!(rtdb.hash_get(&key, "0").await.unwrap().is_none());

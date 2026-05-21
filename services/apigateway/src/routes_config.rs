@@ -98,9 +98,16 @@ async fn read_upgrade_status() -> serde_json::Value {
 
 // ── GET /api/v1/config/check ──────────────────────────────────────────────────
 
+/// Check the health of the configuration directory.
+///
+/// Scans the `config/` directory structure (products, instances, routing, etc.)
+/// and reports existence, completeness, and SQLite consistency for each
+/// sub-module. Use as a pre-flight check before importing configuration or
+/// running an upgrade, and as an indicator on the operations dashboard.
+/// **Read-only.**
 #[utoipa::path(get, path = "/api/v1/config/check", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "配置目录检查结果")))]
+    responses((status = 200, description = "Configuration directory check result")))]
 pub async fn check_config() -> impl IntoResponse {
     let dir = Path::new(CONFIG_DIR);
     if !dir.exists() {
@@ -145,9 +152,16 @@ pub async fn check_config() -> impl IntoResponse {
 
 // ── GET /api/v1/config/export ─────────────────────────────────────────────────
 
+/// Export the current configuration as a ZIP archive.
+///
+/// Packages the entire `config/` directory tree (product definitions,
+/// instances, routing, rules, etc.) into a ZIP stream returned as an
+/// `attachment`. Use for site-to-site configuration migration, pre-upgrade
+/// backups, and remote-support reproduction. The export **does not** include
+/// Redis runtime data — only static configuration files.
 #[utoipa::path(get, path = "/api/v1/config/export", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "返回 ZIP 文件流")))]
+    responses((status = 200, description = "ZIP file stream")))]
 pub async fn export_config() -> impl IntoResponse {
     let dir = Path::new(CONFIG_DIR);
     if !dir.exists() {
@@ -243,10 +257,18 @@ fn walkdir_simple(dir: &Path) -> Vec<std::path::PathBuf> {
 
 // ── POST /api/v1/config/import ────────────────────────────────────────────────
 
+/// Upload and apply a configuration ZIP (overwrite mode).
+///
+/// Accepts a multipart-uploaded ZIP file in the `file` field, extracts it
+/// into `config/`, **overwriting the existing directory**. Typically followed
+/// by `POST /restart-services` to activate the new configuration.
+/// **Destructive operation** — take a backup via `/config/export` first.
+/// ZIPs that fail schema validation or are missing required files are rejected
+/// and the existing `config/` directory is left untouched.
 #[utoipa::path(post, path = "/api/v1/config/import", tag = "Config",
     security(("bearer_auth" = [])),
-    request_body(content_type = "multipart/form-data", description = "上传 ZIP 配置文件（字段名 file）"),
-    responses((status = 200, description = "导入成功"), (status = 400, description = "文件格式错误")))]
+    request_body(content_type = "multipart/form-data", description = "ZIP configuration archive (field name: file)"),
+    responses((status = 200, description = "Configuration imported"), (status = 400, description = "Invalid file format")))]
 pub async fn import_config(mut multipart: Multipart) -> impl IntoResponse {
     let mut zip_data: Option<Vec<u8>> = None;
 
@@ -393,9 +415,16 @@ fn extract_zip(data: &[u8], target: &Path) -> io::Result<usize> {
 
 // ── POST /api/v1/config/restart-services ─────────────────────────────────────
 
+/// Restart core services to apply configuration changes.
+///
+/// Issues a Docker restart for comsrv, modsrv, hissrv, netsrv, and alarmsrv.
+/// Required after any configuration change — whether a single-point PUT or a
+/// ZIP import. There is a brief unavailability window during restart; startup
+/// ordering (comsrv must precede modsrv) is handled internally. Returns
+/// per-service success/failure.
 #[utoipa::path(post, path = "/api/v1/config/restart-services", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "服务重启结果")))]
+    responses((status = 200, description = "Service restart results")))]
 pub async fn restart_services() -> impl IntoResponse {
     let services = [
         "voltageems-comsrv",
@@ -441,10 +470,19 @@ pub async fn restart_services() -> impl IntoResponse {
 
 // ── POST /api/v1/config/upgrade ───────────────────────────────────────────────
 
+/// Upload an upgrade package and start the upgrade process.
+///
+/// Accepts a multipart-uploaded `.run` installer (produced by
+/// `scripts/build-installer.sh`), streams it to disk, then launches the
+/// upgrade script asynchronously. This endpoint returns immediately with 200;
+/// poll `GET /upgrade/status` for progress. **Services will restart** during
+/// the upgrade — the frontend must handle a temporary loss of connectivity.
+/// File size limits and signature verification are enforced by the installer
+/// script.
 #[utoipa::path(post, path = "/api/v1/config/upgrade", tag = "Config",
     security(("bearer_auth" = [])),
-    request_body(content_type = "multipart/form-data", description = "上传升级包"),
-    responses((status = 200, description = "升级已启动"), (status = 409, description = "升级正在进行中")))]
+    request_body(content_type = "multipart/form-data", description = "Upgrade package (.run installer)"),
+    responses((status = 200, description = "Upgrade started"), (status = 409, description = "Upgrade already in progress")))]
 pub async fn start_upgrade(headers: HeaderMap, mut multipart: Multipart) -> impl IntoResponse {
     use tokio::io::AsyncWriteExt;
 
@@ -953,9 +991,17 @@ pub async fn start_upgrade(headers: HeaderMap, mut multipart: Multipart) -> impl
 
 // ── POST /api/v1/config/upgrade/abort ────────────────────────────────────────
 
+/// Abort an in-progress upgrade.
+///
+/// Sends SIGTERM to the upgrade script. **Only reliably effective during
+/// early phases** (uploading, verification); once the installer is writing
+/// partitions or replacing binaries, a clean rollback is no longer possible
+/// and the call returns 200 with limited practical effect. After aborting,
+/// the system may be in an indeterminate state between the old and new
+/// versions — consult `/upgrade/status` to determine the next action.
 #[utoipa::path(post, path = "/api/v1/config/upgrade/abort", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "升级已中断")))]
+    responses((status = 200, description = "Upgrade aborted")))]
 pub async fn abort_upgrade() -> impl IntoResponse {
     let uploading = UPLOAD_IN_PROGRESS.load(Ordering::Relaxed);
     let pid = match lock_upgrade_pid() {
@@ -1018,9 +1064,16 @@ pub async fn abort_upgrade() -> impl IntoResponse {
 
 // ── GET /api/v1/config/upgrade/status ────────────────────────────────────────
 
+/// Poll upgrade progress.
+///
+/// Returns the current upgrade phase (idle / uploading / verifying /
+/// installing / restarting / done / failed), progress percentage, the latest
+/// log output, and the last failure reason if any. Used by the frontend upgrade
+/// page to drive the progress bar. `idle` status means no upgrade is running
+/// and a new package may be submitted via `POST /upgrade`.
 #[utoipa::path(get, path = "/api/v1/config/upgrade/status", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "升级状态")))]
+    responses((status = 200, description = "Upgrade status")))]
 pub async fn upgrade_status() -> impl IntoResponse {
     let file_status = read_upgrade_status().await;
     let mem_running = match lock_upgrade_running() {
@@ -1175,7 +1228,7 @@ fn clean_log(raw: &str) -> String {
     out
 }
 
-/// Map a multipart/body read error to a user-facing Chinese message.
+/// Map a multipart/body read error to a user-facing message.
 /// `limit_mb` is the configured limit for this endpoint (for display only).
 fn classify_upload_error(err: &str, limit_mb: usize) -> String {
     let lower = err.to_lowercase();

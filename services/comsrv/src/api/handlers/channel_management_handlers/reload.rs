@@ -9,10 +9,14 @@ use axum::{extract::State, response::Json};
 use std::sync::Arc;
 use voltage_rtdb::Rtdb;
 
-/// Reload all channels from SQLite configuration
+/// Reload all channel configurations from SQLite.
 ///
-/// @route POST /api/channels/reload
-/// @side-effects Synchronizes runtime with SQLite configuration
+/// Call this after `monarch sync` writes new configuration to SQLite so that comsrv
+/// picks up the changes. Performs an incremental diff: newly added channels start their
+/// protocol adapters, removed channels stop, modified channels restart. The operation is
+/// hot — unaffected channels are not disturbed. Major topology changes (routing changes)
+/// trigger an SHM rebuild and increment `writer_generation`; modsrv automatically
+/// reopens SHM. Returns per-channel processing results.
 #[utoipa::path(
     post,
     path = "/api/channels/reload",
@@ -163,10 +167,13 @@ pub async fn reload_configuration_handler<R: Rtdb>(
     Ok(Json(SuccessResponse::new(result)))
 }
 
-/// Reload routing cache from SQLite configuration
+/// Reload the routing cache only (does not touch channels).
 ///
-/// @route POST /api/routing/reload
-/// @side-effects Updates in-memory routing cache with latest data from SQLite
+/// Unlike `/reload`, this only refreshes the C2M / M2C / C2C routing tables without
+/// touching the channel protocol layer. Use this when routing changes without point
+/// changes — it is lighter and faster than `/reload` and does not interrupt device
+/// connections. The routing table is replaced atomically via ArcSwap. Note: modsrv
+/// maintains its own independent routing cache and will sync on its next periodic reload.
 #[utoipa::path(
     post,
     path = "/api/routing/reload",

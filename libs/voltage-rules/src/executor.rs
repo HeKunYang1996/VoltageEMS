@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use voltage_calc::{CalcEngine, MemoryStateStore, StateStore};
-use voltage_model::{ValidationConfig, sanitize_value};
+use voltage_model::{ValidationConfig, validate_value};
 use voltage_routing::RoutingCache;
 use voltage_routing::set_action_point;
 use voltage_rtdb::KeySpaceConfig;
@@ -49,18 +49,32 @@ fn validate_write_target(
     context: &str,
 ) -> std::result::Result<(u32, u32, f64, &'static str), ActionResult> {
     let config = ValidationConfig::default();
-    let value = sanitize_value(raw_value, 0.0, &config);
-    if (raw_value - value).abs() > f64::EPSILON || raw_value.is_nan() {
-        tracing::warn!(
-            "{} sanitized: {} → {} (variable '{}')",
-            context,
-            raw_value,
-            value,
-            variable.name
-        );
-    }
-
     let pt = point_type_to_static(variable.point_type.as_deref(), default_point_type);
+
+    // Reject NaN/Inf/out-of-range — never silently coerce to 0.0. The old
+    // sanitize_value path turned a malformed compute result into a real
+    // SCADA write of 0, which is the exact failure mode this skill is
+    // sealing across the codebase. Caller treats Err as "skip this action".
+    let value = match validate_value(raw_value, &config) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                "{} skipped: value {} failed validation ({}) (variable '{}')",
+                context,
+                raw_value,
+                e,
+                variable.name
+            );
+            return Err(ActionResult {
+                target_type: "instance",
+                target_id: variable.instance.unwrap_or(0),
+                point_type: pt,
+                point_id: variable.point.unwrap_or(0),
+                value: f64::NAN,
+                success: false,
+            });
+        },
+    };
 
     let instance_id = variable.instance.ok_or_else(|| {
         tracing::error!(
@@ -139,6 +153,42 @@ fn evaluate_token_formula(
             None
         },
     }
+}
+
+/// Build an ActionResult marking that a rule action was skipped because the
+/// resolved value couldn't be determined (missing variable, unsupported type).
+/// Carries the variable's identity so caller and logs can attribute the skip.
+fn action_skipped(variable: &RuleVariable, reason: &str) -> ActionResult {
+    tracing::warn!(
+        "Rule action skipped (variable '{}', instance={:?}, point={:?}): {}",
+        variable.name,
+        variable.instance,
+        variable.point,
+        reason
+    );
+    ActionResult {
+        target_type: "instance",
+        target_id: variable.instance.unwrap_or(0),
+        point_type: point_type_to_static(variable.point_type.as_deref(), "A"),
+        point_id: variable.point.unwrap_or(0),
+        value: f64::NAN,
+        success: false,
+    }
+}
+
+/// Outcome of one variable-read pass for a node.
+///
+/// Captures both "did anything change?" (for snapshot-cache reuse) and
+/// "which variables were unavailable?" (so callers can skip evaluation
+/// instead of substituting 0.0 for absent readings — silently triggering
+/// conditions like "current < threshold" on missing data).
+#[derive(Debug, Default)]
+pub(crate) struct RuleReadOutcome {
+    pub values_changed: bool,
+    /// Variables whose data was unavailable this cycle (no SHM hit, no Redis
+    /// field, or RPC failure). Caller MUST short-circuit rule evaluation when
+    /// non-empty.
+    pub missing: Vec<String>,
 }
 
 /// Result of executing a rule
@@ -342,17 +392,26 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     rule: rules,
                     wires,
                 } => {
-                    // Read node-local variables
-                    let values_changed =
-                        match self.read_rule_variables(variables, &mut values).await {
-                            Ok(changed) => changed,
-                            Err(e) => {
-                                result.error = Some(format!("Failed to read variables: {}", e));
-                                // Save variable values even on error (wrap in Arc)
-                                result.variable_values = Arc::new(std::mem::take(&mut values));
-                                return Ok(result);
-                            },
-                        };
+                    // Read node-local variables. Missing variables → skip this
+                    // cycle so absent data can never trigger threshold rules
+                    // (a 0.0 fallback would fire "X1 < 5" on missing readings).
+                    let outcome = match self.read_rule_variables(variables, &mut values).await {
+                        Ok(o) => o,
+                        Err(e) => {
+                            result.error = Some(format!("Failed to read variables: {}", e));
+                            result.variable_values = Arc::new(std::mem::take(&mut values));
+                            return Ok(result);
+                        },
+                    };
+                    if !outcome.missing.is_empty() {
+                        result.error = Some(format!(
+                            "Rule cycle skipped: variables unavailable: {}",
+                            outcome.missing.join(", ")
+                        ));
+                        result.variable_values = Arc::new(std::mem::take(&mut values));
+                        return Ok(result);
+                    }
+                    let values_changed = outcome.values_changed;
 
                     // Snapshot values when entering this node (reuse cache if nothing changed)
                     let snapshot = snapshot_or_reuse(&mut values_snapshot, &values, values_changed);
@@ -391,15 +450,23 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     rule: assignments,
                     wires,
                 } => {
-                    // Read target variables
-                    let values_changed =
-                        match self.read_rule_variables(variables, &mut values).await {
-                            Ok(changed) => changed,
-                            Err(e) => {
-                                result.error = Some(format!("Failed to read variables: {}", e));
-                                return Ok(result);
-                            },
-                        };
+                    // Read target variables. Skip the cycle on missing data —
+                    // a 0.0 fallback would write meaningless action values.
+                    let outcome = match self.read_rule_variables(variables, &mut values).await {
+                        Ok(o) => o,
+                        Err(e) => {
+                            result.error = Some(format!("Failed to read variables: {}", e));
+                            return Ok(result);
+                        },
+                    };
+                    if !outcome.missing.is_empty() {
+                        result.error = Some(format!(
+                            "Rule cycle skipped: variables unavailable: {}",
+                            outcome.missing.join(", ")
+                        ));
+                        return Ok(result);
+                    }
+                    let values_changed = outcome.values_changed;
 
                     // Snapshot values when entering this node (before executing actions)
                     let input_snapshot =
@@ -498,13 +565,21 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         result: &mut RuleExecutionResult,
         rule_id: i64,
     ) -> Option<&'a str> {
-        let values_changed = match self.read_rule_variables(variables, values).await {
-            Ok(changed) => changed,
+        let outcome = match self.read_rule_variables(variables, values).await {
+            Ok(o) => o,
             Err(e) => {
                 result.error = Some(format!("Failed to read variables: {}", e));
                 return None;
             },
         };
+        if !outcome.missing.is_empty() {
+            result.error = Some(format!(
+                "Calculation skipped: variables unavailable: {}",
+                outcome.missing.join(", ")
+            ));
+            return None;
+        }
+        let values_changed = outcome.values_changed;
 
         let input_snapshot = snapshot_or_reuse(snapshot_cache, values, values_changed);
         result.variable_values = Arc::clone(&input_snapshot);
@@ -567,18 +642,42 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         rule_id: i64,
     ) -> Option<&'a str> {
         let input_vars = vec![input.clone()];
-        let values_changed = match self.read_rule_variables(&input_vars, values).await {
-            Ok(changed) => changed,
+        let outcome = match self.read_rule_variables(&input_vars, values).await {
+            Ok(o) => o,
             Err(e) => {
                 result.error = Some(format!("Failed to read input variable: {}", e));
                 return None;
             },
         };
+        if !outcome.missing.is_empty() {
+            result.error = Some(format!(
+                "PeriodDelta skipped: input variable unavailable: {}",
+                outcome.missing.join(", ")
+            ));
+            return None;
+        }
+        let values_changed = outcome.values_changed;
 
         let input_snapshot = snapshot_or_reuse(snapshot_cache, values, values_changed);
         result.variable_values = Arc::clone(&input_snapshot);
 
-        let input_value = values.get(&input.name).copied().unwrap_or(0.0);
+        let input_value = match values.get(&input.name).copied() {
+            Some(v) if v.is_finite() => v,
+            Some(v) => {
+                result.error = Some(format!(
+                    "PeriodDelta skipped: input variable '{}' is non-finite ({})",
+                    input.name, v
+                ));
+                return None;
+            },
+            None => {
+                result.error = Some(format!(
+                    "PeriodDelta skipped: input variable '{}' unavailable after read",
+                    input.name
+                ));
+                return None;
+            },
+        };
         let calc_engine =
             CalcEngine::new(Arc::clone(&self.state_store), format!("rule_{}", rule_id));
 
@@ -637,8 +736,8 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         &self,
         variables: &[RuleVariable],
         values: &mut HashMap<String, f64>,
-    ) -> Result<bool> {
-        let mut values_changed = false;
+    ) -> Result<RuleReadOutcome> {
+        let mut outcome = RuleReadOutcome::default();
         let keyspace = KeySpaceConfig::production_cached();
 
         // ★ Phase 1a: Try SHM first, collect Redis fallback requests
@@ -681,9 +780,27 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 if let Some((val, _ts)) =
                     reader.get_instance(instance_id, instance_type, point, &self.routing_cache)
                 {
+                    if !val.is_finite() {
+                        if is_action {
+                            tracing::trace!(
+                                "Action var {} from SHM is non-finite ({}) — leaving unset",
+                                var_name,
+                                val
+                            );
+                        } else {
+                            tracing::warn!(
+                                "Var {} from SHM is non-finite ({}) — rule will be skipped this cycle",
+                                var_name,
+                                val
+                            );
+                            outcome.missing.push(var_name);
+                        }
+                        continue;
+                    }
+
                     // SharedMemory hit - fastest path.
                     // total_cmp avoids NaN != NaN busting the Arc snapshot every cycle.
-                    values_changed |= values
+                    outcome.values_changed |= values
                         .insert(var_name, val)
                         .is_none_or(|prev| prev.total_cmp(&val).is_ne());
                     continue;
@@ -704,36 +821,79 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         }
 
         // ★ Phase 1b: Batched Redis fetch using HMGET (single RTT per key)
-        for ((key, _is_action), var_fields) in redis_requests {
+        for ((key, is_action), var_fields) in redis_requests {
             let fields: Vec<&str> = var_fields.iter().map(|(_, f)| f.as_str()).collect();
             match self.rtdb.hash_mget(&key, &fields).await {
                 Ok(results) => {
                     for (i, (var_name, field)) in var_fields.into_iter().enumerate() {
-                        let val = results
-                            .get(i)
-                            .and_then(|opt| opt.as_ref())
-                            .and_then(|bytes| {
-                                let s = String::from_utf8_lossy(bytes);
-                                s.parse::<f64>().ok()
-                            })
-                            .unwrap_or_else(|| {
+                        let parsed =
+                            results
+                                .get(i)
+                                .and_then(|opt| opt.as_ref())
+                                .and_then(|bytes| {
+                                    let s = String::from_utf8_lossy(bytes);
+                                    s.parse::<f64>().ok()
+                                });
+                        match parsed {
+                            Some(val) if val.is_finite() => {
+                                outcome.values_changed |= values
+                                    .insert(var_name, val)
+                                    .is_none_or(|prev| prev.total_cmp(&val).is_ne());
+                            },
+                            Some(val) if is_action => {
+                                tracing::trace!(
+                                    "Action var {} ({}:{}) is non-finite ({}) — leaving unset",
+                                    var_name,
+                                    key,
+                                    field,
+                                    val
+                                );
+                            },
+                            Some(val) => {
                                 tracing::warn!(
-                                    "Var {}: {}:{} not found or invalid",
+                                    "Var {}: {}:{} is non-finite ({}) — rule will be skipped this cycle",
+                                    var_name,
+                                    key,
+                                    field,
+                                    val
+                                );
+                                outcome.missing.push(var_name);
+                            },
+                            None if is_action => {
+                                // Action point variables are write targets; "never
+                                // written before" is the normal initial state. Don't
+                                // treat as missing — the rule may write to them.
+                                tracing::trace!(
+                                    "Action var {} ({}:{}) not yet written — leaving unset",
                                     var_name,
                                     key,
                                     field
                                 );
-                                0.0
-                            });
-                        values_changed |= values
-                            .insert(var_name, val)
-                            .is_none_or(|prev| prev.total_cmp(&val).is_ne());
+                            },
+                            None => {
+                                tracing::warn!(
+                                    "Var {}: {}:{} unavailable — rule will be skipped this cycle",
+                                    var_name,
+                                    key,
+                                    field
+                                );
+                                outcome.missing.push(var_name);
+                            },
+                        }
                     }
                 },
                 Err(e) => {
-                    tracing::error!("Redis HMGET error for {}: {}", key, e);
-                    for (var_name, _) in var_fields {
-                        values_changed |= values.insert(var_name, 0.0) != Some(0.0);
+                    tracing::error!(
+                        "Redis HMGET error for {} — variables marked missing: {}",
+                        key,
+                        e
+                    );
+                    // RPC failure on action keys is also "treat as unset" — we
+                    // can't tell whether the field would have existed.
+                    if !is_action {
+                        for (var_name, _) in var_fields {
+                            outcome.missing.push(var_name);
+                        }
                     }
                 },
             }
@@ -749,19 +909,19 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             let var_name = var.name.clone();
             match evaluate_token_formula(&var.formula, values) {
                 Some(result) => {
-                    values_changed |= values.insert(var_name, result) != Some(result);
+                    outcome.values_changed |= values.insert(var_name, result) != Some(result);
                 },
                 None => {
                     tracing::warn!(
-                        "Failed to evaluate formula for variable '{}', using 0.0",
+                        "Formula variable '{}' could not be evaluated — rule will be skipped",
                         var_name
                     );
-                    values_changed |= values.insert(var_name, 0.0) != Some(0.0);
+                    outcome.missing.push(var_name);
                 },
             }
         }
 
-        Ok(values_changed)
+        Ok(outcome)
     }
 
     /// Evaluate compact switch rules and return the next node ID with matched condition and port
@@ -917,15 +1077,33 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         assignment: &RuleValueAssignment,
         values: &HashMap<String, f64>,
     ) -> ActionResult {
-        // Resolve the value to write
+        // Resolve the value to write. No 0.0 fallback — silently writing 0
+        // when an assignment references a missing variable would corrupt
+        // control commands (e.g. "set Y = X1" when X1 is unavailable).
         let raw_value: f64 = if let Some(n) = assignment.value.as_f64() {
             n
         } else if let Some(n) = assignment.value.as_i64() {
             n as f64
         } else if let Some(s) = assignment.value.as_str() {
-            values.get(s).copied().unwrap_or(s.parse().unwrap_or(0.0))
+            // String form is either (a) a numeric literal or (b) a variable name.
+            if let Ok(n) = s.parse::<f64>() {
+                n
+            } else if let Some(&v) = values.get(s) {
+                v
+            } else {
+                tracing::warn!(
+                    "Rule action skipped: assignment value '{}' is neither a numeric \
+                     literal nor a known variable",
+                    s
+                );
+                return action_skipped(variable, "unknown variable in assignment");
+            }
         } else {
-            0.0
+            tracing::warn!(
+                "Rule action skipped: assignment value type unsupported: {:?}",
+                assignment.value
+            );
+            return action_skipped(variable, "unsupported assignment value type");
         };
 
         let (instance_id, point, value, pt) =

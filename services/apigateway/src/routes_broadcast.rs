@@ -8,10 +8,17 @@ use crate::state::AppState;
 
 // ── POST /api/v1/broadcast ────────────────────────────────────────────────────
 
+/// Broadcast a JSON message to all connected WebSocket clients.
+///
+/// Forwards the request body verbatim to every currently connected WebSocket
+/// client with **no subscription filtering** — even clients subscribed to a
+/// specific channel will receive the message. Returns the number of clients
+/// reached and their metadata. Useful for pushing system notifications, forcing
+/// a frontend cache refresh, or debugging the WebSocket pipeline.
 #[utoipa::path(post, path = "/api/v1/broadcast", tag = "WebSocket",
     security(("bearer_auth" = [])),
-    request_body(content = serde_json::Value, description = "任意 JSON 消息，广播给所有 WS 客户端"),
-    responses((status = 200, description = "广播成功")))]
+    request_body(content = serde_json::Value, description = "Arbitrary JSON payload to broadcast to all connected WebSocket clients"),
+    responses((status = 200, description = "Broadcast delivered")))]
 pub async fn broadcast_message(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
@@ -40,9 +47,16 @@ pub async fn broadcast_message(
 
 // ── GET /api/v1/broadcast/status ─────────────────────────────────────────────
 
+/// Return the current connection status of the WebSocket hub.
+///
+/// Reports total connection count, subscribed-client count (clients with at
+/// least one channel or data_type subscription), per-connection metadata
+/// (client_id, connect time), and the full subscription table. Useful for
+/// diagnosing why a client is not receiving push events: check whether the
+/// connection exists and whether its subscription matches the pushed data.
 #[utoipa::path(get, path = "/api/v1/broadcast/status", tag = "WebSocket",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "WebSocket 连接状态")))]
+    responses((status = 200, description = "WebSocket hub connection status")))]
 pub async fn broadcast_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let status = state.ws_hub.get_status();
 

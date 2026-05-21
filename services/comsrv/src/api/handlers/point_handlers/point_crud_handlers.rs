@@ -97,9 +97,13 @@ fn extract_create_fields(
 // Create Point Handlers
 // ----------------------------------------------------------------------------
 
-/// Create a telemetry point (T)
+/// Create a new telemetry point (Telemetry / type "T").
 ///
-/// @route POST /api/channels/{channel_id}/T/points/{point_id}
+/// T points are read-only floating-point measurements (voltage, current, temperature,
+/// SOC, etc.) polled periodically from the device. Writes to the `telemetry_points`
+/// table and registers the corresponding SHM slot (if the channel is already running).
+/// Register address, byte order, linear scaling, and unit are supplied in the request.
+/// `point_id` must be unique within a channel.
 #[utoipa::path(
     post,
     path = "/api/channels/{channel_id}/T/points/{point_id}",
@@ -168,9 +172,12 @@ pub async fn create_telemetry_point_handler<R: Rtdb>(
     })))
 }
 
-/// Create a signal point (S) - has extra normal_state field
+/// Create a new signal point (Signal / type "S").
 ///
-/// @route POST /api/channels/{channel_id}/S/points/{point_id}
+/// S points are read-only discrete inputs / status bits (circuit breaker on/off,
+/// run/fault flags, alarm bits, etc.) read from device discrete inputs. Compared to T,
+/// S has an extra `normal_state` field indicating whether the normal state is 0 or 1 —
+/// alarm rules use this to detect state inversion. All other behavior is the same as T.
 #[utoipa::path(
     post,
     path = "/api/channels/{channel_id}/S/points/{point_id}",
@@ -291,9 +298,13 @@ async fn create_ca_point_inner<R: Rtdb>(
     })))
 }
 
-/// Create a control point (C)
+/// Create a new control point (Control / type "C").
 ///
-/// @route POST /api/channels/{channel_id}/C/points/{point_id}
+/// C points are writable discrete outputs (FC05 write coil) used for discrete control
+/// commands such as start/stop and open/close. They are the terminal of the
+/// modsrv → SHM C slot → UDS notify → comsrv → device write path. The point is
+/// writable immediately after creation, but a M2C routing entry pointing to an
+/// `instance.action_point` must exist before commands are dispatched to the device.
 #[utoipa::path(
     post,
     path = "/api/channels/{channel_id}/C/points/{point_id}",
@@ -328,9 +339,13 @@ pub async fn create_control_point_handler<R: Rtdb>(
     .await
 }
 
-/// Create an adjustment point (A)
+/// Create a new adjustment point (Adjustment / type "A").
 ///
-/// @route POST /api/channels/{channel_id}/A/points/{point_id}
+/// A points are writable floating-point outputs (FC06 write single register / FC16
+/// write multiple registers) used for continuous setpoint control such as power
+/// setpoint, frequency adjustment, and voltage setpoint. A is the floating-point
+/// counterpart of C; the only difference is the value domain (C is 0/1, A is float).
+/// All other rules are the same (M2C routing required before commands reach the device).
 #[utoipa::path(
     post,
     path = "/api/channels/{channel_id}/A/points/{point_id}",
@@ -369,9 +384,13 @@ pub async fn create_adjustment_point_handler<R: Rtdb>(
 // Update Point Handler (Universal for all types)
 // ----------------------------------------------------------------------------
 
-/// Update a point (supports all four types: T/S/C/A)
+/// Update the definition of a point of any type (unified entry point).
 ///
-/// @route PUT /api/channels/{channel_id}/{type}/points/{point_id}
+/// Paired with the four create endpoints — `point_type` in the path determines which
+/// table to update. Updatable fields include register address, scale factor, unit, and
+/// alarm limits. Changing `point_id` or `channel_id` is not allowed (delete and
+/// recreate instead, to avoid breaking SHM slot mappings). The new configuration takes
+/// effect on the next poll cycle; no channel restart is required.
 #[utoipa::path(
     put,
     path = "/api/channels/{channel_id}/{type}/points/{point_id}",
@@ -521,9 +540,14 @@ pub(super) async fn update_point_handler_inner<R: Rtdb>(
 // Delete Point Handler
 // ----------------------------------------------------------------------------
 
-/// Delete a point
+/// Delete a point of any type.
 ///
-/// @route DELETE /api/channels/{channel_id}/{type}/points/{point_id}
+/// Removes the row from the corresponding `{type}_points` table and clears the
+/// associated `protocol_mappings`. **The corresponding SHM slot becomes idle** (not
+/// immediately reclaimed, to keep `routing_hash` stable and reduce modsrv rebuild
+/// storms). If the point is the target of a M2C routing entry, that route becomes
+/// stale but is not cascade-deleted — orphaned routing entries must be cleaned up
+/// separately.
 #[utoipa::path(
     delete,
     path = "/api/channels/{channel_id}/{type}/points/{point_id}",

@@ -21,7 +21,13 @@ use crate::error::ModSrvError;
 // Measurement Point Handlers
 // ============================================================================
 
-/// Get a single measurement point with routing configuration
+/// Get full details for a single measurement point (definition + routing + current value).
+///
+/// Returns the point definition from `instance.measurement_points`, the
+/// associated C2M routing (which channel and channel-point it maps to), and
+/// the latest measurement value from `inst:{id}:M`. Used by the point-detail
+/// dialog on the frontend. Returns 404 if the instance or `point_id` does
+/// not exist.
 #[utoipa::path(
     get,
     path = "/api/instances/{id}/measurements/{point_id}",
@@ -53,7 +59,13 @@ pub async fn get_measurement_point(
     }
 }
 
-/// Create or update routing for a single measurement point
+/// Create or update the C2M routing for a single measurement point (UPSERT semantics).
+///
+/// Binds `instance.measurement_point` to a `channel.{T|S}.point` — after
+/// this, new values arriving at that channel point are automatically synced
+/// to `inst:{id}:M`. An existing routing is overwritten. The change
+/// immediately triggers a routing-cache reload; the new mapping takes effect
+/// from the next ShmRedisSync cycle.
 #[utoipa::path(
     put,
     path = "/api/instances/{id}/measurements/{point_id}/routing",
@@ -100,7 +112,12 @@ pub async fn upsert_measurement_routing(
     }))))
 }
 
-/// Delete routing for a single measurement point
+/// Delete the C2M routing for a single measurement point.
+///
+/// Removes the routing but **preserves the point definition** — the instance
+/// product model is unchanged. After deletion no data flows into this
+/// measurement point; the corresponding field in `inst:{id}:M` stops
+/// updating and retains its last-known-good value.
 #[utoipa::path(
     delete,
     path = "/api/instances/{id}/measurements/{point_id}/routing",
@@ -152,7 +169,13 @@ pub async fn delete_measurement_routing(
     }))))
 }
 
-/// Toggle enabled state for a single measurement point routing
+/// Enable or disable the C2M routing for a single measurement point.
+///
+/// Lighter-weight than deletion — the routing definition is retained but
+/// data flow is paused. When disabled, the field in `inst:{id}:M` stops
+/// updating (last-known-good is preserved); enabling it resumes normal
+/// sync. Commonly used to temporarily silence a faulty point's upstream
+/// data.
 #[utoipa::path(
     patch,
     path = "/api/instances/{id}/measurements/{point_id}/routing",
@@ -215,7 +238,12 @@ pub async fn toggle_measurement_routing(
 // Action Point Handlers
 // ============================================================================
 
-/// Get a single action point with routing configuration
+/// Get full details for a single action point (definition + M2C routing + last written value).
+///
+/// The action-point counterpart of `/measurement-point/{id}`. Returns the
+/// `action_point` definition, the associated M2C routing (which channel
+/// C/A point it targets), and the most recently written command value from
+/// `inst:{id}:A`.
 #[utoipa::path(
     get,
     path = "/api/instances/{id}/actions/{point_id}",
@@ -247,7 +275,13 @@ pub async fn get_action_point(
     }
 }
 
-/// Create or update routing for a single action point
+/// Create or update the M2C routing for a single action point (UPSERT semantics).
+///
+/// Binds `instance.action_point` to a `channel.{C|A}.point` — commands
+/// issued via `POST /api/instances/{id}/action` or the rules engine then
+/// travel through SHM + UDS to that channel and are dispatched to the
+/// device. The routing cache is reloaded immediately; the next
+/// `execute_action` call uses the new routing.
 #[utoipa::path(
     put,
     path = "/api/instances/{id}/actions/{point_id}/routing",
@@ -294,7 +328,12 @@ pub async fn upsert_action_routing(
     }))))
 }
 
-/// Delete routing for a single action point
+/// Delete the M2C routing for a single action point.
+///
+/// After deletion the action can no longer be dispatched to the device:
+/// `execute_action()` takes the "no-routing" branch — it writes to local
+/// `inst:{id}:A` storage but `dispatch=None`. The point definition is
+/// preserved.
 #[utoipa::path(
     delete,
     path = "/api/instances/{id}/actions/{point_id}/routing",
@@ -346,7 +385,13 @@ pub async fn delete_action_routing(
     }))))
 }
 
-/// Toggle enabled state for a single action point routing
+/// Enable or disable the M2C routing for a single action point.
+///
+/// When disabled, `execute_action()` takes the no-routing branch: the
+/// command is written to local `inst:{id}:A` but **not dispatched** to the
+/// device. Use this to temporarily suppress a control point (e.g. prevent
+/// accidental device triggers during debugging). Re-enabling restores
+/// normal dispatch on the next action.
 #[utoipa::path(
     patch,
     path = "/api/instances/{id}/actions/{point_id}/routing",

@@ -243,9 +243,12 @@ async fn snapshot_channel_mappings(
 // Handlers
 // ============================================================================
 
-/// List all templates (metadata only)
+/// List saved device templates (metadata only).
 ///
-/// @route GET /api/templates
+/// A template is a reusable snapshot of a channel's point definitions and protocol
+/// mappings — importing a template on a new deployment avoids manually configuring
+/// 1000+ points. This endpoint returns only metadata (name, description, created_at);
+/// the full snapshot is returned by `/templates/{id}`.
 #[utoipa::path(
     get,
     path = "/api/templates",
@@ -321,9 +324,12 @@ pub async fn list_templates<R: Rtdb>(
     Ok(Json(SuccessResponse::new(items)))
 }
 
-/// Get template detail (includes full snapshots)
+/// Full template content (metadata + point snapshot + protocol mapping snapshot).
 ///
-/// @route GET /api/templates/{id}
+/// A single template may carry thousands of point definitions; the response body can
+/// exceed 1 MB. Call this only when preparing to apply a template or when an
+/// administrator needs to inspect the content — do not poll. 404 indicates the
+/// `template_id` does not exist.
 #[utoipa::path(
     get,
     path = "/api/templates/{id}",
@@ -408,8 +414,6 @@ pub async fn get_template<R: Rtdb>(
 /// Create template from an existing channel
 ///
 /// Snapshots the channel's current point definitions and protocol mappings.
-///
-/// @route POST /api/templates/from-channel/{channel_id}
 #[utoipa::path(
     post,
     path = "/api/templates/from-channel/{channel_id}",
@@ -504,9 +508,12 @@ pub async fn create_template_from_channel<R: Rtdb>(
     })))
 }
 
-/// Create template manually (direct JSON)
+/// Upload a complete template as JSON directly (without snapshotting an existing channel).
 ///
-/// @route POST /api/templates
+/// The counterpart to "create template from channel": the caller supplies the full point
+/// definitions and protocol mapping arrays. Use this to import a previously exported
+/// template JSON or to create a template programmatically. Returns 400 on schema
+/// validation failure, 409 on duplicate name.
 #[utoipa::path(
     post,
     path = "/api/templates",
@@ -569,9 +576,11 @@ pub async fn create_template<R: Rtdb>(
     })))
 }
 
-/// Update template metadata (name/description only)
+/// Update template name and/or description (snapshot is not modified).
 ///
-/// @route PUT /api/templates/{id}
+/// There is no endpoint to replace a snapshot — to change the content, DELETE the
+/// template and re-POST it. This is intentional: modifying a snapshot while multiple
+/// channels reference it would break consistency.
 #[utoipa::path(
     put,
     path = "/api/templates/{id}",
@@ -648,9 +657,12 @@ pub async fn update_template<R: Rtdb>(
     )))
 }
 
-/// Delete a template
+/// Delete a template.
 ///
-/// @route DELETE /api/templates/{id}
+/// Channels already created from this template are **not affected** — the relationship
+/// between a template and a channel is a one-time copy-on-apply, not a symlink. Deleting
+/// a template simply removes the row from the `templates` table; it can no longer be
+/// selected for future apply operations.
 #[utoipa::path(
     delete,
     path = "/api/templates/{id}",
@@ -697,8 +709,6 @@ pub async fn delete_template<R: Rtdb>(
 ///
 /// Uses `ON CONFLICT DO UPDATE` (not `INSERT OR REPLACE`) to avoid triggering
 /// `AFTER DELETE` cascade triggers that would remove routing table entries.
-///
-/// @route POST /api/templates/{id}/apply/{channel_id}
 #[utoipa::path(
     post,
     path = "/api/templates/{id}/apply/{channel_id}",

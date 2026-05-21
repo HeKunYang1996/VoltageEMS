@@ -89,16 +89,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         SystemMetrics,
     )),
     tags(
-        (name = "Health",      description = "健康检查与服务信息"),
-        (name = "Alarm",       description = "告警广播与配置"),
-        (name = "MQTT",        description = "MQTT 连接配置与控制"),
-        (name = "Certificate", description = "TLS 证书管理"),
+        (name = "Health",      description = "Health checks and service information"),
+        (name = "Alarm",       description = "Alarm broadcast and configuration"),
+        (name = "MQTT",        description = "MQTT connection configuration and control"),
+        (name = "Certificate", description = "TLS certificate management"),
     ),
     info(
         title = "VoltageEMS Network Service",
         version = "1.0.0",
-        description = "MQTT 网关服务：负责将 Redis 实时数据上报至云端 MQTT Broker，\
-                       并接收云端下发的读写指令转发给本地设备。"
+        description = "MQTT gateway service: forwards Redis real-time data to the cloud MQTT broker \
+                       and routes cloud-issued read/write commands to local devices."
     )
 )]
 pub struct ApiDoc;
@@ -107,8 +107,14 @@ pub struct ApiDoc;
 // Root / ping
 // ============================================================================
 
+/// netsrv service banner.
+///
+/// Returns service name, version, and status. Use this to confirm the netsrv
+/// process is online and running the expected version. Does not depend on the
+/// MQTT connection — returns 200 even if the broker is unreachable. For MQTT
+/// status see `/netApi/health` or `/netApi/mqtt/status`.
 #[utoipa::path(get, path = "/", tag = "Health",
-    responses((status = 200, description = "服务基本信息")))]
+    responses((status = 200, description = "Basic service information")))]
 async fn root() -> Json<Value> {
     Json(json!({
         "service": "netsrv",
@@ -117,6 +123,10 @@ async fn root() -> Json<Value> {
     }))
 }
 
+/// Minimal liveness probe — returns the string "pong".
+///
+/// Unlike `/`, the response body is a plain string with no JSON overhead,
+/// suitable for high-frequency liveness probes and load-balancer health checks.
 #[utoipa::path(get, path = "/ping", tag = "Health",
     responses((status = 200, description = "pong")))]
 async fn ping() -> &'static str {
@@ -127,8 +137,15 @@ async fn ping() -> &'static str {
 // Health
 // ============================================================================
 
+/// Health check: returns MQTT connection status and device identity.
+///
+/// Reflects the live MQTT broker connection state (not a cached value). Returns
+/// `mqtt_connected` (bool), broker address, and device `client_id`. When the
+/// process is alive but MQTT is not connected, responds 200 with
+/// `connected: false` — allowing dashboards to distinguish a dead process from
+/// a live process with a broken cloud link.
 #[utoipa::path(get, path = "/netApi/health", tag = "Health",
-    responses((status = 200, description = "MQTT 连接状态与设备身份信息")))]
+    responses((status = 200, description = "MQTT connection status and device identity")))]
 async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mqtt_ok = state.mqtt_connected.load(Ordering::Relaxed);
     Json(json!({
@@ -146,13 +163,19 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
 // Alarm
 // ============================================================================
 
-/// 将告警 JSON 透传发布到 MQTT 告警 Topic。
-/// 请求体为任意 JSON 对象，内容不做校验，直接转发。
+/// Forward an alarm JSON payload to the MQTT alarm topic.
+///
+/// The request body is an arbitrary JSON object; content is not validated and
+/// is published as-is to the configured alarm topic (see `GET /netApi/alarm/config`
+/// for the topic name). The cloud subscriber is responsible for parsing the
+/// payload. Alarm events from upstream alarmsrv travel this path to the cloud.
+/// If MQTT is not connected the call still returns 200 but the message may be
+/// lost (delivery guarantee depends on the QoS configured for the broker).
 #[utoipa::path(post, path = "/netApi/alarm/broadcast", tag = "Alarm",
     request_body = AlarmBroadcastRequest,
     responses(
-        (status = 200,                  description = "广播成功"),
-        (status = 503, description = "MQTT 未连接，发送失败"),
+        (status = 200, description = "Alarm published successfully"),
+        (status = 503, description = "MQTT not connected — publish failed"),
     ))]
 async fn alarm_broadcast(
     State(state): State<Arc<AppState>>,
@@ -170,8 +193,14 @@ async fn alarm_broadcast(
         })
 }
 
+/// Retrieve alarm cloud-forwarding configuration (topic name and MQTT status).
+///
+/// Returns the MQTT topic used for alarm broadcasts (e.g.
+/// `voltageems/alarm/{device_id}`) and whether the MQTT connection is currently
+/// online. Useful for the cloud-config UI to confirm where alarms are sent and
+/// whether the link is healthy.
 #[utoipa::path(get, path = "/netApi/alarm/config", tag = "Alarm",
-    responses((status = 200, description = "告警 Topic 名称与 MQTT 连接状态")))]
+    responses((status = 200, description = "Alarm topic name and MQTT connection status")))]
 async fn alarm_config(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "success": true,
@@ -187,24 +216,40 @@ async fn alarm_config(State(state): State<Arc<AppState>>) -> Json<Value> {
 // MQTT config
 // ============================================================================
 
+/// Retrieve current MQTT configuration (broker, certificate paths, topic prefix, etc.).
+///
+/// Read-only. Returns a `NetConfig` object containing broker_host, port,
+/// client_id, TLS flag, certificate filenames, and topic templates. Sensitive
+/// material (e.g. certificate private-key contents) is never included. To
+/// update the configuration use `POST /netApi/mqtt/config`.
 #[utoipa::path(get, path = "/netApi/mqtt/config", tag = "MQTT",
-    responses((status = 200, description = "当前 MQTT 配置", body = NetConfig)))]
+    responses((status = 200, description = "Current MQTT configuration", body = NetConfig)))]
 async fn mqtt_get_config(State(state): State<Arc<AppState>>) -> Json<Value> {
     let cfg = state.config.read().await.clone();
     Json(json!({ "success": true, "message": "OK", "data": cfg }))
 }
 
-/// 更新 MQTT 配置并立即触发重连，无需重启服务。
+/// Update MQTT configuration and immediately trigger a reconnect — no service restart needed.
+///
+/// Persists the new configuration, then disconnects the current MQTT session and
+/// reconnects with the new parameters. There will be a brief MQTT unavailability
+/// window of a few seconds during which in-flight alarms may be lost (subject to
+/// the configured QoS). Use this endpoint to change the broker address,
+/// certificates, or TLS settings. If the new parameters are invalid and the
+/// connection fails, netsrv remains in the disconnected state until a correct
+/// configuration is submitted.
 #[utoipa::path(post, path = "/netApi/mqtt/config", tag = "MQTT",
     request_body = NetConfig,
     responses(
-        (status = 200, description = "配置已保存，正在重连"),
-        (status = 500, description = "保存失败"),
+        (status = 200, description = "Configuration saved; reconnecting"),
+        (status = 500, description = "Failed to save configuration"),
     ))]
 async fn mqtt_update_config(
     State(state): State<Arc<AppState>>,
-    Json(new_cfg): Json<NetConfig>,
+    Json(mut new_cfg): Json<NetConfig>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Without this the in-memory copy bypasses load_config() and chunks(0) can panic.
+    new_cfg.normalize();
     if let Err(e) = db_config::save_config(&state.sqlite, &new_cfg).await {
         error!("Save config failed: {}", e);
         return Err((
@@ -219,8 +264,14 @@ async fn mqtt_update_config(
     ))
 }
 
+/// Real-time MQTT connection status (polling endpoint).
+///
+/// Returns connected/disconnected state, broker address, TLS flag, and device
+/// identity. Intended for the cloud-status indicator on the operations dashboard.
+/// More detailed than `/netApi/health` but with the same update frequency (no
+/// background cache).
 #[utoipa::path(get, path = "/netApi/mqtt/status", tag = "MQTT",
-    responses((status = 200, description = "当前 MQTT 连接状态、Broker 地址与设备信息")))]
+    responses((status = 200, description = "Current MQTT connection state, broker address, and device identity")))]
 async fn mqtt_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let cfg = state.config.read().await;
     Json(json!({
@@ -236,8 +287,15 @@ async fn mqtt_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
+/// Manually disconnect MQTT and suspend automatic reconnection.
+///
+/// Counterpart to `POST /netApi/mqtt/reconnect`. Closes the current MQTT
+/// session and sets a "reconnect inhibit" flag — netsrv will not attempt to
+/// reconnect even if the broker is reachable, until `reconnect` is explicitly
+/// called. Intended for maintenance windows such as broker upgrades or
+/// temporarily suppressing cloud alarm forwarding.
 #[utoipa::path(post, path = "/netApi/mqtt/disconnect", tag = "MQTT",
-    responses((status = 200, description = "断开 MQTT 连接，停止自动重连，直到调用 reconnect")))]
+    responses((status = 200, description = "MQTT disconnected; auto-reconnect suspended until reconnect is called")))]
 async fn mqtt_disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     // Mark disconnection intent first, then wake the mqtt loop so it stops reconnecting.
     state
@@ -252,8 +310,15 @@ async fn mqtt_disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({"success": true, "message": "MQTT disconnected, auto-reconnect paused"}))
 }
 
+/// Trigger MQTT reconnection and resume automatic reconnection.
+///
+/// Counterpart to `POST /netApi/mqtt/disconnect`. Clears the reconnect-inhibit
+/// flag and immediately schedules a connection attempt. A 200 response does not
+/// mean the connection succeeded — reconnection runs asynchronously in the
+/// background; poll `GET /netApi/mqtt/status` to confirm. Call this after a
+/// maintenance window to restore cloud link.
 #[utoipa::path(post, path = "/netApi/mqtt/reconnect", tag = "MQTT",
-    responses((status = 200, description = "触发重连，后台异步执行")))]
+    responses((status = 200, description = "Reconnect command issued; executing in background")))]
 async fn mqtt_reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     // Clear the disconnect flag, then wake the mqtt loop to reconnect.
     state
@@ -267,25 +332,26 @@ async fn mqtt_reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
 // Certificate management
 // ============================================================================
 
-/// 上传单个 TLS 证书文件（multipart/form-data）
+/// Upload a single TLS certificate file (multipart/form-data).
 ///
-/// 每次上传一个证书，通过 `cert_type` 指定类型，证书文件名任意。
-/// 文件将以固定名称保存到 `cert_dir`：
+/// Upload one certificate per request; use `cert_type` to specify the type.
+/// The original filename is ignored — files are saved under fixed names in
+/// `cert_dir`:
 ///
-/// | cert_type    | 保存文件名            |
-/// |--------------|-----------------------|
-/// | `ca_cert`    | `AmazonRootCA1.pem`   |
-/// | `client_cert`| `certificate.pem.crt` |
-/// | `client_key` | `private.pem.key`     |
+/// | cert_type     | Saved filename         |
+/// |---------------|------------------------|
+/// | `ca_cert`     | `AmazonRootCA1.pem`    |
+/// | `client_cert` | `certificate.pem.crt`  |
+/// | `client_key`  | `private.pem.key`      |
 #[utoipa::path(post, path = "/netApi/certificate/upload", tag = "Certificate",
     request_body(
         content_type = "multipart/form-data",
         content = inline(CertUploadForm),
     ),
     responses(
-        (status = 200, description = "上传成功"),
-        (status = 400, description = "参数错误（cert_type 非法 / 文件为空 / 格式不支持 / 超过 1MB）"),
-        (status = 500, description = "目录无写入权限或文件写入失败"),
+        (status = 200, description = "Certificate uploaded successfully"),
+        (status = 400, description = "Invalid request — unknown cert_type, empty file, unsupported format, or file exceeds 1 MB"),
+        (status = 500, description = "Certificate directory not writable or file write failed"),
     ))]
 async fn cert_upload(
     State(state): State<Arc<AppState>>,
@@ -423,8 +489,15 @@ async fn cert_upload(
     })))
 }
 
+/// List certificate directory status: path and per-file existence flags.
+///
+/// Checks whether the CA certificate, client certificate, and private key are
+/// present in the configured certificate directory. Certificate contents and
+/// fingerprints are never returned (to avoid private-key exposure) — only
+/// `exists: true/false` per file. Use this on the cloud-config pre-flight page
+/// to confirm all required certificates have been uploaded.
 #[utoipa::path(get, path = "/netApi/certificate/info", tag = "Certificate",
-    responses((status = 200, description = "证书目录路径及各证书文件是否存在")))]
+    responses((status = 200, description = "Certificate directory path and per-file existence status")))]
 async fn cert_info(State(state): State<Arc<AppState>>) -> Json<Value> {
     let cert_dir = state.env.cert_dir.clone();
     let files = [
@@ -449,17 +522,17 @@ async fn cert_info(State(state): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
-/// 删除指定类型的证书文件。
+/// Delete a certificate file by type.
 ///
-/// `cert_type` 可选值：`ca_cert` / `client_cert` / `client_key`
+/// `cert_type` must be one of: `ca_cert` / `client_cert` / `client_key`.
 #[utoipa::path(delete, path = "/netApi/certificate/{cert_type}", tag = "Certificate",
     params(
-        ("cert_type" = String, Path, description = "证书类型：ca_cert | client_cert | client_key")
+        ("cert_type" = String, Path, description = "Certificate type: ca_cert | client_cert | client_key")
     ),
     responses(
-        (status = 200, description = "删除成功（或文件本就不存在）"),
-        (status = 400, description = "未知的 cert_type"),
-        (status = 500, description = "删除失败"),
+        (status = 200, description = "Deleted successfully (also returned when the file did not exist)"),
+        (status = 400, description = "Unknown cert_type"),
+        (status = 500, description = "Delete failed"),
     ))]
 async fn cert_delete(
     State(state): State<Arc<AppState>>,

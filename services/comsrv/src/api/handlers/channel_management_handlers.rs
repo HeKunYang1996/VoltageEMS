@@ -29,16 +29,15 @@ use serde_json::json;
 use std::sync::Arc;
 use voltage_rtdb::Rtdb;
 
-/// Create a new channel with hot startup
+/// Create a new communication channel and start it immediately (no comsrv restart required).
 ///
-/// @route POST /api/channels
-/// @input State(state): AppState - Application state with manager and SQLite
-/// @input Json(req): ChannelCreateRequest - Channel configuration
-/// @output `Json<ApiResponse<ChannelCrudResult>>` - Creation result
-/// @status 200 - Channel created and started successfully
-/// @status 400 - Invalid request or validation error
-/// @status 500 - Database or runtime error
-/// @side-effects Creates channel in SQLite and starts it in runtime
+/// Writes to the `channels` table, registers the channel with the channel manager, and
+/// starts the protocol adapter (connects to the device and begins polling). **SHM layout
+/// expands** and `routing_hash` is recomputed — modsrv detects the generation mismatch
+/// and automatically rebuilds its SHM writer. The protocol is determined by the `driver`
+/// field in the request body (modbus_tcp / iec104 / dlt645 / mqtt, 13 protocols total);
+/// parameter schema varies by protocol. Common failure causes: channel_id conflict,
+/// misspelled driver name, missing connection parameters.
 #[utoipa::path(
     post,
     path = "/api/channels",
@@ -311,9 +310,6 @@ pub async fn create_channel_handler<R: Rtdb>(
 /// the channel will be migrated to the new ID. This includes:
 /// - Updating all related tables (points, mappings, routing)
 /// - Restarting the channel with the new ID
-///
-/// @route PUT /api/channels/{id}
-/// @side-effects Updates SQLite and hot-reloads if running; migrates all data if channel_id changed
 #[utoipa::path(
     put,
     path = "/api/channels/{id}",

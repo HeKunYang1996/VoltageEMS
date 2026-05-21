@@ -15,9 +15,6 @@ use voltage_rtdb::Rtdb;
 ///
 /// Enable or disable a channel, controlling its runtime lifecycle.
 /// This is a higher-level operation than update - it manages whether the channel should run.
-///
-/// @route PUT /api/channels/{id}/enabled
-/// @side-effects Updates SQLite and starts/stops channel
 #[utoipa::path(
     put,
     path = "/api/channels/{id}/enabled",
@@ -184,10 +181,13 @@ pub async fn set_channel_enabled_handler<R: Rtdb>(
     Ok(Json(SuccessResponse::new(result)))
 }
 
-/// Delete a channel with hot stop
+/// Delete a channel and hot-stop it immediately (no comsrv restart required).
 ///
-/// @route DELETE /api/channels/{id}
-/// @side-effects Stops channel and removes from SQLite
+/// Sequence: disconnect the protocol adapter (closes TCP / releases serial port),
+/// deregister from the channel manager, then delete the channel, its associated points,
+/// and routing entries from SQLite. **SHM layout shrinks**, triggering a `routing_hash`
+/// change and an SHM rebuild on the modsrv side.
+/// **Destructive**: all routing entries that reference this channel are cascade-deleted.
 #[utoipa::path(
     delete,
     path = "/api/channels/{id}",

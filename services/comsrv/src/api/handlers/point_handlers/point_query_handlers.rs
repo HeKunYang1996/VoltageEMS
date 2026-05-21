@@ -15,9 +15,14 @@ use super::point_helpers::{
     fetch_grouped_points, parse_protocol_mapping_json, point_type_to_table, validate_channel_exists,
 };
 
-/// Get point information including value, timestamp and raw value
+/// Read the real-time value of a single point (value + timestamp + raw).
 ///
-/// @route GET /api/channels/{channel_id}/{telemetry_type}/{point_id}
+/// Reads from the Redis hash `comsrv:{channel_id}:{T|S|C|A}`, returning the
+/// engineering-unit value (after linear scaling), the timestamp, and the raw register
+/// value. **Freshness is Redis-based** — approximately 100 ms behind the SHM real-time
+/// layer (ShmRedisSync async sync interval). 405/406 indicates the point definition does
+/// not exist; if the value is NaN (not yet successfully polled or device offline),
+/// `value` is returned as `null`.
 #[utoipa::path(
     get,
     path = "/api/channels/{channel_id}/{telemetry_type}/{point_id}",
@@ -94,8 +99,6 @@ pub async fn get_point_info_handler<R: Rtdb>(
 ///
 /// Returns all point definitions for the specified channel.
 /// Supports filtering by point type (T, S, C, A).
-///
-/// @route GET /api/channels/{id}/points
 #[utoipa::path(
     get,
     path = "/api/channels/{id}/points",
@@ -151,8 +154,6 @@ pub async fn get_channel_points_handler<R: Rtdb>(
 /// Get mapping for a specific point with explicit four-remote type
 ///
 /// Unique identifier: (channel_id, four_remote_type, point_id)
-///
-/// @route GET /api/channels/{channel_id}/{type}/points/{point_id}/mapping
 #[utoipa::path(
     get,
     path = "/api/channels/{channel_id}/{type}/points/{point_id}/mapping",
@@ -214,9 +215,12 @@ pub async fn get_point_mapping_with_type_handler<R: Rtdb>(
 // Get Point Configuration Handler
 // ----------------------------------------------------------------------------
 
-/// Get point configuration from database
+/// Read the **configuration** of a point (not its runtime value).
 ///
-/// @route GET /api/channels/{channel_id}/{type}/points/{point_id}/config
+/// Reads the point definition from SQLite: register address, byte order, scale factor,
+/// unit, alarm limits, etc. Does not query Redis or SHM — returns static configuration
+/// only. Use this to pre-populate the "edit point" dialog in the frontend. For the
+/// real-time value use `/api/channels/{id}/points/{point_id}`.
 #[utoipa::path(
     get,
     path = "/api/channels/{channel_id}/{type}/points/{point_id}/config",
@@ -299,8 +303,6 @@ async fn get_point_config_handler_inner<R: Rtdb>(
 /// Get unmapped points for a channel (points without protocol_mappings)
 ///
 /// **Unmapped Definition**: Points where `protocol_mappings IS NULL OR '' OR '{}' OR 'null'`
-///
-/// @route GET /api/channels/{id}/unmapped-points
 #[utoipa::path(
     get,
     path = "/api/channels/{id}/unmapped-points",
