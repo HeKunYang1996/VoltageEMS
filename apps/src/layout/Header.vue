@@ -102,8 +102,8 @@ const getAvatarName = (name: string) => {
   justify-content: space-between;
   height: 0.85rem;
   padding: 0.2rem;
-  background: rgba(84, 98, 140, 0.3);
-  border-bottom: 0.01rem solid rgba(148, 166, 197, 0.3);
+  background: var(--vt-bg-glass-strong);
+  border-bottom: 0.01rem solid var(--vt-border-color);
 
   .header__left {
     display: flex;
@@ -112,13 +112,13 @@ const getAvatarName = (name: string) => {
 
     .header__left-title {
       margin-right: 0.1rem;
-      font-family: Montserrat;
-      font-size: 0.3rem;
+      font-family: var(--vt-font-family-heading, Montserrat, sans-serif);
+      font-size: var(--vt-font-size-2xl);
       font-style: normal;
-      font-weight: 600;
+      font-weight: var(--vt-font-weight-semibold);
       line-height: 150%;
       letter-spacing: 0;
-      color: #fff;
+      color: var(--vt-text-primary);
     }
 
     .header__left-status {
@@ -127,10 +127,10 @@ const getAvatarName = (name: string) => {
       width: 1rem;
       height: 0.3rem;
       padding: 0.07rem 0 0.07rem 0.1rem;
-      background: rgba(84, 98, 140, 0.5);
+      background: var(--vt-bg-glass-heavy);
       border: 0.01rem solid transparent;
       border-radius: 0.15rem;
-      backdrop-filter: blur(0.1rem);
+      backdrop-filter: var(--vt-backdrop-blur);
 
       .header__left-statusIcon {
         display: flex;
@@ -139,26 +139,26 @@ const getAvatarName = (name: string) => {
         width: 0.16rem;
         height: 0.16rem;
         margin-right: 0.06rem;
-        background-color: rgba(106, 193, 97, 0.2);
+        background-color: var(--vt-bg-status-online);
         border-radius: 50%;
 
         .header__left-statusIconCircle {
           width: 0.1rem;
           height: 0.1rem;
-          background-color: rgb(106, 193, 97);
+          background-color: var(--vt-color-success);
           border-radius: 50%;
         }
       }
 
       .header__left-statusText {
-        font-family: Arimo;
-        font-size: 0.16rem;
+        font-family: var(--vt-font-family-base);
+        font-size: var(--vt-font-size-md);
         font-style: normal;
-        font-weight: 700;
+        font-weight: var(--vt-font-weight-bold);
         line-height: 100%;
         letter-spacing: 0;
         vertical-align: middle;
-        color: #fff;
+        color: var(--vt-text-primary);
       }
     }
   }
@@ -209,10 +209,10 @@ const getAvatarName = (name: string) => {
         :deep(.el-badge__content) {
           width: 0.16rem;
           height: 0.16rem;
-          font-family: Arimo;
-          font-size: 0.14rem;
-          font-weight: 400;
-          background-color: rgb(218, 45, 44);
+          font-family: var(--vt-font-family-base);
+          font-size: var(--vt-font-size-base);
+          font-weight: var(--vt-font-weight-normal);
+          background-color: var(--vt-color-level-critical);
           border: none;
           border-radius: 50%;
         }
@@ -247,21 +247,21 @@ const getAvatarName = (name: string) => {
 
   .header__user-avatar-initials {
     font-size: 0.19rem;
-    font-weight: 700;
+    font-weight: var(--vt-font-weight-bold);
     line-height: 100%;
     letter-spacing: 0;
-    color: rgb(29, 134, 255);
+    color: #1d86ff;
   }
 }
 
 .header__user-name {
-  font-family: Arimo;
-  font-size: 0.18rem;
+  font-family: var(--vt-font-family-base);
+  font-size: var(--vt-font-size-lg);
   font-style: normal;
-  font-weight: 500;
+  font-weight: var(--vt-font-weight-medium);
   line-height: 140%;
   letter-spacing: 0;
-  color: #fff;
+  color: var(--vt-text-primary);
 }
 
 .header__user-arrow {
@@ -288,11 +288,11 @@ const getAvatarName = (name: string) => {
   align-items: center;
   width: 100%;
   padding: 0.1rem;
-  font-size: 0.14rem;
-  font-weight: 500;
+  font-size: var(--vt-font-size-base);
+  font-weight: var(--vt-font-weight-medium);
   line-height: 100%;
   letter-spacing: 0;
-  color: #fff;
+  color: var(--vt-text-primary);
 
   .header__user-logoutIcon {
     width: 0.2rem;

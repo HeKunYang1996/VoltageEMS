@@ -1,10 +1,14 @@
 <template>
-  <div class="voltage-class alarm-records">
+  <div class="voltage-class alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
       <!-- 表格工具栏 -->
-      <div class="alarm-records__toolbar">
-        <div class="alarm-records__toolbar-left" ref="toolbarLeftRef">
-          <el-form :model="filters" :inline="true" class="test-form alarm-records__toolbar-form">
+      <div class="alarm-records__toolbar vt-toolbar">
+        <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
+          <el-form
+            :model="filters"
+            :inline="true"
+            class="test-form alarm-records__toolbar-form vt-toolbar-form"
+          >
             <el-form-item label="Alarm Level:">
               <el-select
                 v-model="filters.warning_level"
@@ -20,7 +24,7 @@
           </el-form>
         </div>
 
-        <div class="alarm-records__toolbar-right">
+        <div class="alarm-records__toolbar-right vt-toolbar__right">
           <IconButton
             type="warning"
             :icon="reloadIcon"
@@ -39,8 +43,8 @@
       </div>
 
       <!-- 表格 -->
-      <div class="alarm-records__table">
-        <el-table :data="tableData" class="alarm-records__table-content">
+      <div class="alarm-records__table vt-table-shell">
+        <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
           <el-table-column
             prop="rule_name"
             label="Name"
@@ -70,13 +74,15 @@
             class-name="table-ellipsis"
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatDateTime(row.triggered_at) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{
+                formatDateTime(row.triggered_at)
+              }}</span>
             </template>
           </el-table-column>
         </el-table>
 
         <!-- 分页组件 -->
-        <div class="alarm-records__pagination">
+        <div class="alarm-records__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
@@ -146,26 +152,12 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 
 <style scoped lang="scss">
 .voltage-class.alarm-records {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-
   .alarm-records__toolbar {
-    padding-bottom: 0.2rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
     .alarm-records__toolbar-left {
       position: relative;
-      display: flex;
-      align-items: center;
-      gap: 0.16rem;
     }
 
     .alarm-records__toolbar-right {
-      display: flex;
-      align-items: center;
       gap: 0.1rem;
 
       .alarm-records__export-btn {
@@ -181,32 +173,13 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
     }
   }
 
-  :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
-    margin-bottom: 0;
-  }
-
   .alarm-records__table {
-    height: calc(100% - 0.52rem);
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-
     .alarm-records__table-content {
-      width: 100%;
-      height: calc(100% - 0.92rem);
-      overflow-y: auto;
-
       .alarm-records__table-level-text {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-    }
-
-    .alarm-records__pagination {
-      padding: 0.2rem 0;
-      display: flex;
-      justify-content: flex-end;
     }
   }
 
@@ -217,22 +190,7 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
   }
 
   .table-ellipsis__text {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .alarm-level--1 {
-    color: #da2d2c;
-  }
-
-  .alarm-level--2 {
-    color: #ff6e08;
-  }
-
-  .alarm-level--3 {
-    color: #fe9900;
+    max-width: 100%;
   }
 }
 </style>

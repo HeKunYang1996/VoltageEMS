@@ -1,9 +1,13 @@
 <template>
-  <div class="voltage-class rule-management" ref="ruleManagementRef">
+  <div class="voltage-class rule-management vt-page-shell" ref="ruleManagementRef">
     <LoadingBg :loading="loading">
-      <div class="rule-management__header">
-        <div class="rule-management__search-form" ref="levelSelectRef">
-          <el-form :model="filters" :inline="true" class="test-form rule-management__toolbar-form">
+      <div class="rule-management__header vt-toolbar">
+        <div class="rule-management__search-form vt-toolbar__left" ref="levelSelectRef">
+          <el-form
+            :model="filters"
+            :inline="true"
+            class="test-form rule-management__toolbar-form vt-toolbar-form"
+          >
             <el-form-item label="Keyword:">
               <el-input v-model="filters.keyword" placeholder="Please enter keyword" />
             </el-form-item>
@@ -31,7 +35,7 @@
               </el-select>
             </el-form-item>
           </el-form>
-          <div class="form-oprations">
+          <div class="form-oprations vt-toolbar__right">
             <IconButton
               type="warning"
               :icon="tableRefreshIcon"
@@ -57,8 +61,12 @@
           </div>
         </div>
       </div>
-      <div class="rule-management__table">
-        <el-table :data="tableData" class="rule-management__table-content" align="left">
+      <div class="rule-management__table vt-table-shell">
+        <el-table
+          :data="tableData"
+          class="rule-management__table-content vt-table-content"
+          align="left"
+        >
           <!-- <el-table-column prop="id" label="ID" class-name="table-ellipsis" width="80" /> -->
           <el-table-column
             prop="rule_name"
@@ -83,7 +91,7 @@
             min-width="100"
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatMonitorData(row) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{ formatMonitorData(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column
@@ -94,7 +102,7 @@
             min-width="80"
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatCondition(row) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{ formatCondition(row) }}</span>
             </template>
           </el-table-column>
           <!-- <el-table-column prop="notification" label="Notification" show-overflow-tooltip>
@@ -110,7 +118,7 @@
             min-width="120"
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ row.description || '-' }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{ row.description || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column
@@ -120,7 +128,9 @@
             min-width="120"
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatDateTime(row.created_at) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{
+                formatDateTime(row.created_at)
+              }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="enabled" label="Enabled" min-width="80">
@@ -148,7 +158,7 @@
           </el-table-column>
         </el-table>
 
-        <div class="rule-management__pagination">
+        <div class="rule-management__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
@@ -291,24 +301,11 @@ const handleRuleCancel = () => {
 
 <style scoped lang="scss">
 .voltage-class.rule-management {
-  position: relative;
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-
   .rule-management__header {
-    // margin-bottom: 0.2rem;
-
     .rule-management__search-form {
       position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding-bottom: 0.2rem;
 
       .form-oprations {
-        display: flex;
         align-items: flex-start;
         gap: 0.1rem;
       }
@@ -328,15 +325,7 @@ const handleRuleCancel = () => {
   }
 
   .rule-management__table {
-    height: calc(100% - 0.52rem);
-    // max-width: 16.6rem;
-    display: flex;
-    flex-direction: column;
-
     .rule-management__table-content {
-      height: calc(100% - 0.92rem);
-      overflow-y: auto;
-
       .rule-management__operation {
         display: flex;
         align-items: center;
@@ -362,20 +351,10 @@ const handleRuleCancel = () => {
         white-space: nowrap;
       }
     }
-
-    .rule-management__pagination {
-      display: flex;
-      justify-content: flex-end;
-      margin: 0.2rem 0;
-    }
   }
 
   :deep(.rule-management__table-content .el-switch) {
     height: 0.22rem;
-  }
-
-  :deep(.rule-management__toolbar-form.el-form--inline .el-form-item) {
-    margin-bottom: 0;
   }
 
   :deep(.rule-management__table-content .table-ellipsis .cell) {
@@ -385,22 +364,7 @@ const handleRuleCancel = () => {
   }
 
   .table-ellipsis__text {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .alarm-level--1 {
-    color: #da2d2c;
-  }
-
-  .alarm-level--2 {
-    color: #ff6e08;
-  }
-
-  .alarm-level--3 {
-    color: #fe9900;
+    max-width: 100%;
   }
 }
 </style>

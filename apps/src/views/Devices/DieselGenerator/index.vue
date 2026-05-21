@@ -1,28 +1,28 @@
 <template>
-  <div class="voltage-class devices-diesel">
+  <div class="voltage-class devices-diesel vt-page-shell">
     <!-- 页面头部 -->
-    <div class="devices-diesel__header">
-      <div class="devices-diesel__tabs">
+    <div class="devices-diesel__header vt-page-header">
+      <div class="devices-diesel__tabs vt-page-tabs">
         <el-button
           :type="activeTab === 'overview' ? 'primary' : 'warning'"
           @click="handleTabClick('overview')"
-          class="devices-diesel__tab-btn"
+          class="devices-diesel__tab-btn vt-page-tab-btn"
         >
-          <img :src="alarmCurrentIcon" class="devices-diesel__tab-icon" />
+          <img :src="alarmCurrentIcon" class="devices-diesel__tab-icon vt-page-tab-icon" />
           Overview
         </el-button>
         <el-button
           :type="activeTab === 'monitoring' ? 'primary' : 'warning'"
           @click="handleTabClick('monitoring')"
-          class="devices-diesel__tab-btn"
+          class="devices-diesel__tab-btn vt-page-tab-btn"
         >
-          <img :src="alarmHistoryIcon" class="devices-diesel__tab-icon" />
+          <img :src="alarmHistoryIcon" class="devices-diesel__tab-icon vt-page-tab-icon" />
           Value Monitoring
         </el-button>
       </div>
     </div>
     <!-- 路由内容区域 -->
-    <div class="devices-diesel__main">
+    <div class="devices-diesel__main vt-page-content">
       <router-view />
     </div>
   </div>
@@ -58,41 +58,8 @@ const handleTabClick = (tab: 'overview' | 'monitoring') => {
 
 <style scoped lang="scss">
 .voltage-class.devices-diesel {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  z-index: 2;
-
-  .devices-diesel__header {
-    position: relative;
-    z-index: 2;
-    padding-bottom: 0.2rem;
-    border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
-
-    .devices-diesel__tabs {
-      display: flex;
-      align-items: center;
-      gap: 0.16rem;
-
-      .devices-diesel__tab-btn {
-        display: flex;
-        align-items: center;
-        gap: 0.1rem;
-
-        .devices-diesel__tab-icon {
-          width: 0.16rem;
-          height: 0.16rem;
-          margin-right: 0.08rem;
-        }
-      }
-    }
-  }
-
   .devices-diesel__main {
-    height: calc(100% - 0.53rem);
-    width: 100%;
-    z-index: 1;
+    min-height: 0;
   }
 }
 </style>

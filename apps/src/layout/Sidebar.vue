@@ -92,15 +92,10 @@ const handleShrink = () => {
   position: relative;
   height: 100vh;
   padding: 0.2rem 0;
-  background: rgba(84, 98, 140, 0.4);
+  background: var(--vt-bg-glass-strong);
   border-right: 0.01rem solid;
-  border-image-source: linear-gradient(
-    147.24deg,
-    rgba(148, 166, 197, 0.72) 39.16%,
-    rgba(148, 166, 197, 0.36) 66.27%,
-    rgba(148, 166, 197, 0.72) 98.58%
-  );
-  backdrop-filter: blur(0.1rem);
+  border-image-source: var(--vt-border-gradient-strong);
+  backdrop-filter: var(--vt-backdrop-blur);
   display: flex;
   flex-direction: column;
 
@@ -140,10 +135,10 @@ const handleShrink = () => {
     gap: 0.12rem;
 
     .sidebar__logo-text {
-      font-size: 0.18rem;
-      font-weight: 600;
-      color: #ffffff;
-      font-family: 'Montserrat', sans-serif;
+      font-size: var(--vt-font-size-lg);
+      font-weight: var(--vt-font-weight-semibold);
+      color: var(--vt-text-primary);
+      font-family: var(--vt-font-family-heading, 'Montserrat', sans-serif);
     }
   }
 
@@ -166,17 +161,16 @@ const handleShrink = () => {
   }
 
   .sidebar__menu-text {
-    font-weight: 700;
-    font-size: 0.14rem;
+    font-weight: var(--vt-font-weight-bold);
+    font-size: var(--vt-font-size-base);
   }
 
   .sidebar__subMenu-title {
-    font-family: Arimo;
-    font-weight: 700;
-    font-style: Bold;
-    font-size: 0.14rem;
+    font-family: var(--vt-font-family-base);
+    font-weight: var(--vt-font-weight-bold);
+    font-size: var(--vt-font-size-base);
     letter-spacing: 0%;
-    color: #fff;
+    color: var(--vt-text-primary);
   }
 
   .sidebar__footer {

@@ -17,6 +17,14 @@
   --vt-color-info: #8c8c8c;
   --vt-color-info-hover: #7a7a7a;
   --vt-color-info-active: #686868;
+  --vt-color-chart-pv: #69cbff;
+  --vt-color-chart-ess: #4fadf7;
+  --vt-color-chart-dg: #f6c85f;
+  --vt-color-chart-online: #6dd400;
+  --vt-color-chart-alarm: #ff4d4f;
+  --vt-color-level-critical: #da2d2c;
+  --vt-color-level-warning: #ff6e08;
+  --vt-color-level-info: #fe9900;
 
   /* Text */
   --vt-text-primary: #ffffff;
@@ -33,10 +41,29 @@
   --vt-bg-elevated: rgba(58, 82, 121, 0.32);
   --vt-bg-input: rgba(84, 98, 140, 0.2);
   --vt-bg-muted: rgba(255, 255, 255, 0.08);
+  --vt-bg-glass: rgba(84, 98, 140, 0.2);
+  --vt-bg-glass-strong: rgba(84, 98, 140, 0.3);
+  --vt-bg-glass-heavy: rgba(84, 98, 140, 0.5);
+  --vt-bg-status-online: rgba(106, 193, 97, 0.2);
 
   /* Border */
   --vt-border-color: rgba(148, 166, 197, 0.3);
   --vt-border-color-strong: rgba(148, 166, 197, 0.5);
+  --vt-border-color-soft: rgba(255, 255, 255, 0.1);
+  --vt-border-color-dashed: rgba(255, 255, 255, 0.2);
+  --vt-border-gradient: linear-gradient(
+    117.31deg,
+    rgba(148, 166, 197, 0.3) 2.77%,
+    rgba(148, 166, 197, 0) 32.18%,
+    rgba(148, 166, 197, 0.103266) 72.63%,
+    rgba(148, 166, 197, 0.3) 99.05%
+  );
+  --vt-border-gradient-strong: linear-gradient(
+    147.24deg,
+    rgba(148, 166, 197, 0.72) 39.16%,
+    rgba(148, 166, 197, 0.36) 66.27%,
+    rgba(148, 166, 197, 0.72) 98.58%
+  );
 
   /* Radius */
   --vt-radius-none: 0rem;
@@ -50,12 +77,14 @@
 
   /* Typography */
   --vt-font-family-base: Arimo, sans-serif;
+  --vt-font-family-heading: Montserrat, sans-serif;
   --vt-font-size-xs: 0.12rem;
   --vt-font-size-sm: 0.13rem;
   --vt-font-size-base: 0.14rem;
   --vt-font-size-md: 0.16rem;
   --vt-font-size-lg: 0.18rem;
   --vt-font-size-xl: 0.2rem;
+  --vt-font-size-2xl: 0.3rem;
   --vt-font-weight-normal: 400;
   --vt-font-weight-medium: 500;
   --vt-font-weight-semibold: 600;
@@ -97,4 +126,8 @@
   /* Scrollbar */
   --vt-scrollbar-thumb: rgba(88, 114, 148, 0.4);
   --vt-scrollbar-track: transparent;
+
+  /* Effect */
+  --vt-backdrop-blur: blur(0.1rem);
+  --vt-backdrop-blur-strong: blur(0.2rem);
 }
