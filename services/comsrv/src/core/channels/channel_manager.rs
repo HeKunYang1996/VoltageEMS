@@ -230,23 +230,25 @@ impl<R: Rtdb + 'static> ChannelManager<R> {
         // 1. Send shutdown signal to unified task (non-blocking)
         entry.shutdown();
 
-        // 2. Await task exit with timeout (500ms), then force-abort
-        if let Some(handle) = entry.take_task_handle()
-            && tokio::time::timeout(std::time::Duration::from_millis(500), handle)
+        // 2. Await task exit with timeout, then force-abort via the AbortHandle
+        //    captured before moving the JoinHandle into timeout. Dropping a
+        //    JoinHandle does NOT abort the task in Tokio — without AbortHandle
+        //    a timed-out task would keep running and could still poll/write.
+        if let Some(handle) = entry.take_task_handle() {
+            let abort_handle = handle.abort_handle();
+            if tokio::time::timeout(std::time::Duration::from_millis(500), handle)
                 .await
                 .is_err()
-        {
-            warn!("Ch{} task did not exit in 500ms, aborting", channel_id);
-            entry.abort_task();
+            {
+                warn!("Ch{} task did not exit in 500ms, aborting", channel_id);
+                abort_handle.abort();
+            }
         }
 
-        // 4. Shutdown store to flush WriteBuffer to Redis
+        // 3. Shutdown store to flush WriteBuffer to Redis
         entry.store.shutdown().await;
 
-        // 5. Disconnect channel
-        let _ = entry.disconnect().await;
-
-        // 6. Dynamic Slot Deallocation
+        // 4. Dynamic Slot Deallocation
         if let (Some(index), Some(bitmap)) = (&self.dynamic_channel_index, &self.slot_bitmap) {
             let mut bitmap_guard = bitmap.write();
             match index.remove_channel(channel_id, &mut bitmap_guard) {

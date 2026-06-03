@@ -21,6 +21,24 @@ pub type HashMsetOps = Vec<(String, Vec<(Arc<str>, Bytes)>)>;
 /// - `RedisRtdb`: Production Redis backend
 /// - `MemoryRtdb`: In-memory backend for testing
 ///
+/// # Value contract (IMPORTANT)
+///
+/// The `Bytes` type appears in many signatures (`set`, `hash_set`, `hash_mset`,
+/// `pipeline_hash_mset`) but the **production Redis backend requires valid
+/// UTF-8** for the Redis protocol path used here (`SET`/`HSET` go through
+/// `fred`'s string API). Callers must pass UTF-8 bytes — typically
+/// `Bytes::from(string_data)` or `f64_to_bytes(value)` which emit ASCII.
+///
+/// Non-UTF-8 input is rejected at runtime with a clear `UTF-8 conversion failed`
+/// error rather than silently corrupting the value or panicking. The
+/// in-memory backend (used in tests) accepts any bytes, so writing a test
+/// that passes binary data will pass against `MemoryRtdb` but fail against
+/// `RedisRtdb` — this is the contract.
+///
+/// A future cleanup should narrow the signatures to `&str`/`String` to make
+/// this contract a compile-time check; tracking issue: see review round 4
+/// finding #10.
+///
 /// Note: All async methods use explicit lifetime `'a` to enable zero-copy parameter passing.
 /// The returned Future borrows both `&self` and parameters for the same lifetime,
 /// allowing implementations to use borrowed data directly without cloning.
@@ -73,6 +91,23 @@ pub trait Rtdb: Send + Sync + 'static {
         field: &'a str,
         value: Bytes,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
+
+    /// Set hash field only if it does not already exist (Redis HSETNX).
+    ///
+    /// Returns Ok(true) when the field was inserted, Ok(false) when it
+    /// already existed (and was left untouched).
+    ///
+    /// Use this for structural initialization that must not clobber a
+    /// concurrently-written real-time value. Example: modsrv bootstrap
+    /// inserts `inst:{id}:M:{point} = "0"` for every defined point on
+    /// startup, but comsrv may already have flushed a fresh reading via
+    /// ShmRedisSync. Plain HSET would overwrite that reading with 0.
+    fn hash_setnx<'a>(
+        &'a self,
+        key: &'a str,
+        field: &'a str,
+        value: Bytes,
+    ) -> impl Future<Output = Result<bool>> + Send + 'a;
 
     /// Get hash field
     fn hash_get<'a>(
@@ -317,4 +352,23 @@ pub trait Rtdb: Send + Sync + 'static {
         &self,
         operations: HashMsetOps,
     ) -> impl Future<Output = Result<()>> + Send + '_;
+
+    /// Execute multiple HMSET operations atomically (MULTI/EXEC).
+    ///
+    /// Unlike `pipeline_hash_mset` which just queues commands on the
+    /// connection (any partial-flush would leave Redis in a torn state),
+    /// this variant wraps the batch in MULTI/EXEC so all writes commit
+    /// together or not at all. Use for cases where readers depend on
+    /// cross-key consistency, e.g. `inst:{id}:M` + `inst:{id}:M:ts`
+    /// where a torn write produces new values paired with old timestamps.
+    ///
+    /// Default implementation delegates to `pipeline_hash_mset` for
+    /// backends where the operation is already atomic (e.g. in-memory
+    /// Mutex-guarded backends).
+    fn pipeline_hash_mset_atomic(
+        &self,
+        operations: HashMsetOps,
+    ) -> impl Future<Output = Result<()>> + Send + '_ {
+        self.pipeline_hash_mset(operations)
+    }
 }

@@ -52,7 +52,25 @@ use voltage_rtdb_shm::ShmHandle;
 ///
 /// Note: after ~2^31 writes (~6.8 years at 10Hz), seq wraps back to 0 and
 /// this slot would be skipped until the next write (seq=2). Acceptable.
+/// Sentinel for "never written" seq. Used in tests only — production code
+/// relies on the NaN value sentinel to filter unwritten slots, so seq wrap
+/// to 0 is not misclassified as unwritten.
+#[allow(dead_code)]
 const UNWRITTEN_SEQ: u32 = 0;
+
+/// Maximum slots flushed in a single Redis pipeline.
+/// Bounds memory and Redis-side latency on full-scan ticks with high slot
+/// counts. Excess slots are deferred to retry_slots for the next tick.
+const MAX_PIPELINE_SLOTS: usize = 1024;
+
+/// Upper bound on retry_slots so sustained overload does not grow it
+/// without limit. retry_slots is sorted ascending before this cap is
+/// applied (see flush_once), so eviction by `drain(..n)` removes the
+/// LOWEST-INDEXED slots — not the insertion-order oldest. Mid-range
+/// slot indices are the ones that wait longest under sustained
+/// overload; they are re-discovered by the periodic full-scan
+/// (FULL_SCAN_INTERVAL ≈ 60s), so no data is lost permanently.
+const MAX_RETRY_SLOTS: usize = MAX_PIPELINE_SLOTS * 4;
 
 /// Force a full seq scan periodically as a safety net for external writers.
 const FULL_SCAN_INTERVAL: u64 = 600;
@@ -69,6 +87,10 @@ pub struct ShmRedisSync<R: Rtdb> {
     last_seq: Vec<u32>,
     /// Raw pointer of the last-loaded ShmLayout Arc, used to detect swaps.
     last_layout_ptr: usize,
+    /// Content hash of the routing cache at last scan. If the routing content
+    /// changes without a SHM layout swap (pure RoutingCache reload), C2M
+    /// targets may have shifted and unchanged-seq slots must republish.
+    last_routing_hash: u64,
     /// Slots that failed to flush to Redis and must be retried.
     retry_slots: Vec<usize>,
     /// Tick counter for periodic full-scan cadence.
@@ -90,6 +112,7 @@ impl<R: Rtdb> ShmRedisSync<R> {
             routing_cache,
             last_seq: vec![0u32; max_slots],
             last_layout_ptr: 0,
+            last_routing_hash: 0,
             retry_slots: Vec::new(),
             tick_count: 0,
             key_space: KeySpaceConfig::production_cached(),
@@ -124,6 +147,25 @@ impl<R: Rtdb> ShmRedisSync<R> {
             return;
         }
 
+        // Reconfigure-in-progress sentinel (defensive).
+        //
+        // Historically, comsrv flipped `writer_generation` to an odd value
+        // while clearing slots in the legacy in-place `reconfigure_existing`
+        // path; reads during that window could yield torn data. Step 3
+        // (PR #93 + this branch) replaced that with `ShmHandle::rebuild_via_swap`
+        // — a brand-new file at a staging path, then a POSIX rename(2)
+        // atomically swaps it in. There is no in-flight-mutation window any
+        // more, and `writer_generation` always stays even.
+        //
+        // The check is kept as cheap defense-in-depth: if any future code
+        // path resurrects an in-place mutation pattern, this skip prevents
+        // Redis sync from publishing torn rows.
+        if writer.generation() & 1 == 1 {
+            trace!("ShmRedisSync: reconfigure in progress (odd generation), skipping tick");
+            self.tick_count += 1;
+            return;
+        }
+
         // Grow last_seq if slot_count expanded after routing reload.
         if self.last_seq.len() < slot_count {
             self.last_seq.resize(slot_count, 0);
@@ -132,12 +174,24 @@ impl<R: Rtdb> ShmRedisSync<R> {
         // Detect layout swap (routing reload) → reset last_seq for full re-sync.
         let layout_ptr = Arc::as_ptr(layout) as usize;
         let layout_changed = self.last_layout_ptr != 0 && layout_ptr != self.last_layout_ptr;
-        if layout_changed {
-            info!("ShmRedisSync: SHM layout swapped (routing reload), resetting last_seq");
+
+        // Detect routing content change even when SHM layout pointer is stable:
+        // a pure RoutingCache reload (no SHM rebuild) still changes C2M targets,
+        // so unchanged-seq slots must republish under the new mapping or stay
+        // permanently pointed at the old instance.
+        let routing_hash = self.routing_cache.content_hash();
+        let routing_changed = self.last_routing_hash != 0 && routing_hash != self.last_routing_hash;
+
+        if layout_changed || routing_changed {
+            info!(
+                "ShmRedisSync: reset last_seq (layout_changed={}, routing_changed={})",
+                layout_changed, routing_changed
+            );
             self.last_seq.fill(0);
             self.retry_slots.clear();
         }
         self.last_layout_ptr = layout_ptr;
+        self.last_routing_hash = routing_hash;
 
         let full_scan = layout_changed
             || self.tick_count == 0
@@ -159,6 +213,30 @@ impl<R: Rtdb> ShmRedisSync<R> {
         candidate_slots.sort_unstable();
         candidate_slots.dedup();
 
+        // Bound pipeline size — large full-scans with thousands of dirty
+        // slots could stall Redis on a single round-trip. Excess slots go
+        // back into retry_slots for the next tick (we already deduped).
+        if candidate_slots.len() > MAX_PIPELINE_SLOTS {
+            let overflow = candidate_slots.split_off(MAX_PIPELINE_SLOTS);
+            self.retry_slots.extend(overflow);
+        }
+
+        // Cap retry_slots so sustained overload (consistent >1024 dirty
+        // slots per tick) does not accumulate unbounded memory. Dropped
+        // entries are re-discovered by the periodic full-scan.
+        if self.retry_slots.len() > MAX_RETRY_SLOTS {
+            let drop_count = self.retry_slots.len() - MAX_RETRY_SLOTS;
+            // retry_slots is sorted ascending at this point, so drain(..n)
+            // removes the lowest-indexed slots in the overflow set. Those
+            // slots are re-discovered by the periodic FULL_SCAN.
+            tracing::warn!(
+                "ShmRedisSync: dropping {} lowest-indexed retry slots (cap {})",
+                drop_count,
+                MAX_RETRY_SLOTS
+            );
+            self.retry_slots.drain(..drop_count);
+        }
+
         // Accumulate redis_key → Vec<(field, bytes)>.
         let mut ops: HashMap<String, Vec<(Arc<str>, bytes::Bytes)>> = HashMap::new();
         let mut synced_slots = Vec::new();
@@ -171,21 +249,43 @@ impl<R: Rtdb> ShmRedisSync<R> {
             // Advisory pre-check (Relaxed). Correctness relies on load_consistent below.
             let seq = slot.seq_raw();
 
-            if seq == UNWRITTEN_SEQ || seq == self.last_seq[slot_idx] {
+            // Only skip when seq matches last_seq exactly. Do not treat
+            // seq == 0 as "unwritten" — after 2^32 writes the seq wraps to
+            // 0, which is a legitimate update. The NaN-sentinel filter
+            // below correctly catches truly-unwritten slots regardless of
+            // seq value.
+            if seq == self.last_seq[slot_idx] {
                 continue;
             }
 
             let (value, raw, ts) = match slot.load_consistent() {
                 Some(data) => data,
-                None => continue, // torn read, retry next tick
+                None => {
+                    // Torn read: writer was mid-update through this slot's
+                    // seqlock. take_dirty_slots() already cleared the dirty
+                    // bit, so without explicit retry the slot would not be
+                    // visited again until the next writer update (which may
+                    // not happen for a long time) or the periodic
+                    // FULL_SCAN_INTERVAL. Push it back to retry_slots so
+                    // the next tick re-reads it.
+                    self.retry_slots.push(slot_idx);
+                    continue;
+                },
             };
 
             // Skip slots whose value is the unwritten NaN sentinel (SHM v3).
-            // Defence-in-depth on top of the seq check: if a writer ever
-            // bumped seq without finishing the data write, or a v2 snapshot
-            // somehow leaked through, we still don't push NaN to Redis.
-            // batch_to_updates already rejects non-finite from the protocol
-            // side, so this is the only remaining ingress point.
+            //
+            // Defence-in-depth on top of the seq check. In production, NaN
+            // cannot reach this point: batch_to_updates filters non-finite
+            // from the protocol side (redis_store.rs), set_action rejects
+            // via validate_action_value, and SHM seeds slots with NaN only
+            // before the first write. If a NaN somehow leaks through (writer
+            // bug, v2 snapshot, partial reconfigure), we drop it here rather
+            // than persist a meaningless value to Redis. "Unavailable" is
+            // represented downstream by an ABSENT hash field — not a NaN
+            // string — which keeps the JSON protocol simple and matches the
+            // CLAUDE.md "NaN means never-written" sentinel semantics for SHM
+            // internals only.
             if !value.is_finite() || !raw.is_finite() {
                 self.last_seq[slot_idx] = seq;
                 continue;
@@ -374,6 +474,15 @@ mod tests {
             value: Bytes,
         ) -> impl Future<Output = Result<()>> + Send + 'a {
             async move { self.inner.hash_set(key, field, value).await }
+        }
+
+        fn hash_setnx<'a>(
+            &'a self,
+            key: &'a str,
+            field: &'a str,
+            value: Bytes,
+        ) -> impl Future<Output = Result<bool>> + Send + 'a {
+            async move { self.inner.hash_setnx(key, field, value).await }
         }
 
         fn hash_get<'a>(

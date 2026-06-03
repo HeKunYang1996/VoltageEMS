@@ -16,13 +16,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use voltage_calc::{CalcEngine, MemoryStateStore, StateStore};
-use voltage_model::{ValidationConfig, validate_value};
-use voltage_routing::RoutingCache;
-use voltage_routing::set_action_point;
-use voltage_rtdb::KeySpaceConfig;
+use voltage_model::{PointType, ValidationConfig, validate_value};
+use voltage_routing::{
+    RoutingCache, route_context_from_target, set_action_point_with_target,
+    set_action_point_with_target_at, validate_action_value,
+};
 use voltage_rtdb::numfmt::precomputed;
 use voltage_rtdb::traits::Rtdb;
-use voltage_rtdb_shm::{ShmNotifier, UnifiedReader};
+use voltage_rtdb::{KeySpaceConfig, SystemTimeProvider, TimeProvider};
+use voltage_rtdb_shm::{ActionDispatch, DispatchOutcome, UnifiedReader};
 
 /// Convert dynamic point type string to static str for zero-allocation ActionResult
 #[inline]
@@ -189,6 +191,11 @@ pub(crate) struct RuleReadOutcome {
     /// field, or RPC failure). Caller MUST short-circuit rule evaluation when
     /// non-empty.
     pub missing: Vec<String>,
+    /// Per-point values read this pass, keyed by stable cache_key format
+    /// ("M:{instance}:{point}" / "A:{instance}:{point}"). Scheduler uses
+    /// this to advance OnChange last_value against the values executor
+    /// actually saw — not the Redis snapshot from phase 0 which may lag SHM.
+    pub point_values: HashMap<String, f64>,
 }
 
 /// Result of executing a rule
@@ -204,6 +211,12 @@ pub struct RuleExecutionResult {
     /// Variable values at execution time (for logging)
     /// Arc-shared to avoid cloning the full HashMap on each node
     pub variable_values: Arc<HashMap<String, f64>>,
+    /// Per-point values actually read during execution, keyed by stable
+    /// point identifier ("M:{instance}:{point}" / "A:{instance}:{point}").
+    /// Scheduler uses this to advance OnChange `last_value` against the
+    /// values the executor really saw (SHM-first), not the Redis snapshot
+    /// taken in phase 0 which may lag SHM and produce wrong deadband state.
+    pub point_values: Arc<HashMap<String, f64>>,
     /// Node execution details for debugging/visualization
     pub node_details: HashMap<String, NodeExecutionDetail>,
 }
@@ -266,10 +279,11 @@ pub struct RuleExecutor<R: Rtdb, S: StateStore = MemoryStateStore> {
     state_store: Arc<S>,
     /// Optional UnifiedReader for cross-process zero-copy reads
     shared_reader: Option<Arc<UnifiedReader>>,
-    /// Optional UnifiedWriter for M2C via shared memory
-    shm_action_writer: Option<Arc<voltage_rtdb_shm::UnifiedWriter>>,
-    /// Optional ShmNotifier for UDS event notification (M2C low-latency path)
-    shm_notifier: Option<Arc<tokio::sync::Mutex<ShmNotifier>>>,
+    /// Optional shared ActionDispatch for M2C SHM+UDS writes. Reusing the
+    /// same dispatch instance as modsrv guarantees the writer_generation
+    /// check trips uniformly — without this, rule-engine actions after a
+    /// comsrv restart silently target wrong slots.
+    action_dispatch: Option<Arc<dyn ActionDispatch>>,
 }
 
 impl<R: Rtdb> RuleExecutor<R, MemoryStateStore> {
@@ -280,8 +294,7 @@ impl<R: Rtdb> RuleExecutor<R, MemoryStateStore> {
             routing_cache,
             state_store: Arc::new(MemoryStateStore::new()),
             shared_reader: None,
-            shm_action_writer: None,
-            shm_notifier: None,
+            action_dispatch: None,
         }
     }
 }
@@ -298,8 +311,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             routing_cache,
             state_store,
             shared_reader: None,
-            shm_action_writer: None,
-            shm_notifier: None,
+            action_dispatch: None,
         }
     }
 
@@ -315,21 +327,13 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         self
     }
 
-    /// Enable UnifiedWriter for M2C via shared memory
+    /// Enable shared ActionDispatch for M2C SHM+UDS writes.
     ///
-    /// When enabled, action outputs are written to SHM in addition to Redis.
-    /// SHM serves as the source for comsrv's ShmCommandListener (UDS event-driven dispatch).
-    pub fn with_shm_action_writer(mut self, writer: Arc<voltage_rtdb_shm::UnifiedWriter>) -> Self {
-        self.shm_action_writer = Some(writer);
-        self
-    }
-
-    /// Enable ShmNotifier for UDS event notification
-    ///
-    /// When enabled, after writing to SHM, sends UDS notification to comsrv
-    /// for immediate command dispatch (~1-2ms latency vs polling).
-    pub fn with_shm_notifier(mut self, notifier: Arc<tokio::sync::Mutex<ShmNotifier>>) -> Self {
-        self.shm_notifier = Some(notifier);
+    /// The caller must pass the same `Arc<ShmDispatch>` that modsrv uses
+    /// for its HTTP control path so generation checks and rebuild signals
+    /// stay coherent across both code paths.
+    pub fn with_action_dispatch(mut self, dispatch: Arc<dyn ActionDispatch>) -> Self {
+        self.action_dispatch = Some(dispatch);
         self
     }
 
@@ -343,11 +347,16 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             execution_path: vec![],
             matched_condition: None,
             variable_values: Arc::new(HashMap::new()),
+            point_values: Arc::new(HashMap::new()),
             node_details: HashMap::new(),
         };
 
         // Execute from start node, accumulating variable values along the path
         let mut values: HashMap<String, f64> = HashMap::new();
+        // Mirror of `values` keyed by point identifier (M:{inst}:{point} or
+        // A:{inst}:{point}) so scheduler can advance OnChange last_value
+        // against what the executor actually saw, not the Redis snapshot.
+        let mut point_values: HashMap<String, f64> = HashMap::new();
         let mut current_id = rule.flow.start_node.as_str();
         let max_iterations = 100; // Prevent infinite loops
         let mut iterations = 0;
@@ -373,8 +382,12 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
 
             match node {
                 RuleNode::End => {
-                    // Save final variable values and mark success (wrap in Arc)
+                    // Save final variable values and mark success (wrap in Arc).
+                    // point_values is the executor's authoritative "what we
+                    // actually read" view, surfaced to scheduler for OnChange
+                    // last_value advancement so deadband matches reality.
                     result.variable_values = Arc::new(std::mem::take(&mut values));
+                    result.point_values = Arc::new(std::mem::take(&mut point_values));
                     result.success = true;
                     break;
                 },
@@ -400,15 +413,18 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                         Err(e) => {
                             result.error = Some(format!("Failed to read variables: {}", e));
                             result.variable_values = Arc::new(std::mem::take(&mut values));
+                            result.point_values = Arc::new(std::mem::take(&mut point_values));
                             return Ok(result);
                         },
                     };
+                    point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
                         result.error = Some(format!(
                             "Rule cycle skipped: variables unavailable: {}",
                             outcome.missing.join(", ")
                         ));
                         result.variable_values = Arc::new(std::mem::take(&mut values));
+                        result.point_values = Arc::new(std::mem::take(&mut point_values));
                         return Ok(result);
                     }
                     let values_changed = outcome.values_changed;
@@ -459,6 +475,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                             return Ok(result);
                         },
                     };
+                    point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
                         result.error = Some(format!(
                             "Rule cycle skipped: variables unavailable: {}",
@@ -515,6 +532,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                         calculations,
                         wires,
                         &mut values,
+                        &mut point_values,
                         &mut values_snapshot,
                         &mut result,
                         rule.id,
@@ -537,6 +555,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                         period,
                         wires,
                         &mut values,
+                        &mut point_values,
                         &mut values_snapshot,
                         &mut result,
                         rule.id,
@@ -561,6 +580,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         calculations: &[CalculationRule],
         wires: &'a RuleWires,
         values: &mut HashMap<String, f64>,
+        point_values: &mut HashMap<String, f64>,
         snapshot_cache: &mut Option<Arc<HashMap<String, f64>>>,
         result: &mut RuleExecutionResult,
         rule_id: i64,
@@ -572,6 +592,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 return None;
             },
         };
+        point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
             result.error = Some(format!(
                 "Calculation skipped: variables unavailable: {}",
@@ -637,6 +658,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         period: &str,
         wires: &'a RuleWires,
         values: &mut HashMap<String, f64>,
+        point_values: &mut HashMap<String, f64>,
         snapshot_cache: &mut Option<Arc<HashMap<String, f64>>>,
         result: &mut RuleExecutionResult,
         rule_id: i64,
@@ -649,6 +671,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 return None;
             },
         };
+        point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
             result.error = Some(format!(
                 "PeriodDelta skipped: input variable unavailable: {}",
@@ -741,9 +764,13 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         let keyspace = KeySpaceConfig::production_cached();
 
         // ★ Phase 1a: Try SHM first, collect Redis fallback requests
-        // Group by Redis key for batched HMGET (reduces N calls to ~2 calls)
-        // Key: (redis_key, is_action), Value: Vec<(var_name, field)>
-        let mut redis_requests: HashMap<(String, bool), Vec<(String, String)>> = HashMap::new();
+        // Group by Redis key for batched HMGET (reduces N calls to ~2 calls).
+        // Each pending entry carries (var_name, field, instance_id, point_id)
+        // so Phase 1b can also populate outcome.point_values when the value
+        // came from Redis (not just SHM), keeping the scheduler's OnChange
+        // last_value source consistent regardless of read path.
+        type PendingVar = (String, String, u32, u32);
+        let mut redis_requests: HashMap<(String, bool), Vec<PendingVar>> = HashMap::new();
 
         for var in variables {
             // Skip formula variables in Phase 1 - calculated in Phase 2 after base variables
@@ -800,6 +827,13 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
 
                     // SharedMemory hit - fastest path.
                     // total_cmp avoids NaN != NaN busting the Arc snapshot every cycle.
+                    let point_key = format!(
+                        "{}:{}:{}",
+                        if is_action { 'A' } else { 'M' },
+                        instance_id,
+                        point
+                    );
+                    outcome.point_values.insert(point_key, val);
                     outcome.values_changed |= values
                         .insert(var_name, val)
                         .is_none_or(|prev| prev.total_cmp(&val).is_ne());
@@ -814,18 +848,22 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 keyspace.instance_measurement_key(instance_id)
             };
             let field = precomputed::get_point_id_str_or_alloc(point).to_string();
-            redis_requests
-                .entry((key, is_action))
-                .or_default()
-                .push((var_name, field));
+            redis_requests.entry((key, is_action)).or_default().push((
+                var_name,
+                field,
+                instance_id,
+                point,
+            ));
         }
 
         // ★ Phase 1b: Batched Redis fetch using HMGET (single RTT per key)
         for ((key, is_action), var_fields) in redis_requests {
-            let fields: Vec<&str> = var_fields.iter().map(|(_, f)| f.as_str()).collect();
+            let fields: Vec<&str> = var_fields.iter().map(|(_, f, _, _)| f.as_str()).collect();
             match self.rtdb.hash_mget(&key, &fields).await {
                 Ok(results) => {
-                    for (i, (var_name, field)) in var_fields.into_iter().enumerate() {
+                    for (i, (var_name, field, instance_id, point)) in
+                        var_fields.into_iter().enumerate()
+                    {
                         let parsed =
                             results
                                 .get(i)
@@ -836,6 +874,13 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                                 });
                         match parsed {
                             Some(val) if val.is_finite() => {
+                                let point_key = format!(
+                                    "{}:{}:{}",
+                                    if is_action { 'A' } else { 'M' },
+                                    instance_id,
+                                    point
+                                );
+                                outcome.point_values.insert(point_key, val);
                                 outcome.values_changed |= values
                                     .insert(var_name, val)
                                     .is_none_or(|prev| prev.total_cmp(&val).is_ne());
@@ -891,7 +936,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     // RPC failure on action keys is also "treat as unset" — we
                     // can't tell whether the field would have existed.
                     if !is_action {
-                        for (var_name, _) in var_fields {
+                        for (var_name, _, _, _) in var_fields {
                             outcome.missing.push(var_name);
                         }
                     }
@@ -1131,27 +1176,8 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 .is_ok(),
             "A" => {
                 let point_str = precomputed::get_point_id_str_or_alloc(point);
-                match set_action_point(
-                    self.rtdb.as_ref(),
-                    &self.routing_cache,
-                    instance_id,
-                    &point_str,
-                    value,
-                )
-                .await
-                {
-                    Ok(outcome) => outcome.routed,
-                    Err(e) => {
-                        tracing::error!(
-                            "{} write failed (instance_id={}, point_id={}): {}",
-                            context,
-                            instance_id,
-                            point,
-                            e
-                        );
-                        false
-                    },
-                }
+                self.write_action_point(instance_id, point, &point_str, value, context)
+                    .await
             },
             _ => {
                 tracing::warn!("Unknown point type '{}' for {}", pt, context);
@@ -1166,6 +1192,148 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             point_id: point,
             value,
             success,
+        }
+    }
+
+    async fn write_action_point(
+        &self,
+        instance_id: u32,
+        point: u32,
+        point_str: &str,
+        value: f64,
+        context: &str,
+    ) -> bool {
+        let target =
+            self.routing_cache
+                .lookup_m2c_by_parts(instance_id, PointType::Adjustment, point);
+
+        let Some(target) = target else {
+            return match set_action_point_with_target(
+                self.rtdb.as_ref(),
+                instance_id,
+                point_str,
+                value,
+                None,
+            )
+            .await
+            {
+                Ok(outcome) => outcome.routed,
+                Err(e) => {
+                    tracing::error!(
+                        "{} write failed (instance_id={}, point_id={}): {}",
+                        context,
+                        instance_id,
+                        point,
+                        e
+                    );
+                    false
+                },
+            };
+        };
+
+        let value = match validate_action_value(instance_id, point_str, value) {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::error!(
+                    "{} write rejected (instance_id={}, point_id={}): {}",
+                    context,
+                    instance_id,
+                    point,
+                    e
+                );
+                return false;
+            },
+        };
+        let timestamp_ms = SystemTimeProvider.now_millis();
+        let ctx = route_context_from_target(target, timestamp_ms);
+
+        if !self.dispatch_action_to_comsrv(&ctx, value, context).await {
+            return false;
+        }
+
+        match set_action_point_with_target_at(
+            self.rtdb.as_ref(),
+            instance_id,
+            point_str,
+            value,
+            Some(target),
+            timestamp_ms,
+        )
+        .await
+        {
+            Ok(outcome) => outcome.routed,
+            Err(e) => {
+                tracing::error!(
+                    "{} commit failed after dispatch (instance_id={}, point_id={}): {}",
+                    context,
+                    instance_id,
+                    point,
+                    e
+                );
+                false
+            },
+        }
+    }
+
+    async fn dispatch_action_to_comsrv(
+        &self,
+        ctx: &voltage_routing::RouteContext,
+        value: f64,
+        context: &str,
+    ) -> bool {
+        // Reuse the shared ActionDispatch so generation checks, post-write
+        // re-checks, and UDS reconnect signaling stay coherent with modsrv's
+        // HTTP control path. Any rule firing after a comsrv restart will
+        // trip the generation mismatch and trigger rebuild via the same
+        // Notify that modsrv listens to.
+        let Some(dispatch) = self.action_dispatch.as_ref() else {
+            tracing::error!(
+                "{} dispatch failed: ActionDispatch not configured for ch={} pt={} point={}",
+                context,
+                ctx.target_channel_id,
+                ctx.target_point_type,
+                ctx.target_point_id
+            );
+            return false;
+        };
+
+        match dispatch.dispatch(ctx, value).await {
+            DispatchOutcome::Delivered | DispatchOutcome::Noop => true,
+            DispatchOutcome::NoWriter => {
+                tracing::error!(
+                    "{} dispatch dropped: SHM writer unavailable (likely comsrv restart) for ch={} pt={} point={}",
+                    context,
+                    ctx.target_channel_id,
+                    ctx.target_point_type,
+                    ctx.target_point_id
+                );
+                false
+            },
+            DispatchOutcome::MirrorMiss { reason } => {
+                tracing::error!(
+                    "{} dispatch dropped ({}) for ch={} pt={} point={}",
+                    context,
+                    reason,
+                    ctx.target_channel_id,
+                    ctx.target_point_type,
+                    ctx.target_point_id
+                );
+                false
+            },
+            DispatchOutcome::ShmOnly { reason } => {
+                // SHM was written but comsrv likely did not see it (UDS
+                // degraded). Surface as failure so the rule's success flag
+                // reflects reality — the cooldown counter is gated on this.
+                tracing::warn!(
+                    "{} dispatch degraded ({}); UDS not delivered for ch={} pt={} point={}",
+                    context,
+                    reason,
+                    ctx.target_channel_id,
+                    ctx.target_point_type,
+                    ctx.target_point_id
+                );
+                false
+            },
         }
     }
 
@@ -1241,18 +1409,32 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         value: f64,
     ) -> Result<()> {
         let config = KeySpaceConfig::production();
-
-        // Write to inst:{id}:M Hash
-        // Use precomputed pool for common point IDs (0-255)
         let key = config.instance_measurement_key(instance_id);
+        let ts_key = config.instance_measurement_ts_key(instance_id);
         let point_str = precomputed::get_point_id_str_or_alloc(point);
         let value_bytes = voltage_rtdb::numfmt::f64_to_bytes(value);
+        // Stamp ts in the same call as the value: OnChange triggers that
+        // watch calculation outputs must see value + ts updated atomically
+        // or the time deadband never expires.
+        let now_ms = SystemTimeProvider.now_millis();
+        let ts_bytes = voltage_rtdb::numfmt::i64_to_bytes(now_ms);
+
         self.rtdb
             .hash_set(&key, &point_str, value_bytes)
             .await
             .map_err(|e| crate::error::RuleError::ExecutionError(e.to_string()))?;
+        self.rtdb
+            .hash_set(&ts_key, &point_str, ts_bytes)
+            .await
+            .map_err(|e| crate::error::RuleError::ExecutionError(e.to_string()))?;
 
-        tracing::debug!("Calc write: inst:{}:M:{} = {}", instance_id, point, value);
+        tracing::debug!(
+            "Calc write: inst:{}:M:{} = {} @{}",
+            instance_id,
+            point,
+            value,
+            now_ms
+        );
 
         Ok(())
     }

@@ -77,9 +77,19 @@ fn write_channel_batch_direct_impl(
 
     let mut result = BatchRoutingResult::default();
 
-    // Group updates by (channel_id, point_type) for C2C tracking
+    // Group updates by (channel_id, point_type) for C2C tracking.
+    // Single-writer invariant: comsrv owns Telemetry/Status slots only;
+    // C/A slots belong to modsrv. Silently dropping cross-writer points
+    // would mask protocol-adapter bugs, so we warn and skip.
     let mut grouped: FxHashMap<(u32, PointType), Vec<ChannelPointUpdate>> = FxHashMap::default();
     for update in updates {
+        if !update.point_type.is_measurement() {
+            warn!(
+                "batch_direct refused cross-writer slot ch={} pt={:?} point={} (only T/S allowed)",
+                update.channel_id, update.point_type, update.point_id
+            );
+            continue;
+        }
         grouped
             .entry((update.channel_id, update.point_type))
             .or_default()
@@ -98,9 +108,25 @@ fn write_channel_batch_direct_impl(
 
             // Direct shared memory write — the only hot-path write.
             // Redis sync is handled by ShmRedisSync background task.
-            if let Some(slot) = channel_index.lookup(channel_id, point_type, update.point_id) {
-                shared_writer.set_direct(slot, update.value, raw_value, timestamp_ms);
-                result.channel_writes += 1;
+            match channel_index.lookup(channel_id, point_type, update.point_id) {
+                Some(slot) => {
+                    shared_writer.set_direct(slot, update.value, raw_value, timestamp_ms);
+                    result.channel_writes += 1;
+                },
+                None => {
+                    // Slot missing: channel/point exists in routing but no
+                    // SHM slot is allocated for it. Happens during a reload
+                    // window after the DB row was added but before
+                    // `perform_channel_reload` rebuilt the slot table.
+                    // Increment a counter so the caller (comsrv RedisStore)
+                    // can expose this via metrics/health instead of dropping
+                    // data silently.
+                    result.slot_misses += 1;
+                    warn!(
+                        "batch_direct slot miss ch={} pt={:?} point={} — channel reload likely pending",
+                        channel_id, point_type, update.point_id
+                    );
+                },
             }
 
             // C2C routing lookup
@@ -122,12 +148,16 @@ fn write_channel_batch_direct_impl(
                     );
                     result.cycles_detected += 1;
                 } else {
+                    // Transform engineering value; drop raw_value so the
+                    // target's :raw hash is not populated with a value that
+                    // is no longer "raw" from any single device perspective.
+                    let fwd_value = target.transform(update.value);
                     c2c_forwards.push(ChannelPointUpdate {
                         channel_id: target.channel_id,
                         point_type: target.point_type,
                         point_id: target.point_id,
-                        value: update.value,
-                        raw_value: update.raw_value,
+                        value: fwd_value,
+                        raw_value: None,
                         cascade_depth: update.cascade_depth + 1,
                     });
                 }

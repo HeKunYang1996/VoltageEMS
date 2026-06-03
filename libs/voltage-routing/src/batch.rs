@@ -67,6 +67,12 @@ pub struct BatchRoutingResult {
     pub c2c_forwards: usize,
     /// Number of C2C cycles detected and skipped
     pub cycles_detected: usize,
+    /// Number of data points dropped because the channel/point had no SHM
+    /// slot allocated (e.g. point was created in the DB but the channel
+    /// hasn't been reloaded yet). Used as an observability signal — the
+    /// previous silent-drop path made it impossible to tell if real device
+    /// data was being lost during reload windows.
+    pub slot_misses: usize,
 }
 
 impl BatchRoutingResult {
@@ -76,6 +82,7 @@ impl BatchRoutingResult {
         self.c2m_writes += other.c2m_writes;
         self.c2c_forwards += other.c2c_forwards;
         self.cycles_detected += other.cycles_detected;
+        self.slot_misses += other.slot_misses;
     }
 }
 
@@ -195,13 +202,18 @@ where
                     );
                     result.cycles_detected += 1;
                 } else {
-                    // Add to forwards (target will be marked visited when processed)
+                    // Apply C2C linear transform to value; raw_value drops to
+                    // None so the target's :raw hash reflects only its own
+                    // device's pre-scale reading (a "raw" twice-transformed
+                    // by both source and C2C scaling would have no physical
+                    // meaning at the target channel).
+                    let fwd_value = target.transform(update.value);
                     c2c_forwards.push(ChannelPointUpdate {
                         channel_id: target.channel_id,
                         point_type: target.point_type,
                         point_id: target.point_id,
-                        value: update.value,
-                        raw_value: update.raw_value,
+                        value: fwd_value,
+                        raw_value: None,
                         cascade_depth: update.cascade_depth + 1,
                     });
                 }
@@ -373,13 +385,16 @@ fn write_channel_batch_buffered_impl(
                     );
                     result.cycles_detected += 1;
                 } else {
-                    // Add to forwards (target will be marked visited when processed)
+                    // Same semantics as the buffered path: transform value,
+                    // drop raw_value so :raw is not polluted with a
+                    // twice-transformed pseudo-raw.
+                    let fwd_value = target.transform(update.value);
                     c2c_forwards.push(ChannelPointUpdate {
                         channel_id: target.channel_id,
                         point_type: target.point_type,
                         point_id: target.point_id,
-                        value: update.value,
-                        raw_value: update.raw_value,
+                        value: fwd_value,
+                        raw_value: None,
                         cascade_depth: update.cascade_depth + 1,
                     });
                 }
@@ -397,15 +412,25 @@ fn write_channel_batch_buffered_impl(
         );
         result.channel_writes += buffered;
 
-        // Buffer instance data (C2M results) + sidecar ts hash
+        // Buffer instance data (C2M results) + sidecar ts hash.
+        // Surface BufferOverflow via warn! and slot_misses so dropped
+        // fields are observable rather than silently lost; the c2m_writes
+        // counter still increments on attempt so call sites that don't
+        // distinguish "tried" from "succeeded" stay backward-compatible.
         for (instance_id, values) in instance_writes {
             let instance_key = config.instance_measurement_key(instance_id);
-            write_buffer.buffer_hash_mset(&instance_key, values);
+            if let Err(e) = write_buffer.buffer_hash_mset(&instance_key, values) {
+                warn!("C2M instance buffer dropped: {}", e);
+                result.slot_misses += e.dropped_fields;
+            }
             result.c2m_writes += 1;
         }
         for (instance_id, ts_values) in instance_ts_writes {
             let instance_ts_key = config.instance_measurement_ts_key(instance_id);
-            write_buffer.buffer_hash_mset(&instance_ts_key, ts_values);
+            if let Err(e) = write_buffer.buffer_hash_mset(&instance_ts_key, ts_values) {
+                warn!("C2M ts buffer dropped: {}", e);
+                result.slot_misses += e.dropped_fields;
+            }
         }
 
         // Process C2C forwards recursively (also buffered)
@@ -458,17 +483,20 @@ mod tests {
             c2m_writes: 5,
             c2c_forwards: 2,
             cycles_detected: 1,
+            slot_misses: 4,
         };
         let r2 = BatchRoutingResult {
             channel_writes: 3,
             c2m_writes: 1,
             c2c_forwards: 1,
             cycles_detected: 2,
+            slot_misses: 1,
         };
         r1.merge(r2);
         assert_eq!(r1.channel_writes, 13);
         assert_eq!(r1.c2m_writes, 6);
         assert_eq!(r1.c2c_forwards, 3);
         assert_eq!(r1.cycles_detected, 3);
+        assert_eq!(r1.slot_misses, 5);
     }
 }

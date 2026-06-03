@@ -273,6 +273,23 @@ impl RedisClient {
             .with_context(|| format!("Failed to HSET field {} in key: {}", field, key))
     }
 
+    /// Hash set if field does not exist (Redis HSETNX).
+    ///
+    /// Returns Ok(true) if the field was created, Ok(false) if the field
+    /// already existed (left untouched). Use for structural initialization
+    /// that must not overwrite a concurrently-written value.
+    pub async fn hsetnx(&self, key: &str, field: &str, value: String) -> Result<bool> {
+        let mut conn = self.get_connection().await?;
+        let inserted: i64 = redis::cmd("HSETNX")
+            .arg(key)
+            .arg(field)
+            .arg(value)
+            .query_async(&mut *conn)
+            .await
+            .with_context(|| format!("Failed to HSETNX field {} in key: {}", field, key))?;
+        Ok(inserted == 1)
+    }
+
     /// Hash operation - increment field by integer value
     pub async fn hincrby(&self, key: &str, field: &str, increment: i64) -> Result<i64> {
         let mut conn = self.get_connection().await?;
@@ -579,6 +596,42 @@ impl RedisClient {
         pipe.query_async::<()>(&mut *conn)
             .await
             .with_context(|| "Failed to execute pipeline HMSET")?;
+
+        Ok(())
+    }
+
+    /// Atomic variant of pipeline_hmset (MULTI/EXEC).
+    ///
+    /// Wraps the batch in a Redis transaction so all HMSETs commit
+    /// together or not at all. Use where downstream readers expect
+    /// cross-key consistency (value + ts pair); rare partial-flush
+    /// races on plain pipelines cannot leave Redis in a torn state.
+    pub async fn pipeline_hmset_atomic(
+        &self,
+        operations: &[(String, Vec<(String, String)>)],
+    ) -> Result<()> {
+        if operations.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        for (key, fields) in operations {
+            if !fields.is_empty() {
+                let mut cmd = redis::cmd("HSET");
+                cmd.arg(key.as_str());
+                for (field, value) in fields {
+                    cmd.arg(field.as_str()).arg(value.as_str());
+                }
+                pipe.add_command(cmd);
+            }
+        }
+
+        pipe.query_async::<()>(&mut *conn)
+            .await
+            .with_context(|| "Failed to execute atomic pipeline HMSET")?;
 
         Ok(())
     }

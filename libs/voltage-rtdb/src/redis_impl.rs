@@ -44,7 +44,12 @@ impl Rtdb for RedisRtdb {
     }
 
     async fn set<'a>(&'a self, key: &'a str, value: Bytes) -> Result<()> {
-        let s = std::str::from_utf8(value.as_ref())?;
+        let s = std::str::from_utf8(value.as_ref()).with_context(|| {
+            format!(
+                "non-UTF-8 value rejected for SET {} (see Rtdb trait docs)",
+                key
+            )
+        })?;
         self.client
             .set(key, s)
             .await
@@ -76,10 +81,30 @@ impl Rtdb for RedisRtdb {
 
     async fn hash_set<'a>(&'a self, key: &'a str, field: &'a str, value: Bytes) -> Result<()> {
         let s = std::str::from_utf8(value.as_ref())
-            .context("UTF-8 conversion failed")?
+            .with_context(|| {
+                format!(
+                    "non-UTF-8 value rejected for HSET {}:{} (see Rtdb trait docs)",
+                    key, field
+                )
+            })?
             .to_owned();
         self.client
             .hset(key, field, s)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn hash_setnx<'a>(&'a self, key: &'a str, field: &'a str, value: Bytes) -> Result<bool> {
+        let s = std::str::from_utf8(value.as_ref())
+            .with_context(|| {
+                format!(
+                    "non-UTF-8 value rejected for HSETNX {}:{} (see Rtdb trait docs)",
+                    key, field
+                )
+            })?
+            .to_owned();
+        self.client
+            .hsetnx(key, field, s)
             .await
             .map_err(|e| anyhow::anyhow!(e))
     }
@@ -111,7 +136,12 @@ impl Rtdb for RedisRtdb {
             .into_iter()
             .map(|(k, v)| {
                 let s = std::str::from_utf8(v.as_ref())
-                    .context("UTF-8 conversion failed")?
+                    .with_context(|| {
+                        format!(
+                            "non-UTF-8 value rejected for HMSET {}:{} (see Rtdb trait docs)",
+                            key, k
+                        )
+                    })?
                     .to_owned();
                 Ok((k, s))
             })
@@ -258,32 +288,57 @@ impl Rtdb for RedisRtdb {
     }
 
     async fn pipeline_hash_mset(&self, operations: crate::traits::HashMsetOps) -> Result<()> {
-        if operations.is_empty() {
+        let string_operations = convert_pipeline_ops(operations)?;
+        if string_operations.is_empty() {
             return Ok(());
         }
-
-        // Convert Arc<str> + Bytes to (String, String) for the Redis client
-        let string_operations: Result<Vec<_>> = operations
-            .into_iter()
-            .map(|(key, fields)| {
-                let string_fields: Result<Vec<_>> = fields
-                    .into_iter()
-                    .map(|(f, v)| {
-                        let s = std::str::from_utf8(v.as_ref())
-                            .context("UTF-8 conversion failed")?
-                            .to_owned();
-                        Ok((f.to_string(), s))
-                    })
-                    .collect();
-                Ok((key, string_fields?))
-            })
-            .collect();
-
         self.client
-            .pipeline_hmset(&string_operations?)
+            .pipeline_hmset(&string_operations)
             .await
             .map_err(|e| anyhow::anyhow!(e))
     }
+
+    async fn pipeline_hash_mset_atomic(
+        &self,
+        operations: crate::traits::HashMsetOps,
+    ) -> Result<()> {
+        let string_operations = convert_pipeline_ops(operations)?;
+        if string_operations.is_empty() {
+            return Ok(());
+        }
+        self.client
+            .pipeline_hmset_atomic(&string_operations)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
+type StringHmsetOps = Vec<(String, Vec<(String, String)>)>;
+
+/// Convert Arc<str> + Bytes to (String, String) for the Redis client.
+/// Extracted so both atomic and non-atomic pipeline paths share the
+/// UTF-8 validation logic without code duplication.
+fn convert_pipeline_ops(operations: crate::traits::HashMsetOps) -> Result<StringHmsetOps> {
+    operations
+        .into_iter()
+        .map(|(key, fields)| {
+            let string_fields: Result<Vec<_>> = fields
+                .into_iter()
+                .map(|(f, v)| {
+                    let s = std::str::from_utf8(v.as_ref())
+                        .with_context(|| {
+                            format!(
+                                "non-UTF-8 value rejected for pipeline HSET {}:{} (see Rtdb trait docs)",
+                                key, f
+                            )
+                        })?
+                        .to_owned();
+                    Ok((f.to_string(), s))
+                })
+                .collect();
+            Ok((key, string_fields?))
+        })
+        .collect()
 }
 
 #[cfg(test)]

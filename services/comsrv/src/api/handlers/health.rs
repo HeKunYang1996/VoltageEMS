@@ -216,34 +216,59 @@ pub async fn health_check<R: Rtdb>(
         );
     }
 
-    // SHM stats: slot occupancy + writer heartbeat
-    if let Some(handle) = manager.shm_handle() {
-        let mut parts = Vec::new();
+    // SHM stats: slot occupancy + writer heartbeat. Always emit a "shm"
+    // entry so operators / Docker healthcheck can distinguish "SHM
+    // healthy" from "SHM never initialized" — the old `if let Some(handle)`
+    // path silently dropped the entry when the handle was None and
+    // returned 200 alongside Redis/SQLite health, masking a degraded SHM.
+    match manager.shm_handle() {
+        Some(handle) => {
+            let mut parts = Vec::new();
 
-        if let Some(guard) = handle.layout()
-            && let Some(layout) = guard.as_ref()
-        {
-            parts.push(format!("total={}", layout.writer.slot_count()));
-            parts.push(format!("heartbeat_ms={}", layout.writer.writer_heartbeat()));
-        }
+            if let Some(guard) = handle.layout()
+                && let Some(layout) = guard.as_ref()
+            {
+                parts.push(format!("total={}", layout.writer.slot_count()));
+                parts.push(format!("heartbeat_ms={}", layout.writer.writer_heartbeat()));
+            }
 
-        if let Some(stats) = manager.slot_bitmap_stats() {
-            parts.push(format!("allocated={}", stats.allocated_slots));
-            parts.push(format!("free={}", stats.free_slots));
-        }
+            if let Some(stats) = manager.slot_bitmap_stats() {
+                parts.push(format!("allocated={}", stats.allocated_slots));
+                parts.push(format!("free={}", stats.free_slots));
+            }
 
-        checks.insert(
-            "shm".to_string(),
-            ComponentHealth {
-                status: HealthServiceStatus::Healthy,
-                message: Some(if parts.is_empty() {
-                    "unavailable".to_string()
-                } else {
-                    parts.join(", ")
-                }),
-                duration_ms: None,
-            },
-        );
+            checks.insert(
+                "shm".to_string(),
+                ComponentHealth {
+                    status: HealthServiceStatus::Healthy,
+                    message: Some(if parts.is_empty() {
+                        "unavailable".to_string()
+                    } else {
+                        parts.join(", ")
+                    }),
+                    duration_ms: None,
+                },
+            );
+        },
+        None => {
+            // SHM never initialized — the writer thread either hasn't
+            // started yet or failed to create the mmap. Report Degraded
+            // AND flip overall_healthy so the response gets 503 instead
+            // of 200; otherwise Docker readiness probes (which only see
+            // the HTTP status code) would treat a node running without
+            // its hot data path as fully healthy.
+            checks.insert(
+                "shm".to_string(),
+                ComponentHealth {
+                    status: HealthServiceStatus::Degraded,
+                    message: Some(
+                        "not initialized (writer not started or mmap failed)".to_string(),
+                    ),
+                    duration_ms: None,
+                },
+            );
+            overall_healthy = false;
+        },
     }
 
     // Collect system metrics (CPU, memory)
@@ -255,13 +280,18 @@ pub async fn health_check<R: Rtdb>(
         HealthServiceStatus::Unhealthy
     };
 
-    // Build error message before moving checks into health struct
+    // Build error message before moving checks into health struct.
+    // Include both Unhealthy and Degraded components so the 503 body
+    // explains the SHM-missing case rather than being empty.
     let error_msg = if !overall_healthy {
         Some(format!(
             "Service dependencies are unhealthy: {}",
             checks
                 .iter()
-                .filter(|(_, c)| matches!(c.status, HealthServiceStatus::Unhealthy))
+                .filter(|(_, c)| matches!(
+                    c.status,
+                    HealthServiceStatus::Unhealthy | HealthServiceStatus::Degraded
+                ))
                 .map(|(k, c)| format!("{}: {}", k, c.message.as_deref().unwrap_or("unknown")))
                 .collect::<Vec<_>>()
                 .join(", ")

@@ -3,10 +3,18 @@
 //! Provides shared memory (SHM) and IPC components for zero-latency
 //! cross-process data sharing between comsrv and modsrv containers.
 //!
+//! # Module Boundary
+//!
+//! - **core::** — pure SHM infrastructure (slot storage + bitmap). No business
+//!   knowledge. Must stay free of `voltage-model` / `voltage-routing` deps so
+//!   it can be promoted to a standalone `voltage-shm-slots` crate later.
+//! - everything else — business adapters (channel/instance/routing/M2C
+//!   dispatch). These will be progressively pushed out of this crate.
+//!
 //! # Key Components
 //!
-//! - **vec_impl**: Vector-based point storage with atomic PointSlot
-//! - **slot_bitmap**: Dynamic slot allocation bitmap
+//! - **core::slot**: Vector-based point storage with atomic PointSlot
+//! - **core::bitmap**: Dynamic slot allocation bitmap
 //! - **notification**: M2C command notification struct
 //! - **notifier**: UDS event notification for M2C dispatch
 //! - **instance_index**: Dynamic instance management with shared slots
@@ -15,16 +23,35 @@
 //! - **snapshot**: Periodic SHM snapshot management
 //! - **shared_config**: SharedConfig, ChannelToSlotIndex, utility functions
 
+pub mod core;
+
+// Backward-compat shims for the old top-level module paths. External
+// consumers that imported `voltage_rtdb_shm::vec_impl::PointSlot` or
+// `voltage_rtdb_shm::slot_bitmap::SlotBitmap` keep working.
+pub mod vec_impl {
+    pub use crate::core::slot::*;
+}
+pub mod slot_bitmap {
+    pub use crate::core::bitmap::*;
+}
+
+pub mod layout;
+
 pub mod channel_points;
-
-pub mod vec_impl;
-
-pub mod slot_bitmap;
 
 pub mod notification;
 
 #[cfg(unix)]
 pub mod notifier;
+
+// PointWatch: cross-process event-driven notification (comsrv → modsrv)
+#[cfg(unix)]
+pub mod point_watch;
+pub mod point_watch_event;
+#[cfg(unix)]
+pub mod point_watch_listener;
+#[cfg(unix)]
+pub mod subscription_bitmap;
 
 pub mod instance_index;
 
@@ -42,21 +69,30 @@ pub mod shm_handle;
 
 pub mod batch_direct;
 
+#[cfg(unix)]
+pub mod dispatch;
+
 // Re-exports for convenience
+pub use core::bitmap::{BitmapStats, SlotAllocation, SlotBitmap, SlotBitmapHeader};
+pub use core::reader::SlotReader;
+pub use core::slot::PointSlot;
+pub use core::slot_io::{SlotIo, SlotIoWrite, SlotRead};
+pub use core::writer::SlotWriter;
 pub use instance_index::{DynamicInstanceLayout, InstanceIndex, SharedSlotRef};
 pub use notification::ShmNotification;
 #[cfg(unix)]
 pub use notifier::{DEFAULT_UDS_PATH, NotifyResult, ShmNotifier};
-pub use slot_bitmap::{BitmapStats, SlotAllocation, SlotBitmap, SlotBitmapHeader};
-pub use vec_impl::PointSlot;
 
 // Channel point counts (routing-independent SHM layout data source)
 pub use channel_points::ChannelPointCounts;
 
+// Channel slot layout (business adapter, not part of core)
+pub use layout::{ChannelLayout, allocate_layouts};
+
 // Unified shared memory
 pub use unified_shm::{
-    ChannelLayout, UNIFIED_MAGIC, UNIFIED_VERSION, UnifiedHeader, UnifiedReader, UnifiedWriter,
-    allocate_layouts, calculate_file_size,
+    UNIFIED_MAGIC, UNIFIED_VERSION, UnifiedHeader, UnifiedReader, UnifiedWriter,
+    calculate_file_size,
 };
 
 // Channel index for dynamic channel management
@@ -79,3 +115,18 @@ pub use shm_handle::{ShmHandle, ShmLayout};
 
 // Direct SHM batch write (bridges SHM + routing + RTDB)
 pub use batch_direct::write_channel_batch_direct;
+
+// SHM/UDS action dispatch — shared by modsrv HTTP path and rules executor
+#[cfg(unix)]
+pub use dispatch::{ActionDispatch, DispatchOutcome, NoopDispatch, ShmDispatch};
+
+// PointWatch public API
+#[cfg(unix)]
+pub use point_watch::{POINT_WATCH_UDS_PATH, PointWatchSignaler};
+pub use point_watch_event::PointWatchEvent;
+#[cfg(unix)]
+pub use point_watch_listener::PointWatchListener;
+#[cfg(unix)]
+pub use subscription_bitmap::{
+    SubscriptionBitmap, WATCH_BITMAP_SIZE, WATCH_WORDS_COUNT, bitmap_path_from_shm,
+};

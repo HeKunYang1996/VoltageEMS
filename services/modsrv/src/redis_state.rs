@@ -293,23 +293,34 @@ where
     //    Sidecar inst:{id}:M:ts is pre-seeded with 0 so apigateway WebSocket
     //    never returns an empty `ts` map for an active instance (parity with
     //    the comsrv:{ch}:{T|S}:ts convention).
+    //
+    //    HSETNX (not HSET) so that on a hot reload we only fill MISSING
+    //    fields — concurrent comsrv ShmRedisSync writes that already
+    //    landed a real reading are preserved. Plain HSET would clobber the
+    //    live value with 0 every reload cycle.
     let m_key = keyspace.instance_measurement_key(instance_id);
     let m_ts_key = keyspace.instance_measurement_ts_key(instance_id);
     for point in measurements {
         let field = point.measurement_id.to_string();
-        redis.hash_set(&m_key, &field, Bytes::from("0")).await?;
-        redis.hash_set(&m_ts_key, &field, Bytes::from("0")).await?;
+        redis.hash_setnx(&m_key, &field, Bytes::from("0")).await?;
+        redis
+            .hash_setnx(&m_ts_key, &field, Bytes::from("0"))
+            .await?;
     }
 
     // 2. Initialize inst:{id}:A Hash with all action points set to 0
     //    Consistent with M points: pre-initialize at startup for queries and
     //    M2C routing validation. Sidecar :A:ts follows the same convention.
+    //    HSETNX rationale matches the M block above — never overwrite a
+    //    real action value with 0 during a routing reload.
     let a_key = keyspace.instance_action_key(instance_id);
     let a_ts_key = keyspace.instance_action_ts_key(instance_id);
     for action in actions {
         let field = action.action_id.to_string();
-        redis.hash_set(&a_key, &field, Bytes::from("0")).await?;
-        redis.hash_set(&a_ts_key, &field, Bytes::from("0")).await?;
+        redis.hash_setnx(&a_key, &field, Bytes::from("0")).await?;
+        redis
+            .hash_setnx(&a_ts_key, &field, Bytes::from("0"))
+            .await?;
     }
 
     // 3. Set inst:{id}:name for bidirectional lookup and aggregation queries
@@ -445,17 +456,37 @@ pub async fn sync_measurement<R>(
 where
     R: Rtdb,
 {
+    // Nothing to write: skip the round-trip. Without this guard the
+    // pipeline below would emit `HMSET inst:{id}:M:ts` with zero
+    // field/value pairs, which is a Redis protocol error.
+    if measurement.is_empty() {
+        return Ok(());
+    }
+
     let keyspace = KeySpaceConfig::production_cached();
     let key = keyspace.instance_measurement_key(instance_id);
+    let ts_key = keyspace.instance_measurement_ts_key(instance_id);
     let now_ms = SystemTimeProvider.now_millis();
-    // Use into_iter() to consume ownership and avoid cloning keys
-    let mut fields: Vec<(String, Bytes)> = measurement
-        .into_iter()
-        .map(|(k, v)| (k, value_into_bytes(v)))
-        .collect();
-    fields.push(("_updated_at".to_string(), Bytes::from(now_ms.to_string())));
+    let now_bytes = Bytes::from(now_ms.to_string());
+    // Build value + ts pairs and pipeline them in one round-trip so readers
+    // (rules deadband, UI staleness) never observe a new value paired with
+    // an old ts. pipeline_hash_mset takes Vec<(Arc<str>, Bytes)>, so convert.
+    use std::sync::Arc;
+    let mut value_fields: Vec<(Arc<str>, Bytes)> = Vec::with_capacity(measurement.len() + 1);
+    let mut ts_fields: Vec<(Arc<str>, Bytes)> = Vec::with_capacity(measurement.len());
+    for (k, v) in measurement {
+        let field: Arc<str> = Arc::from(k);
+        ts_fields.push((Arc::clone(&field), now_bytes.clone()));
+        value_fields.push((field, value_into_bytes(v)));
+    }
+    value_fields.push((Arc::from("_updated_at"), now_bytes.clone()));
 
-    redis.hash_mset(&key, fields).await
+    // Atomic pipeline (MULTI/EXEC): readers across the M and M:ts hashes
+    // must never observe a new value paired with a stale timestamp, even
+    // under a connection partial-flush. Plain pipeline cannot guarantee
+    // this; atomic variant wraps both HMSETs in a single transaction.
+    let ops = vec![(key, value_fields), (ts_key, ts_fields)];
+    redis.pipeline_hash_mset_atomic(ops).await
 }
 
 /// Read instance real-time data (replaces `modsrv_get_instance_data`).
