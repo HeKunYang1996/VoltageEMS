@@ -74,3 +74,17 @@ export interface RuleDetailResponse {
   list: RuleInfo[]
   total: number
 }
+
+/** PUT /alarmApi/rules/{id} — 所有字段可选，仅提交需要更新的字段 */
+export interface UpdateAlarmRulePayload {
+  service_type?: string
+  channel_id?: number
+  data_type?: string
+  point_id?: number
+  rule_name?: string
+  warning_level?: number
+  operator?: Operator
+  value?: number
+  enabled?: boolean
+  description?: string
+}

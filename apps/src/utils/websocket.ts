@@ -439,7 +439,10 @@ class WebSocketManager {
       this.connectionStats.connectTime = Date.now()
 
       try {
-        this.ws = new WebSocket(this.config.url)
+        // 浏览器 WebSocket API 不支持自定义 Header，
+        // 后端 require_jwt 中间件同时接受 ?token= 查询参数
+        const wsUrl = `${this.config.url}?token=${encodeURIComponent(userStore.token)}`
+        this.ws = new WebSocket(wsUrl)
         this.setupEventHandlers(
           () => {
             this.connectingPromise = null

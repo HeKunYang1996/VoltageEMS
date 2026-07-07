@@ -1,19 +1,29 @@
 import { type DirectiveBinding, unref } from 'vue'
 import { useUserStore } from '@/stores/user'
+import { normalizeRoleName, resolvePermissionAllowed } from '@/utils/rolePermission'
+
 /**
- * 自定义指令 v-permission
- * 用法：<button v-permission="['Admin', 'editor']">仅管理员和编辑可见</button>
- * 只有当前用户角色在传入的角色数组中时，元素才会显示，否则会被移除
+ * v-permission — hide elements when the current user lacks permission.
+ *
+ * Usage:
+ *   <button v-permission="'engineer'">Save / 系统设置 / 配置操作</button>
+ *   <button v-permission="'admin'">用户管理（仅 Admin）</button>
+ *   <button v-permission="['Admin']">Legacy array form</button>
  */
+function applyPermission(el: HTMLElement, binding: DirectiveBinding) {
+  const userStore = useUserStore()
+  const roleName = normalizeRoleName(userStore.userInfo?.role?.name_en)
+  if (!resolvePermissionAllowed(binding.value, roleName)) {
+    el.parentNode?.removeChild(el)
+  }
+}
+
 const permissionDirective = {
-  mounted(el: HTMLElement, binding: DirectiveBinding<string[]>) {
-    const allowedRoles = binding.value
-    const userStore = useUserStore()
-    const userRole = userStore.roles
-    if (!userRole || !allowedRoles.includes(userRole[0])) {
-      // 如果没有权限，移除元素
-      el.parentNode && el.parentNode.removeChild(el)
-    }
+  mounted(el: HTMLElement, binding: DirectiveBinding) {
+    applyPermission(el, binding)
+  },
+  updated(el: HTMLElement, binding: DirectiveBinding) {
+    applyPermission(el, binding)
   },
 }
 

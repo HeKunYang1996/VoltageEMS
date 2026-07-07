@@ -91,6 +91,7 @@
 }
 
 .vt-pagination {
+  position: relative;
   display: flex;
   justify-content: flex-end;
   padding: var(--vt-space-5) 0;

@@ -14,79 +14,41 @@ import oilIcon from '@/assets/icons/Oil.svg'
 import voltageIcon from '@/assets/icons/Voltage.svg'
 import coolantTempIcon from '@/assets/icons/CoolantTemp.svg'
 import { formatNumber } from '@/utils/common'
-import { watch, ref } from 'vue'
-import useWebSocket from '@/composables/useWebSocket'
+import { watch, ref, reactive, computed } from 'vue'
+import useTopologySubscribe from '@/composables/useTopologySubscribe'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
-// WebSocket 数据
+const topoStore = useDeviceTopologyStore()
+const dgInstanceId = computed<number | undefined>(() => topoStore.getInstanceIds('Diesel')[0])
 const wsData = ref<any>(null)
 
-// 订阅 WebSocket - Overview 使用 inst 源
-useWebSocket(
-  {
-    source: 'inst',
-    channels: [2],
-    dataTypes: ['A', 'M', 'P'] as any,
-    interval: 1000,
-  },
-  {
-    onBatchDataUpdate: (data: any) => {
-      wsData.value = data
-    },
-  },
+useTopologySubscribe(
+  () => topoStore.getInstanceIds('Diesel'),
+  { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
+  { onBatchDataUpdate: (data: any) => { wsData.value = data } },
 )
 
 const energyCardData = reactive([
-  //no
-  {
-    pointId: 1,
-    title: 'Power',
-    icon: powerIcon,
-    value: '-',
-    unit: 'kW',
-  },
-  //no
-  {
-    pointId: 13,
-    title: 'oil',
-    icon: oilIcon,
-    value: '-',
-    unit: '%',
-  },
-  //no
-  {
-    pointId: 3,
-    title: 'Voltage',
-    icon: voltageIcon,
-    value: '-',
-    unit: 'V',
-  },
-  //no
-  {
-    pointId: 14,
-    title: 'Temperature',
-    icon: coolantTempIcon,
-    value: '-',
-    unit: '℃',
-  },
+  { pointId: 1,  title: 'Power',       icon: powerIcon,       value: '-', unit: 'kW' },
+  { pointId: 13, title: 'oil',         icon: oilIcon,         value: '-', unit: '%' },
+  { pointId: 3,  title: 'Voltage',     icon: voltageIcon,     value: '-', unit: 'V' },
+  { pointId: 14, title: 'Temperature', icon: coolantTempIcon, value: '-', unit: '℃' },
 ])
 
-// 监听 WebSocket 数据更新
 watch(
   wsData,
   (data) => {
     if (!data?.updates?.length) return
-    // 从数据类型 M 中取值
+    const instanceId = dgInstanceId.value
     const mUpdate = data.updates.find(
-      (item: any) => item.channel_id === 2 && item.data_type === 'M',
+      (item: any) => item.channel_id === instanceId && item.data_type === 'M',
     )
     if (!mUpdate) return
     const values = mUpdate.values || {}
     energyCardData.forEach((item: any) => {
-      if (item.pointId) {
-        const pointValue = values[item.pointId]
-        if (pointValue !== undefined && pointValue !== null) {
-          item.value = formatNumber(pointValue)
-        }
+      const pointValue = values[item.pointId]
+      if (pointValue !== undefined && pointValue !== null) {
+        item.value = formatNumber(pointValue)
       }
     })
   },
@@ -135,10 +97,6 @@ watch(
   .pv-overview__content {
     width: 100%;
     flex: 1;
-
-    // background-image: url('@/assets/images/DieselGenerator-bg.png');
-    // background-repeat: no-repeat;
-    // background-size: 100% 100%;
   }
 }
 </style>

@@ -115,6 +115,8 @@ const props = withDefaults(
     showFullScreen?: boolean
     showDownload?: boolean
     title?: string
+    /** 进入视口后再初始化 ECharts，用于多图页面降低卡顿 */
+    lazy?: boolean
   }>(),
   {
     // 默认值
@@ -133,6 +135,7 @@ const props = withDefaults(
     showToolbox: true,
     showFullScreen: true,
     showDownload: true,
+    lazy: false,
   },
 )
 
@@ -561,14 +564,29 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
 // 初始化echarts
 const initChart = () => {
   if (!chartRef.value) return
-  if (chartInstance) {
-    chartInstance.dispose()
+  if (!chartInstance) {
+    chartInstance = echarts.init(chartRef.value, {
+      renderer: 'canvas',
+      devicePixelRatio: window.devicePixelRatio,
+    })
   }
-  chartInstance = echarts.init(chartRef.value, {
-    renderer: 'canvas',
-    devicePixelRatio: window.devicePixelRatio,
-  })
-  chartInstance.setOption(getChartOption({ isFullScreen: false }))
+  chartInstance.setOption(getChartOption({ isFullScreen: false }), { notMerge: true })
+}
+
+let lazyObserver: IntersectionObserver | null = null
+const setupLazyObserver = () => {
+  if (!props.lazy || !chartRef.value || lazyObserver) return
+  lazyObserver = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0]
+      if (!entry?.isIntersecting) return
+      initChart()
+      lazyObserver?.disconnect()
+      lazyObserver = null
+    },
+    { rootMargin: '80px' },
+  )
+  lazyObserver.observe(chartRef.value)
 }
 
 // 初始化全屏图表
@@ -658,18 +676,25 @@ const resizeChart = () => {
 watch(
   () => [props.xAxiosOption.xAxiosData, props.series],
   () => {
+    if (props.lazy && !chartInstance) return
     initChart()
   },
   { deep: true },
 )
 
 onMounted(() => {
-  initChart()
+  if (props.lazy) {
+    setupLazyObserver()
+  } else {
+    initChart()
+  }
   window.addEventListener('resize', resizeChart)
   window.addEventListener('resize', resizeFullScreenChart)
 })
 
 onBeforeUnmount(() => {
+  lazyObserver?.disconnect()
+  lazyObserver = null
   window.removeEventListener('resize', resizeChart)
   window.removeEventListener('resize', resizeFullScreenChart)
   chartInstance?.dispose()

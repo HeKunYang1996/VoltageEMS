@@ -2,6 +2,7 @@
   <div class="voltage-class user-management" ref="userManagementRef">
     <div class="user-management__header">
       <IconButton
+        v-permission="'admin'"
         type="primary"
         :icon="userAddIcon"
         text="New user"
@@ -58,6 +59,7 @@
           <el-table-column
             label="Operation"
             fixed="right"
+            v-permission="'admin'"
             class-name="user-management__operation-column"
           >
             <template #default="{ row }">
@@ -75,13 +77,15 @@
           </el-table-column>
         </el-table>
 
-        <div class="user-management__pagination">
+        <div id="user-management-pagination-anchor" class="user-management__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="pagination.total"
             layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#user-management-pagination-anchor"
             @size-change="handlePageSizeChange"
             @current-change="handlePageChange"
           />
@@ -214,26 +218,31 @@ const getAvatarName = (name: string): string => {
     .user-info {
       display: flex;
       align-items: center;
-      gap: 0.1rem;
-      height: 0.4rem;
+      gap: 0.08rem;
+      height: var(--vt-table-cell-line-height);
+      min-width: 0;
 
       .user-avatar {
-        width: 0.4rem;
-        height: 0.4rem;
+        width: var(--vt-table-cell-line-height);
+        height: var(--vt-table-cell-line-height);
         border-radius: 50%;
         background-color: rgba(29, 134, 255, 0.2);
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.19rem;
+        flex-shrink: 0;
+        font-size: 0.1rem;
         letter-spacing: 0%;
         color: rgba(29, 134, 255, 1);
       }
 
       .user-name {
-        font-size: 0.16rem;
+        font-size: 0.14rem;
         letter-spacing: 0%;
         color: rgba(255, 255, 255, 1);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
     }
 
@@ -268,10 +277,6 @@ const getAvatarName = (name: string): string => {
       margin: 0.2rem 0;
     }
   }
-}
-
-:deep(.user-management__table-content .el-table__body-wrapper td .cell) {
-  height: 0.4rem;
 }
 .user-management__operation-column {
   width: 1.2rem;

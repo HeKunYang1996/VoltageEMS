@@ -33,8 +33,11 @@ export async function ensureRoutesInjected() {
   const user = useUserStore()
   if (user.routesInjected) return
 
-  // 如果没有用户信息，使用默认的 Admin 角色
-  const userRoles = user.roles.length > 0 ? user.roles : ['Admin']
+  const userRoles = user.roles
+  if (userRoles.length === 0) {
+    user.clearUserData()
+    throw new Error('No valid roles for route injection')
+  }
   const allowed = filterByRoles(dynamicRoutes, userRoles)
   // 递归添加路由及其子路由
   function addRouteWithChildren(route: RouteItem, parentName?: string) {
@@ -126,7 +129,7 @@ function getAllRouteNames(routes: RouteItem[]): string[] {
  */
 export function getFilteredRoutesForSidebar() {
   const user = useUserStore()
-  // 如果没有用户信息，使用默认的 Admin 角色
-  const userRoles = user.roles.length > 0 ? user.roles : ['Admin']
+  const userRoles = user.roles
+  if (userRoles.length === 0) return []
   return filterByRoles(dynamicRoutes, userRoles)
 }

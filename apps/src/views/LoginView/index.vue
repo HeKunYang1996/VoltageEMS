@@ -45,6 +45,7 @@ import { useUserStore } from '@/stores/user'
 import { useGlobalStore } from '@/stores/global'
 import type { LoginParams } from '@/types/user'
 import { useRouter } from 'vue-router'
+import { assertValidUserRole } from '@/utils/roleGuard'
 // import wsManager from '@/utils/websocket'
 
 const router = useRouter()
@@ -76,6 +77,10 @@ const handleLogin = async (formEl: FormInstance | undefined) => {
         if (res.success) {
           const userInfo = await userStore.getUserInfo()
           if (userInfo.success) {
+            if (!assertValidUserRole(userStore.userInfo)) {
+              await userStore.clearUserData()
+              return
+            }
             // wsManager.connect()
             const redirect = router.currentRoute.value.query.redirect as string
             if (redirect) {

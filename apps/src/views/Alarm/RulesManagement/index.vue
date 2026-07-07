@@ -2,105 +2,55 @@
   <div class="voltage-class rule-management vt-page-shell" ref="ruleManagementRef">
     <LoadingBg :loading="loading">
       <div class="rule-management__header vt-toolbar">
-        <div class="rule-management__search-form vt-toolbar__left" ref="levelSelectRef">
-          <el-form
-            :model="filters"
-            :inline="true"
-            class="test-form rule-management__toolbar-form vt-toolbar-form"
-          >
+        <div class="rule-management__toolbar-left vt-toolbar__left" ref="levelSelectRef">
+          <el-form :model="filters" :inline="true" class="test-form rule-management__toolbar-form vt-toolbar-form">
             <el-form-item label="Keyword:">
               <el-input v-model="filters.keyword" placeholder="Please enter keyword" />
             </el-form-item>
             <el-form-item label="Alarm Level:">
-              <el-select
-                v-model="filters.warning_level"
-                placeholder="Please select level"
-                clearable
-                :append-to="levelSelectRef"
-              >
+              <el-select v-model="filters.warning_level" placeholder="Please select level" clearable
+                :append-to="levelSelectRef">
                 <el-option label="Critical Alarm" :value="1" />
                 <el-option label="Warning Alarm" :value="2" />
                 <el-option label="Info Alarm" :value="3" />
               </el-select>
             </el-form-item>
             <el-form-item label="Enabled:">
-              <el-select
-                v-model="filters.enabled"
-                placeholder="Please select enabled"
-                clearable
-                :append-to="levelSelectRef"
-              >
+              <el-select v-model="filters.enabled" placeholder="Please select enabled" clearable
+                :append-to="levelSelectRef">
                 <el-option label="Enabled" :value="true" />
                 <el-option label="Disabled" :value="false" />
               </el-select>
             </el-form-item>
           </el-form>
-          <div class="form-oprations vt-toolbar__right">
-            <IconButton
-              type="warning"
-              :icon="tableRefreshIcon"
-              text="Reload"
-              custom-class="rule-management__btn"
-              @click="reloadFilters"
-            />
-            <IconButton
-              type="primary"
-              :icon="tableSearchIcon"
-              text="Search"
-              custom-class="rule-management__btn"
-              @click="fetchTableData(true)"
-            />
-            <IconButton
-              v-permission="['Admin']"
-              type="primary"
-              :icon="userAddIcon"
-              text="New rule"
-              custom-class="rule-management__btn"
-              @click="handleAddUser"
-            />
-          </div>
+        </div>
+        <div class="rule-management__toolbar-right vt-toolbar__right">
+          <IconButton type="warning" :icon="tableRefreshIcon" text="Reload" custom-class="rule-management__btn"
+            @click="reloadFilters" />
+          <IconButton type="primary" :icon="tableSearchIcon" text="Search" custom-class="rule-management__btn"
+            @click="fetchTableData(true)" />
+          <IconButton v-permission="'engineer'" type="primary" :icon="userAddIcon" text="New rule"
+            custom-class="rule-management__btn" @click="handleAddUser" />
         </div>
       </div>
       <div class="rule-management__table vt-table-shell">
-        <el-table
-          :data="tableData"
-          class="rule-management__table-content vt-table-content"
-          align="left"
-        >
+        <el-table :data="tableData" class="rule-management__table-content vt-table-content" align="left">
           <!-- <el-table-column prop="id" label="ID" class-name="table-ellipsis" width="80" /> -->
-          <el-table-column
-            prop="rule_name"
-            label="Rule Name"
-            class-name="table-ellipsis"
-            min-width="120"
-          />
+          <el-table-column prop="rule_name" label="Rule Name" class-name="table-ellipsis" min-width="120" />
           <el-table-column prop="warning_level" label="Alarm Level">
             <template #default="{ row }">
-              <span
-                class="rule-management__table-level-text"
-                :class="`alarm-level--${row.warning_level}`"
-              >
+              <span class="rule-management__table-level-text" :class="`alarm-level--${row.warning_level}`">
                 {{ warningLevelText[row.warning_level as 1 | 2 | 3] || '-' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column
-            prop="monitor_data"
-            label="Monitor Data"
-            class-name="table-ellipsis"
-            min-width="100"
-          >
+          <el-table-column prop="monitor_data" label="Monitor Data" class-name="table-ellipsis" min-width="100">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{ formatMonitorData(row) }}</span>
             </template>
           </el-table-column>
-          <el-table-column
-            prop="condition"
-            label="Condition"
-            show-overflow-tooltip
-            class-name="table-ellipsis"
-            min-width="80"
-          >
+          <el-table-column prop="condition" label="Condition" show-overflow-tooltip class-name="table-ellipsis"
+            min-width="80">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{ formatCondition(row) }}</span>
             </template>
@@ -110,39 +60,33 @@
             {{ Array.isArray(row.notification) ? row.notification.join(', ') : row.notification }}
           </template>
         </el-table-column> -->
-          <el-table-column
-            prop="description"
-            label="Description"
-            show-overflow-tooltip
-            class-name="table-ellipsis"
-            min-width="120"
-          >
+          <el-table-column prop="description" label="Description" show-overflow-tooltip class-name="table-ellipsis"
+            min-width="120">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{ row.description || '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column
-            prop="created_at"
-            label="Created At"
-            class-name="table-ellipsis"
-            min-width="120"
-          >
+          <el-table-column prop="created_at" label="Created At" class-name="table-ellipsis" min-width="120">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{
                 formatDateTime(row.created_at)
-              }}</span>
+                }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="enabled" label="Enabled" min-width="80">
             <template #default="{ row }">
               <el-switch
+                v-if="canWrite"
                 :model-value="row.enabled"
                 :loading="switchLoadingId === row.id"
                 @change="handleSwitchChange(row)"
               />
+              <span v-else :class="row.enabled ? 'status-enabled' : 'status-disabled'">
+                {{ row.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column label="Operation" fixed="right" v-permission="['Admin']" min-width="120">
+          <el-table-column label="Operation" fixed="right" v-permission="'engineer'" min-width="120">
             <template #default="{ row }">
               <div class="rule-management__operation">
                 <div class="rule-management__operation-item" @click="handleEdit(row)">
@@ -158,24 +102,22 @@
           </el-table-column>
         </el-table>
 
-        <div class="rule-management__pagination vt-pagination">
+        <div id="alarm-rules-pagination-anchor" class="rule-management__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="pagination.total"
             layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#alarm-rules-pagination-anchor"
             @size-change="handlePageSizeChange"
             @current-change="handlePageChange"
           />
         </div>
       </div>
     </LoadingBg>
-    <RulesOperationForm
-      ref="rulesOperationFormRef"
-      @submit="fetchTableData(true)"
-      @cancel="handleRuleCancel"
-    />
+    <RulesOperationForm ref="rulesOperationFormRef" @submit="fetchTableData(true)" @cancel="handleRuleCancel" />
   </div>
 </template>
 
@@ -190,7 +132,10 @@ import RulesOperationForm from './RulesOperationForm.vue'
 import type { RuleInfo } from '@/types/ruleManagement'
 
 import { useTableData, type TableConfig } from '@/composables/useTableData'
+import { usePermission } from '@/composables/usePermission'
 import { enableRule, disableRule } from '@/api/alarm'
+
+const { canWrite } = usePermission()
 
 const ruleManagementRef = ref<HTMLElement | null>(null)
 const tableConfig: TableConfig = {
@@ -302,13 +247,15 @@ const handleRuleCancel = () => {
 <style scoped lang="scss">
 .voltage-class.rule-management {
   .rule-management__header {
-    .rule-management__search-form {
+    .rule-management__toolbar-left {
       position: relative;
 
-      .form-oprations {
-        align-items: flex-start;
-        gap: 0.1rem;
-      }
+    }
+
+    .rule-management__toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 0.1rem;
     }
 
     .rule-management__btn {
@@ -350,6 +297,14 @@ const handleRuleCancel = () => {
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+
+      .status-enabled {
+        color: var(--el-color-success);
+      }
+
+      .status-disabled {
+        color: var(--el-text-color-secondary);
+      }
     }
   }
 
@@ -357,14 +312,8 @@ const handleRuleCancel = () => {
     height: 0.22rem;
   }
 
-  :deep(.rule-management__table-content .table-ellipsis .cell) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .table-ellipsis__text {
-    max-width: 100%;
+  :deep(.rule-management__toolbar-form.el-form--inline .el-form-item) {
+    margin-bottom: 0;
   }
 }
 </style>

@@ -1,10 +1,10 @@
 <template>
-  <div class="voltage-class alarm-records">
+  <div class="voltage-class alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
       <!-- 表格工具�?-->
-      <div class="alarm-records__toolbar">
-        <div class="alarm-records__toolbar-left" ref="toolbarLeftRef">
-          <el-form :model="filters" inline class="alarm-records__toolbar-form">
+      <div class="alarm-records__toolbar vt-toolbar">
+        <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
+          <el-form :model="filters" inline class="alarm-records__toolbar-form vt-toolbar-form">
             <el-form-item label="Alarm Level:">
               <el-select
                 v-model="filters.warning_level"
@@ -46,7 +46,7 @@
           </el-form>
         </div>
 
-        <div class="alarm-records__toolbar-right">
+        <div class="alarm-records__toolbar-right vt-toolbar__right">
           <IconButton
             type="warning"
             :icon="reloadIcon"
@@ -72,8 +72,8 @@
       </div>
 
       <!-- 表格 -->
-      <div class="alarm-records__table">
-        <el-table :data="tableData" class="alarm-records__table-content">
+      <div class="alarm-records__table vt-table-shell">
+        <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
           <el-table-column
             prop="rule_name"
             label="Name"
@@ -119,13 +119,15 @@
         </el-table>
 
         <!-- 分页组件 -->
-        <div class="alarm-records__pagination">
+        <div id="alarm-history-pagination-anchor" class="alarm-records__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="pagination.total"
             layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#alarm-history-pagination-anchor"
             @size-change="handlePageSizeChange"
             @current-change="handlePageChange"
           />
@@ -301,10 +303,6 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
   flex-direction: column;
 
   .alarm-records__toolbar {
-    padding-bottom: 0.2rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
 
     .alarm-records__toolbar-left {
       position: relative;
@@ -350,28 +348,10 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
       }
     }
 
-    .alarm-records__pagination {
-      padding: 0.2rem 0;
-      display: flex;
-      justify-content: flex-end;
-    }
   }
 
   :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
-  }
-
-  :deep(.alarm-records__table-content .table-ellipsis .cell) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .table-ellipsis__text {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .alarm-level--1 {

@@ -82,13 +82,15 @@
         </el-table>
 
         <!-- 分页组件 -->
-        <div class="alarm-records__pagination vt-pagination">
+        <div id="alarm-current-pagination-anchor" class="alarm-records__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="pagination.total"
             layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#alarm-current-pagination-anchor"
             @size-change="handlePageSizeChange"
             @current-change="handlePageChange"
           />
@@ -183,14 +185,8 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
     }
   }
 
-  :deep(.alarm-records__table-content .table-ellipsis .cell) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .table-ellipsis__text {
-    max-width: 100%;
+  :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
+    margin-bottom: 0;
   }
 }
 </style>

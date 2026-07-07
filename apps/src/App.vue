@@ -6,6 +6,7 @@ import wsManager from '@/utils/websocket'
 import { useRouter } from 'vue-router'
 import { useGlobalStore } from '@/stores/global'
 import { useUserStore } from '@/stores/user'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { storeToRefs } from 'pinia'
 import AppSkeleton from '@/components/common/AppSkeleton.vue'
 
@@ -13,6 +14,7 @@ const locale = en
 const router = useRouter()
 const globalStore = useGlobalStore()
 const userStore = useUserStore()
+const topoStore = useDeviceTopologyStore()
 const { appInitializing } = storeToRefs(globalStore)
 
 const handleAlarmDetail = () => {
@@ -27,6 +29,8 @@ const initWebSocket = async () => {
   try {
     await wsManager.connect()
     console.log('[main] websocket connected')
+    // 加载站点拓扑绑定，供所有设备页面替代硬编码 instanceId/channelId
+    topoStore.load().catch((e) => console.warn('[main] topology load failed:', e))
 
     wsManager.setGlobalListeners({
       onConnect: () => {

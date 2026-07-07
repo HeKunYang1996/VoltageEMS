@@ -86,3 +86,9 @@ $button-font-size-large: var(--vt-font-size-md);
 $button-line-height-small: var(--vt-button-line-height-sm);
 $button-line-height-base: var(--vt-button-line-height);
 $button-line-height-large: var(--vt-button-line-height-lg);
+
+$table-row-height: var(--vt-table-row-height);
+$table-cell-padding-y: var(--vt-table-cell-padding-y);
+$table-cell-padding-x: var(--vt-table-cell-padding-x);
+$table-cell-line-height: var(--vt-table-cell-line-height);
+$table-cell-inner-height: calc(#{$table-row-height} - #{$table-cell-padding-y} * 2);

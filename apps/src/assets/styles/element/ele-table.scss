@@ -1,3 +1,7 @@
+@use './theme-vars.scss' as *;
+@use './_select-trigger.scss' as select-trigger;
+@use './_table-row.scss' as table-row;
+
 .voltage-class {
   .el-table {
     background-color: transparent;
@@ -13,11 +17,10 @@
         background: rgba(84, 98, 140, 0.2);
 
         th {
+          @include table-row.vt-table-cell-shell;
           background: transparent;
           color: rgba(255, 255, 255, 0.6);
           font-weight: 400;
-          font-size: 0.14rem;
-          line-height: 0.22rem;
 
           &:first-child {
             border-left: none;
@@ -33,15 +36,8 @@
           }
 
           .cell {
-            padding: 0 !important;
-            line-height: 0.22rem;
+            @include table-row.vt-table-cell-inner;
           }
-        }
-
-        .el-table__cell {
-          padding: 0.09rem 0.2rem;
-          border: none;
-          border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
         }
       }
 
@@ -57,10 +53,8 @@
         }
 
         td {
-          padding: 0.09rem 0.2rem;
+          @include table-row.vt-table-cell-shell;
           color: #fff;
-          font-size: 0.14rem;
-          line-height: 0.4rem;
           border-color: rgba(255, 255, 255, 0.1);
 
           &:first-child {
@@ -82,23 +76,7 @@
           }
 
           .cell {
-            display: block !important;
-            height: 0.4rem !important;
-            padding: 0 !important;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            line-height: 0.4rem;
-
-            &.el-tooltip {
-              // padding-right: 0.4rem;
-
-              span {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-            }
+            @include table-row.vt-table-cell-inner;
           }
         }
 
@@ -117,7 +95,7 @@
           }
 
           .el-table__expand-icon {
-            height: 0.2rem;
+            height: $table-cell-inner-height;
             color: #fff;
             font-size: 0.14rem;
 
@@ -189,7 +167,7 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    height: 0.32rem;
+    min-height: $button-height-base;
     margin-top: 0.2rem;
 
     button {
@@ -223,10 +201,13 @@
 
     .el-pagination__sizes {
       display: flex;
+      align-items: center;
       margin-left: 0.16rem;
 
       .el-select {
         width: 1.28rem;
+        --vt-select-width: 1.28rem;
+        @include select-trigger.vt-el-select-trigger;
       }
     }
 
@@ -309,16 +290,78 @@
       }
 
       &.is-text {
-        color: #3b82f6;
+        color: var(--vt-text-primary);
+        transition: color $transition-fast;
 
         &:hover {
-          background-color: #eff6ff;
+          color: $primary-color;
+          background-color: transparent;
         }
       }
     }
   }
 
+  [class*='__operation-item'] {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    color: var(--vt-text-primary);
+    transition: color $transition-fast;
+
+    img {
+      width: 0.14rem;
+      height: 0.14rem;
+      margin-right: 0.04rem;
+      object-fit: contain;
+      transition: filter $transition-fast;
+    }
+
+    [class*='__operation-text'],
+    > span {
+      color: inherit;
+      font-size: 0.14rem;
+      transition: color $transition-fast;
+    }
+
+    &:hover {
+      color: $primary-color;
+
+      img {
+        filter: invert(49%) sepia(79%) saturate(2476%) hue-rotate(359deg) brightness(103%)
+          contrast(104%);
+      }
+    }
+  }
+
   .el-table__expanded-cell {
+    height: auto !important;
+    padding: 0;
     background-color: transparent;
+
+    .cell {
+      display: block !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      padding: 0 !important;
+      overflow: visible;
+      white-space: normal !important;
+      line-height: $table-cell-line-height;
+    }
+  }
+
+  .table-ellipsis .cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .table-ellipsis__text {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
   }
 }

@@ -10,7 +10,7 @@
       background: rgba(58, 82, 121, 0.8);
       color: #fff;
       border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
-      height: 0.4rem;
+      height: var(--vt-table-row-height);
     }
 
     .vtable__body {
@@ -45,7 +45,7 @@
       .vtable__row {
         display: flex;
         align-items: center;
-        // height: 0.4rem;
+        min-height: var(--vt-table-row-height);
         border-bottom: 0.01rem solid rgba(255, 255, 255, 0.05);
 
         &:hover {
@@ -78,8 +78,8 @@
       align-items: center;
       word-break: break-all;
       white-space: normal;
-      padding: 0.09rem 0.12rem;
-      line-height: 0.22rem;
+      padding: var(--vt-table-cell-padding-y) 0.12rem;
+      line-height: var(--vt-table-cell-line-height);
       // display: flex;
       // align-items: center;
       // justify-content: center;

@@ -99,7 +99,7 @@
   --vt-space-2: 0.08rem;
   --vt-space-3: 0.12rem;
   --vt-space-4: 0.16rem;
-  --vt-space-5: 0.24rem;
+  --vt-space-5: 0.2rem;
   --vt-space-6: 0.32rem;
   --vt-space-7: 0.48rem;
   --vt-button-padding-sm: 0 0.12rem;
@@ -119,6 +119,10 @@
   --vt-control-height-sm: 0.28rem;
   --vt-control-height: 0.32rem;
   --vt-control-height-lg: 0.4rem;
+  --vt-table-row-height: 0.4rem;
+  --vt-table-cell-padding-y: 0.09rem;
+  --vt-table-cell-padding-x: 0.2rem;
+  --vt-table-cell-line-height: 0.22rem;
   --vt-field-width: 2.4rem;
   --vt-select-width: 2.4rem;
   --vt-z-toast: 3000;

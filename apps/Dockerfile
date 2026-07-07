@@ -1,5 +1,5 @@
 # 构建阶段
-FROM node:22-alpine AS builder
+FROM docker.m.daocloud.io/library/node:22-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app
@@ -20,7 +20,7 @@ COPY . .
 RUN pnpm run build
 
 # 生产阶段
-FROM nginx:alpine
+FROM docker.m.daocloud.io/library/nginx:1.18.0
 
 # 复制自定义 nginx 配置
 COPY nginx.conf /etc/nginx/conf.d/default.conf

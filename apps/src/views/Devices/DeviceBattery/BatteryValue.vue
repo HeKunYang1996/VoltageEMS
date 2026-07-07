@@ -24,156 +24,123 @@
 <script setup lang="ts">
 import LoadingBg from '@/components/common/LoadingBg.vue'
 import { useGlobalStore } from '@/stores/global'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import type { LeftTableItem, RightTableItem } from '@/types/deviceMonitoring'
 import { getPointsTables } from '@/api/channelsManagement'
 import type { PointInfoResponse } from '@/types/channelConfiguration'
-import { ref } from 'vue'
-import useWebSocket from '@/composables/useWebSocket'
+import { ref, computed, watch } from 'vue'
+import useTopologySubscribe from '@/composables/useTopologySubscribe'
 
 const globalStore = useGlobalStore()
+const topoStore = useDeviceTopologyStore()
 
-const BatteryleftTableData = ref<LeftTableItem[]>([])
+// 无回退值：store 未加载时为 undefined，响应式触发后再请求/订阅
+const batteryChId = computed<number | undefined>(() => topoStore.getChannelIds('Battery')[0])
+const pcsChId = computed<number | undefined>(() => topoStore.getChannelIds('PCS')[0])
+
+const BatteryleftTableData  = ref<LeftTableItem[]>([])
 const BatteryrightTableData = ref<RightTableItem[]>([])
-const PCSleftTableData = ref<LeftTableItem[]>([])
-const PCSrightTableData = ref<RightTableItem[]>([])
+const PCSleftTableData      = ref<LeftTableItem[]>([])
+const PCSrightTableData     = ref<RightTableItem[]>([])
 
-// 订阅 WebSocket - ValueMonitoring 使用 comsrv 源
-useWebSocket(
-  {
-    source: 'comsrv',
-    channels: [2, 1],
-    dataTypes: ['T', 'S'],
-    interval: 1000,
-  },
-  {
-    onBatchDataUpdate: (data: any) => {
-      // 处理通道2的T类型数据（Battery左侧表格）
-      const channel2TUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 2 && item.data_type === 'T',
-      )
-      if (channel2TUpdate) {
-        const values = channel2TUpdate.values || {}
-        const timestamps = channel2TUpdate.ts || {}
-        BatteryleftTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.value = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
+// ── 点位表加载 ─────────────────────────────────────────────────────────────────
 
-      // 处理通道2的S类型数据（Battery右侧表格）
-      const channel2SUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 2 && item.data_type === 'S',
-      )
-      if (channel2SUpdate) {
-        const values = channel2SUpdate.values || {}
-        const timestamps = channel2SUpdate.ts || {}
-        BatteryrightTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.status = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
-
-      // 处理通道1的S类型数据（PCS右侧表格）
-      const channel1SUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 1 && item.data_type === 'S',
-      )
-      if (channel1SUpdate) {
-        const values = channel1SUpdate.values || {}
-        const timestamps = channel1SUpdate.ts || {}
-        PCSrightTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.status = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
-
-      // 处理通道1的T类型数据（PCS左侧表格）
-      const channel1TUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 1 && item.data_type === 'T',
-      )
-      if (channel1TUpdate) {
-        const values = channel1TUpdate.values || {}
-        const timestamps = channel1TUpdate.ts || {}
-        PCSleftTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.value = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
-    },
-  },
-)
-
-// 初始化数据：通过 API 获取点位数据
-onMounted(async () => {
+async function loadPointTables(batteryId: number, pcsId: number) {
   try {
-    // Battery 通道 id 为 2
-    const batteryRes = await getPointsTables(2)
+    const [batteryRes, pcsRes] = await Promise.all([
+      getPointsTables(batteryId),
+      getPointsTables(pcsId),
+    ])
     if (batteryRes?.success && batteryRes.data) {
-      const batteryData = batteryRes.data as PointInfoResponse
-      BatteryleftTableData.value =
-        batteryData.telemetry?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          unit: p.unit || '',
-          value: null,
-          updateTime: null,
-        })) || []
-      BatteryrightTableData.value =
-        batteryData.signal?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          status: null,
-          updateTime: null,
-        })) || []
+      const d = batteryRes.data as PointInfoResponse
+      BatteryleftTableData.value = d.telemetry?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', unit: p.unit || '', value: null, updateTime: null,
+      })) || []
+      BatteryrightTableData.value = d.signal?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', status: null, updateTime: null,
+      })) || []
     }
-
-    // PCS 通道 id 为 1
-    const pcsRes = await getPointsTables(1)
     if (pcsRes?.success && pcsRes.data) {
-      const pcsData = pcsRes.data as PointInfoResponse
-      PCSleftTableData.value =
-        pcsData.telemetry?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          unit: p.unit || '',
-          value: null,
-          updateTime: null,
-        })) || []
-      PCSrightTableData.value =
-        pcsData.signal?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          status: null,
-          updateTime: null,
-        })) || []
+      const d = pcsRes.data as PointInfoResponse
+      PCSleftTableData.value = d.telemetry?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', unit: p.unit || '', value: null, updateTime: null,
+      })) || []
+      PCSrightTableData.value = d.signal?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', status: null, updateTime: null,
+      })) || []
     }
   } catch (err) {
-    console.error('加载设备点位数据失败:', err)
+    console.error('[BatteryValue] 加载点位表失败:', err)
   }
+}
+
+// 拓扑加载后（或通道变化时）拉取点位表；immediate: true 覆盖 onMounted
+watch([batteryChId, pcsChId], ([bId, pId]) => {
+  if (bId !== undefined && pId !== undefined) loadPointTables(bId, pId)
+}, { immediate: true })
+
+// ── WebSocket 订阅 ─────────────────────────────────────────────────────────────
+
+const makeHandlers = () => ({
+  onBatchDataUpdate: (data: any) => {
+    const bId = batteryChId.value
+    const pId = pcsChId.value
+
+    const ch2T = data.updates?.find((i: any) => i.channel_id === bId && i.data_type === 'T')
+    if (ch2T) {
+      const { values = {}, ts = {} } = ch2T
+      BatteryleftTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.value = v
+        if (t != null) item.updateTime = t
+      })
+    }
+
+    const ch2S = data.updates?.find((i: any) => i.channel_id === bId && i.data_type === 'S')
+    if (ch2S) {
+      const { values = {}, ts = {} } = ch2S
+      BatteryrightTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.status = v
+        if (t != null) item.updateTime = t
+      })
+    }
+
+    const ch1T = data.updates?.find((i: any) => i.channel_id === pId && i.data_type === 'T')
+    if (ch1T) {
+      const { values = {}, ts = {} } = ch1T
+      PCSleftTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.value = v
+        if (t != null) item.updateTime = t
+      })
+    }
+
+    const ch1S = data.updates?.find((i: any) => i.channel_id === pId && i.data_type === 'S')
+    if (ch1S) {
+      const { values = {}, ts = {} } = ch1S
+      PCSrightTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.status = v
+        if (t != null) item.updateTime = t
+      })
+    }
+  },
 })
+
+useTopologySubscribe(
+  () => {
+    const bId = batteryChId.value, pId = pcsChId.value
+    return bId !== undefined && pId !== undefined ? [bId, pId] : []
+  },
+  { source: 'comsrv', dataTypes: ['T', 'S'], interval: 1000 },
+  makeHandlers(),
+)
+
 const activeTab = ref<'battery' | 'pcs'>('battery')
 </script>
 
@@ -189,11 +156,6 @@ const activeTab = ref<'battery' | 'pcs'>('battery')
   }
 }
 
-:deep(.devices-pv__tabs.el-tabs) {
-  height: 100%;
-}
-
-:deep(.devices-pv__tabs .el-tab-pane) {
-  height: 100%;
-}
+:deep(.devices-pv__tabs.el-tabs) { height: 100%; }
+:deep(.devices-pv__tabs .el-tab-pane) { height: 100%; }
 </style>

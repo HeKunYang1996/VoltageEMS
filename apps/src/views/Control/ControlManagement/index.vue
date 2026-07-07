@@ -47,7 +47,7 @@
               @click="fetchTableData(true)"
             />
             <IconButton
-              v-permission="['Admin']"
+              v-permission="'engineer'"
               type="primary"
               :icon="userAddIcon"
               text="New rule"
@@ -126,13 +126,14 @@
           <el-table-column prop="enabled" label="Enabled" min-width="80">
             <template #default="{ row }">
               <el-switch
+                v-permission="'engineer'"
                 :model-value="row.enabled"
                 :loading="switchLoadingId === row.id"
                 @change="handleSwitchChange(row)"
               />
             </template>
           </el-table-column>
-          <el-table-column label="Operation" fixed="right" v-permission="['Admin']" min-width="120">
+          <el-table-column label="Operation" fixed="right" v-permission="'engineer'" min-width="120">
             <template #default="{ row }">
               <div class="rule-management__operation">
                 <div class="rule-management__operation-item" @click="handleEdit(row)">
@@ -148,13 +149,15 @@
           </el-table-column>
         </el-table>
 
-        <div class="rule-management__pagination">
+        <div id="control-rules-pagination-anchor" class="rule-management__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
             v-model:page-size="pagination.pageSize"
             :page-sizes="[10, 20, 50, 100]"
             :total="pagination.total"
             layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#control-rules-pagination-anchor"
             @size-change="handlePageSizeChange"
             @current-change="handlePageChange"
           />
@@ -376,19 +379,6 @@ const handleRuleCancel = () => {
 
   :deep(.rule-management__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
-  }
-
-  :deep(.rule-management__table-content .table-ellipsis .cell) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .table-ellipsis__text {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .alarm-level--1 {

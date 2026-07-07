@@ -1,127 +1,123 @@
 <template>
-  <div class="voltage-class control-records">
-    <!-- 表格工具栏 -->
-    <div class="control-records__toolbar">
-      <div class="control-records__toolbar-left">
-        <el-form :inline="true" class="control-records__toolbar-form">
-          <el-form-item label="Name:">
-            <el-input
-              v-model="searchName"
-              placeholder="Please enter name"
-              clearable
-              class="control-records__search-input"
-            />
-          </el-form-item>
-        </el-form>
+  <div class="voltage-class control-records vt-page-shell">
+    <LoadingBg :loading="loading">
+      <div class="control-records__toolbar vt-toolbar">
+        <div class="control-records__toolbar-left vt-toolbar__left">
+          <el-form :inline="true" class="control-records__toolbar-form vt-toolbar-form">
+            <el-form-item label="Name:">
+              <el-input
+                v-model="filters.name"
+                placeholder="Please enter name"
+                clearable
+                class="control-records__search-input"
+                @keyup.enter="fetchTableData(true)"
+              />
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <div class="control-records__toolbar-right vt-toolbar__right">
+          <IconButton
+            type="warning"
+            :icon="reloadIcon"
+            text="Reload"
+            custom-class="control-records__btn"
+            @click="reloadFilters"
+          />
+          <IconButton
+            type="primary"
+            :icon="searchIcon"
+            text="Search"
+            custom-class="control-records__btn"
+            @click="fetchTableData(true)"
+          />
+        </div>
       </div>
 
-      <div class="control-records__toolbar-right">
-        <IconButton
-          type="warning"
-          :icon="reloadIcon"
-          text="Reload"
-          custom-class="control-records__btn"
-          @click="handleReload"
-        />
-        <IconButton
-          type="primary"
-          :icon="searchIcon"
-          text="Search"
-          custom-class="control-records__btn"
-          @click="handleSearch"
-        />
-      </div>
-    </div>
+      <div class="control-records__table vt-table-shell">
+        <el-table :data="tableData" class="control-records__table-content vt-table-content" align="left">
+          <el-table-column prop="name" label="Name" min-width="160" class-name="table-ellipsis" />
+          <el-table-column prop="description" label="Description" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="enabled" label="Enabled" min-width="100">
+            <template #default="{ row }">
+              <span :class="row.enabled ? 'control-records__enabled' : 'control-records__disabled'">
+                {{ row.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Operation" fixed="right" min-width="160" class-name="leave-alone">
+            <template #default="{ row }">
+              <div class="control-records__operation">
+                <div class="control-records__operation-item" @click="openHistory(row)">
+                  <img :src="tableDetailIcon" alt="" />
+                  <span class="control-records__operation-text">Trigger History</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
 
-    <!-- 表格 -->
-    <div class="control-records__table">
-      <el-table :data="pagedData" class="control-records__table-content">
-        <el-table-column
-          prop="rule_name"
-          label="Name"
-          min-width="2rem"
-          class-name="table-ellipsis"
-        />
-        <el-table-column prop="triggered_at" label="Trigger Time" min-width="1.4rem" class-name="table-ellipsis">
-          <template #default="{ row }">
-            <span class="table-ellipsis__text">{{ formatDateTime(row.triggered_at) }}</span>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- 分页 -->
-      <div class="control-records__pagination">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="filteredData.length"
-          layout="total, sizes, prev, pager, next"
-          @size-change="currentPage = 1"
-          @current-change="(v: number) => (currentPage = v)"
-        />
+        <div id="control-records-pagination-anchor" class="control-records__pagination vt-pagination">
+          <el-pagination
+            v-model:current-page="pagination.page"
+            v-model:page-size="pagination.pageSize"
+            :page-sizes="[10, 20, 50, 100]"
+            :total="pagination.total"
+            layout="total, sizes, prev, pager, next"
+            :teleported="false"
+            append-size-to="#control-records-pagination-anchor"
+            @size-change="handlePageSizeChange"
+            @current-change="handlePageChange"
+          />
+        </div>
       </div>
-    </div>
+    </LoadingBg>
+
+    <RuleHistoryDialog ref="historyDialogRef" />
   </div>
 </template>
 
 <script setup lang="ts">
 import reloadIcon from '@/assets/icons/table-refresh.svg'
 import searchIcon from '@/assets/icons/table-search.svg'
+import tableDetailIcon from '@/assets/icons/button-detail.svg'
+import LoadingBg from '@/components/common/LoadingBg.vue'
+import RuleHistoryDialog from './RuleHistoryDialog.vue'
+import { useTableData, type TableConfig } from '@/composables/useTableData'
+import type { ModRuleSummary } from '@/types/controlRule'
 
-// ─── 假数据（暂无记录）─────────────────────────────────────────
-interface ControlRecord {
-  id: number
-  rule_name: string
-  triggered_at: number
+const tableConfig: TableConfig = {
+  listUrl: '/ruleApi/api/rules',
+  defaultPageSize: 20,
 }
 
-const mockData: ControlRecord[] = []
+const {
+  loading,
+  tableData,
+  pagination,
+  handlePageSizeChange,
+  fetchTableData,
+  filters,
+  handlePageChange,
+  reloadFilters,
+} = useTableData<ModRuleSummary>(tableConfig)
 
-// ─── 搜索 & 过滤 ───────────────────────────────────────────────
-const searchName = ref('')
-const activeSearch = ref('')
-const currentPage = ref(1)
-const pageSize = ref(20)
+filters.name = ''
 
-const handleSearch = () => {
-  activeSearch.value = searchName.value
-  currentPage.value = 1
+const historyDialogRef = ref<InstanceType<typeof RuleHistoryDialog> | null>(null)
+
+const openHistory = (row: ModRuleSummary) => {
+  historyDialogRef.value?.open(row)
 }
 
-const handleReload = () => {
-  searchName.value = ''
-  activeSearch.value = ''
-  currentPage.value = 1
-}
-
-const filteredData = computed(() => {
-  const kw = activeSearch.value.trim().toLowerCase()
-  if (!kw) return mockData
-  return mockData.filter((r) => r.rule_name.toLowerCase().includes(kw))
+onMounted(() => {
+  void fetchTableData(true)
 })
-
-const pagedData = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredData.value.slice(start, start + pageSize.value)
-})
-
-// ─── 时间格式化 ────────────────────────────────────────────────
-const formatDateTime = (ts: number | string | null | undefined): string => {
-  if (ts === null || ts === undefined || ts === '') return '-'
-  try {
-    const date = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts)
-    if (isNaN(date.getTime())) return String(ts)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  } catch {
-    return String(ts)
-  }
-}
 </script>
 
 <style scoped lang="scss">
 .voltage-class.control-records {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -163,25 +159,31 @@ const formatDateTime = (ts: number | string | null | undefined): string => {
     }
 
     .control-records__pagination {
+      position: relative;
       padding: 0.2rem 0;
       display: flex;
       justify-content: flex-end;
     }
   }
 
-  :deep(.control-records__table-content .table-ellipsis .cell) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .control-records__enabled {
+    color: var(--el-color-success);
   }
 
-  .table-ellipsis__text {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .control-records__disabled {
+    color: var(--el-text-color-secondary);
   }
 
+  .control-records__operation {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
 
+    .control-records__operation-item {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+  }
 }
 </style>

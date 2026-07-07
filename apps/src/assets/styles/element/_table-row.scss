@@ -1,0 +1,42 @@
+@use './theme-vars.scss' as *;
+
+@mixin vt-table-cell-shell {
+  box-sizing: border-box;
+  height: $table-row-height;
+  padding: $table-cell-padding-y $table-cell-padding-x;
+  font-size: 0.14rem;
+  line-height: $table-cell-line-height;
+  border: none;
+  border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
+}
+
+@mixin vt-table-cell-inner {
+  display: block;
+  box-sizing: border-box;
+  height: $table-cell-inner-height;
+  min-height: $table-cell-inner-height;
+  max-height: $table-cell-inner-height;
+  padding: 0 !important;
+  overflow: hidden;
+  line-height: $table-cell-inner-height;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &.el-tooltip {
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  > *:only-child {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: $table-cell-inner-height;
+    max-width: 100%;
+    min-width: 0;
+    vertical-align: top;
+  }
+}

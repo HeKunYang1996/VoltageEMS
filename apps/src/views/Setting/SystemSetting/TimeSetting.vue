@@ -30,7 +30,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <div class="card__content-footer">
+        <div v-permission="'engineer'" class="card__content-footer">
           <el-button type="primary">Submit</el-button>
         </div>
       </template>

@@ -34,17 +34,27 @@ const loadGuard = async (userStore: MockUserStore) => {
   const beforeEachSpy = vi.fn((callback: GuardFn) => {
     guard = callback
   })
+  const afterEachSpy = vi.fn()
   const ensureRoutesInjected = vi.fn()
   const cancelAllPendingRequests = vi.fn()
 
   vi.doMock('../index', () => ({
     router: {
       beforeEach: beforeEachSpy,
+      afterEach: afterEachSpy,
     },
+  }))
+
+  vi.doMock('@/stores/global', () => ({
+    useGlobalStore: () => ({ appInitializing: false }),
   }))
 
   vi.doMock('@/stores/user', () => ({
     useUserStore: () => userStore,
+  }))
+
+  vi.doMock('@/utils/roleGuard', () => ({
+    assertValidUserRole: () => true,
   }))
 
   vi.doMock('../injector', () => ({
@@ -104,6 +114,7 @@ describe('router/guard.ts', () => {
       refreshToken: 'refresh-token',
       refreshUserToken: vi.fn().mockResolvedValue({ success: true }),
       getUserInfo: vi.fn().mockResolvedValue({ success: true }),
+      userInfo: { id: 1, role: { name_en: 'Admin' } },
     })
     const { guard, ensureRoutesInjected } = await loadGuard(userStore)
     const next = vi.fn()
@@ -154,7 +165,7 @@ describe('router/guard.ts', () => {
   it('continues navigation after routes were already injected', async () => {
     const userStore = createUserStore({
       token: 'access-token',
-      userInfo: { id: 1 },
+      userInfo: { id: 1, role: { name_en: 'Admin' } },
       routesInjected: true,
     })
     const { guard, ensureRoutesInjected } = await loadGuard(userStore)
@@ -169,7 +180,7 @@ describe('router/guard.ts', () => {
   it('falls back to login when guard execution throws', async () => {
     const userStore = createUserStore({
       token: 'access-token',
-      userInfo: { id: 1 },
+      userInfo: { id: 1, role: { name_en: 'Admin' } },
       routesInjected: false,
     })
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})

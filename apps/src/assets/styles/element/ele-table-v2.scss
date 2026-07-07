@@ -1,3 +1,6 @@
+@use './theme-vars.scss' as *;
+@use './_table-row.scss' as table-row;
+
 .voltage-class {
   .el-table-v2 {
     background-color: transparent;
@@ -20,18 +23,15 @@
       background: rgba(84, 98, 140, 0.2);
 
       .el-table-v2__header-row {
+        height: $table-row-height;
         background: transparent;
       }
 
       .el-table-v2__header-cell {
-        padding: 0.09rem 0.2rem;
+        @include table-row.vt-table-cell-shell;
         color: rgba(255, 255, 255, 0.6);
-        font-size: 0.14rem;
         font-weight: 400;
-        line-height: 0.22rem;
         background: transparent;
-        border: none;
-        border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
 
         &.is-fixed-right {
           background-color: #243b65;
@@ -49,6 +49,7 @@
       background: transparent;
 
       .el-table-v2__row {
+        height: $table-row-height;
         transition:
           background 0.2s,
           box-shadow 0.2s,
@@ -60,12 +61,9 @@
       }
 
       .el-table-v2__cell {
-        padding: 0.09rem 0.2rem;
+        @include table-row.vt-table-cell-shell;
         color: #fff;
-        font-size: 0.14rem;
-        line-height: 0.4rem;
         background: transparent;
-        border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
 
         &.is-fixed-right {
           background-color: #243b65;

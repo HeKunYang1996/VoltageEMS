@@ -190,7 +190,7 @@ switch ($Mode) {
 docker stop $ContainerName 2>/dev/null || true
 docker rm   $ContainerName 2>/dev/null || true
 docker load -i $remoteTar
-docker run -d --name $ContainerName --restart unless-stopped -p ${Port}:8080 $ImageFull
+docker run -d --name $ContainerName --restart unless-stopped --network host $ImageFull
 echo 'Remote container started'
 "@
             ssh $RemoteHost $remoteCmd
@@ -209,7 +209,7 @@ echo 'Remote container started'
         Write-Host ""
         Write-Host "  To run on ARM64 server:" -ForegroundColor Gray
         Write-Host "    docker pull $ImageFull" -ForegroundColor Gray
-        Write-Host "    docker run -d --name $ContainerName -p ${Port}:8080 $ImageFull" -ForegroundColor Gray
+            Write-Host "    docker run -d --name $ContainerName --restart unless-stopped --network host $ImageFull" -ForegroundColor Gray
     }
 }
 

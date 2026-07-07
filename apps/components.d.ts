@@ -27,7 +27,6 @@ declare module 'vue' {
     ElIcon: typeof import('element-plus/es')['ElIcon']
     ElInput: typeof import('element-plus/es')['ElInput']
     ElInputNumber: typeof import('element-plus/es')['ElInputNumber']
-    ElLink: typeof import('element-plus/es')['ElLink']
     ElMenu: typeof import('element-plus/es')['ElMenu']
     ElMenuItem: typeof import('element-plus/es')['ElMenuItem']
     ElOption: typeof import('element-plus/es')['ElOption']
@@ -58,8 +57,5 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SingleBarChart: typeof import('./src/components/charts/SingleBarChart.vue')['default']
     StackedBarChart: typeof import('./src/components/charts/StackedBarChart.vue')['default']
-  }
-  export interface GlobalDirectives {
-    vLoading: typeof import('element-plus/es')['ElLoadingDirective']
   }
 }

@@ -10,11 +10,12 @@
             class="device-select"
             placeholder="All Devices"
             :teleported="false"
+            :append-to="deviceSelectWrapperRef"
             @change="fetchAllData"
           >
             <el-option label="All Devices" value="all" />
             <el-option
-              v-for="dev in DEVICE_CONFIGS"
+              v-for="dev in deviceConfigs"
               :key="dev.id"
               :label="`${dev.label} (${dev.subtitle})`"
               :value="dev.id"
@@ -53,7 +54,7 @@
 
       <!-- 图表区域（可滚动） -->
       <div class="curves__charts-outer">
-      <LoadingBg :loading="isLoading">
+      <LoadingBg :loading="isConfigLoading || isLoading">
       <div class="curves__charts">
         <template v-for="dev in activeDevices" :key="dev.id">
           <div class="curves__device-section">
@@ -72,14 +73,15 @@
             </div>
 
             <!-- 该设备的点位图表网格（可收起） -->
-            <div class="curves__device-charts" v-show="!collapsedMap[dev.id]">
+            <div class="curves__device-charts" v-if="!collapsedMap[dev.id]">
               <div
                 class="curves__chart-item"
                 v-for="(point, pIdx) in dev.points"
-                :key="point.id"
+                :key="`${dev.id}-${point.id}`"
               >
                 <ModuleCard :title="`${point.name} Curve`">
                   <lineChart
+                    lazy
                     :xAxiosOption="{ xAxiosData: getPointXAxis(dev.redisKey, point.id) }"
                     :yAxiosOption="{ yUnit: point.unit }"
                     :series="getPointSeries(dev.redisKey, point.id, point.name, getColor(pIdx))"
@@ -91,7 +93,7 @@
         </template>
 
         <!-- 空状态 -->
-        <div v-if="!isLoading && activeDevices.length === 0" class="curves__empty">
+        <div v-if="!isConfigLoading && !isLoading && activeDevices.length === 0" class="curves__empty">
           No data available
         </div>
       </div>
@@ -103,9 +105,12 @@
 
 <script setup lang="ts">
 import { batchQueryHistory } from '@/api/Statistic/overview'
+import { getInstancePoints } from '@/api/devicesManagement'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import dayjs from 'dayjs'
 import { getRecentHoursRange, getRecentDaysRange, getRecentWeekRange } from '@/utils/date.ts'
 import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import type { InstanceMeasurementItem } from '@/types/deviceConfiguration'
 
 // ─── 类型定义 ───────────────────────────────────────────────
 interface PointDef {
@@ -128,126 +133,36 @@ interface ChartSeriesData {
   values: number[]
 }
 
-// ─── 设备 & 点位配置 ──────────────────────────────────────────
-const DEVICE_CONFIGS: DeviceConfig[] = [
-  {
-    id: 'pv',
-    label: 'PV',
-    subtitle: 'pv_01',
-    redisKey: 'inst:4:M',
-    accentColor: '#69CBFF',
-    points: [
-      { id: '1', name: 'PV Power (Array)', unit: 'kW' },
-      { id: '2', name: 'PV Voltage (Array)', unit: 'V' },
-      { id: '3', name: 'PV Current (Array)', unit: 'A' },
-      { id: '4', name: 'Sub PVI', unit: 'kW' },
-      { id: '5', name: 'Energy Today', unit: 'kWh' },
-      { id: '7', name: 'PV Power', unit: 'kW' },
-      { id: '8', name: 'PV Voltage', unit: 'V' },
-      { id: '9', name: 'PV Current', unit: 'A' },
-      { id: '10', name: 'Peak Efficiency', unit: '%' },
-      { id: '11', name: 'Average Efficiency', unit: '%' },
-      { id: '12', name: 'Minimum Efficiency', unit: '%' },
-      { id: '13', name: 'Solar Panels', unit: '%' },
-      { id: '14', name: 'PV System', unit: '%' },
-      { id: '15', name: 'Energy Total', unit: 'kWh' },
-    ],
-  },
-  {
-    id: 'battery',
-    label: 'Battery',
-    subtitle: 'battery_01',
-    redisKey: 'inst:1:M',
-    accentColor: '#6DD400',
-    points: [
-      { id: '1', name: 'Total Voltage', unit: 'V' },
-      { id: '2', name: 'Total Current', unit: 'A' },
-      { id: '3', name: 'Max Battery Pack Temperature', unit: '°C' },
-      { id: '4', name: 'Min Battery Pack Temperature', unit: '°C' },
-      { id: '5', name: 'Charge Power', unit: 'kW' },
-      { id: '6', name: 'Discharge Power', unit: 'kW' },
-      { id: '7', name: 'SOC', unit: '%' },
-      { id: '8', name: 'SOH', unit: '%' },
-      { id: '9', name: 'Charge Energy', unit: 'kWh' },
-      { id: '10', name: 'Discharge Energy', unit: 'kWh' },
-      { id: '12', name: 'Max Cell Voltage', unit: 'V' },
-      { id: '13', name: 'Min Cell Voltage', unit: 'V' },
-      { id: '14', name: 'Avg Cell Voltage', unit: 'V' },
-      { id: '15', name: 'Cell Voltage Difference', unit: 'V' },
-      { id: '16', name: 'Avg Cell Temperature', unit: '°C' },
-      { id: '19', name: 'Battery System', unit: '%' },
-      { id: '20', name: 'Charge Energy Today', unit: 'kWh' },
-      { id: '21', name: 'Discharge Energy Today', unit: 'kWh' },
-      { id: '101', name: 'Daily Charge Energy', unit: 'kWh' },
-      { id: '102', name: 'Daily Discharge Energy', unit: 'kWh' },
-      { id: '103', name: 'Weekly Charge Energy', unit: 'kWh' },
-      { id: '104', name: 'Weekly Discharge Energy', unit: 'kWh' },
-      { id: '105', name: 'Monthly Charge Energy', unit: 'kWh' },
-      { id: '106', name: 'Monthly Discharge Energy', unit: 'kWh' },
-      { id: '107', name: 'Quarterly Charge Energy', unit: 'kWh' },
-      { id: '108', name: 'Quarterly Discharge Energy', unit: 'kWh' },
-    ],
-  },
-  {
-    id: 'pcs',
-    label: 'PCS',
-    subtitle: 'pcs_01',
-    redisKey: 'inst:3:M',
-    accentColor: '#4FADF7',
-    points: [
-      { id: '1', name: 'Total Power', unit: 'kW' },
-      { id: '2', name: 'DC Power', unit: 'kW' },
-      { id: '3', name: 'Power A', unit: 'kW' },
-      { id: '4', name: 'Power B', unit: 'kW' },
-      { id: '5', name: 'Power C', unit: 'kW' },
-      { id: '6', name: 'DC Voltage', unit: 'V' },
-      { id: '7', name: 'Voltage A', unit: 'V' },
-      { id: '8', name: 'Voltage B', unit: 'V' },
-      { id: '9', name: 'Voltage C', unit: 'V' },
-      { id: '10', name: 'Current A', unit: 'A' },
-      { id: '11', name: 'Current B', unit: 'A' },
-      { id: '12', name: 'Current C', unit: 'A' },
-      { id: '13', name: 'Temperature', unit: '°C' },
-      { id: '17', name: 'AC Frequency', unit: 'Hz' },
-    ],
-  },
-  {
-    id: 'dg',
-    label: 'DG',
-    subtitle: 'diesel_gen_01',
-    redisKey: 'inst:2:M',
-    accentColor: '#F6C85F',
-    points: [
-      { id: '1', name: 'Diesel Power', unit: 'kW' },
-      { id: '2', name: 'Diesel Energy', unit: 'kWh' },
-      { id: '3', name: 'Diesel Voltage', unit: 'V' },
-      { id: '4', name: 'Diesel Current A', unit: 'A' },
-      { id: '5', name: 'Diesel Current B', unit: 'A' },
-      { id: '6', name: 'Diesel Current C', unit: 'A' },
-      { id: '7', name: 'Diesel Voltage A', unit: 'V' },
-      { id: '8', name: 'Diesel Voltage B', unit: 'V' },
-      { id: '9', name: 'Diesel Voltage C', unit: 'V' },
-      { id: '10', name: 'Diesel Power A', unit: 'kW' },
-      { id: '11', name: 'Diesel Power B', unit: 'kW' },
-      { id: '12', name: 'Diesel Power C', unit: 'kW' },
-      { id: '13', name: 'Diesel Oil', unit: '%' },
-      { id: '14', name: 'Diesel Temperature', unit: '°C' },
-      { id: '16', name: 'Frequency', unit: 'Hz' },
-      { id: '18', name: 'Diesel Energy Today', unit: 'kWh' },
-    ],
-  },
-  {
-    id: 'load',
-    label: 'Load',
-    subtitle: 'Load_01',
-    redisKey: 'inst:6:M',
-    accentColor: '#FF4D4F',
-    points: [
-      { id: '1', name: 'Load Power', unit: 'kW' },
-      { id: '2', name: 'Load Energy', unit: 'kWh' },
-    ],
-  },
-]
+const PRODUCT_LABELS: Record<string, string> = {
+  Battery: 'Battery',
+  Diesel: 'DG',
+  PCS: 'PCS',
+  'PV DCDC': 'PV',
+  PVInverter: 'PV',
+  Load: 'Load',
+}
+
+const PRODUCT_ACCENT: Record<string, string> = {
+  Battery: '#6DD400',
+  Diesel: '#F6C85F',
+  PCS: '#4FADF7',
+  'PV DCDC': '#69CBFF',
+  PVInverter: '#69CBFF',
+  Load: '#FF4D4F',
+}
+
+const getProductLabel = (productName: string) => PRODUCT_LABELS[productName] ?? productName
+const getAccentColor = (productName: string) => PRODUCT_ACCENT[productName] ?? '#69CBFF'
+
+const mapMeasurementPoints = (measurements: Record<string, InstanceMeasurementItem>): PointDef[] => {
+  return Object.entries(measurements)
+    .map(([id, item]) => ({
+      id,
+      name: item.name || `Point ${id}`,
+      unit: item.unit || '',
+    }))
+    .sort((a, b) => Number(a.id) - Number(b.id))
+}
 
 // ─── 颜色配置 ─────────────────────────────────────────────────
 const CHART_COLORS = [
@@ -257,6 +172,55 @@ const CHART_COLORS = [
   '#3498DB', '#E74C3C', '#1ABC9C',
 ]
 const getColor = (index: number) => CHART_COLORS[index % CHART_COLORS.length]
+
+// ─── 拓扑与设备配置 ───────────────────────────────────────────
+const topoStore = useDeviceTopologyStore()
+const deviceConfigs = ref<DeviceConfig[]>([])
+const isConfigLoading = ref(false)
+
+const loadDeviceConfigs = async () => {
+  isConfigLoading.value = true
+  try {
+    if (!topoStore.loaded) {
+      await topoStore.load()
+    }
+
+    const instances = topoStore.bindings.flatMap((binding) =>
+      binding.instances.map((inst) => ({ binding, inst })),
+    )
+
+    const configs = await Promise.all(
+      instances.map(async ({ binding, inst }) => {
+        try {
+          const res = await getInstancePoints(inst.instanceId)
+          const points = res.success && res.data
+            ? mapMeasurementPoints(res.data.measurements)
+            : []
+          return {
+            id: String(inst.instanceId),
+            label: getProductLabel(binding.productName),
+            subtitle: inst.instanceName,
+            redisKey: `inst:${inst.instanceId}:M`,
+            accentColor: getAccentColor(binding.productName),
+            points,
+          } satisfies DeviceConfig
+        } catch {
+          return null
+        }
+      }),
+    )
+
+    deviceConfigs.value = configs.filter(
+      (item): item is DeviceConfig => Boolean(item && item.points.length > 0),
+    )
+    initCollapseState()
+  } catch (error) {
+    console.error('Failed to load curves device configs:', error)
+    deviceConfigs.value = []
+  } finally {
+    isConfigLoading.value = false
+  }
+}
 
 // ─── 时间选择 ─────────────────────────────────────────────────
 const defaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
@@ -275,11 +239,23 @@ const deviceSelectWrapperRef = ref<HTMLElement | null>(null)
 
 // ─── 区块折叠状态 ─────────────────────────────────────────────
 const collapsedMap = reactive<Record<string, boolean>>({})
+
+const initCollapseState = () => {
+  deviceConfigs.value.forEach((dev, index) => {
+    if (collapsedMap[dev.id] === undefined) {
+      collapsedMap[dev.id] = index !== 0
+    }
+  })
+}
+
 const toggleCollapse = (deviceId: string) => {
   const wasCollapsed = collapsedMap[deviceId]
   collapsedMap[deviceId] = !wasCollapsed
-  // 展开时触发 resize，确保 ECharts 在可见后重新测量容器尺寸，避免图例错位
   if (wasCollapsed) {
+    const dev = deviceConfigs.value.find((item) => item.id === deviceId)
+    if (dev && !loadedDeviceIds.value.has(deviceId)) {
+      void fetchDevicesData([dev])
+    }
     nextTick(() => {
       setTimeout(() => {
         window.dispatchEvent(new Event('resize'))
@@ -292,14 +268,26 @@ const toggleCollapse = (deviceId: string) => {
 const selectedDevice = ref<string>('all')
 
 const activeDevices = computed(() => {
-  if (selectedDevice.value === 'all') return DEVICE_CONFIGS
-  return DEVICE_CONFIGS.filter((d) => d.id === selectedDevice.value)
+  if (selectedDevice.value === 'all') return deviceConfigs.value
+  return deviceConfigs.value.filter((d) => d.id === selectedDevice.value)
+})
+
+watch(selectedDevice, (value) => {
+  if (value === 'all') {
+    deviceConfigs.value.forEach((dev, index) => {
+      collapsedMap[dev.id] = index !== 0
+    })
+  } else {
+    collapsedMap[value] = false
+  }
+  void fetchExpandedDevicesData()
 })
 
 // ─── 图表数据 ─────────────────────────────────────────────────
 const isLoading = ref(false)
 let fetchAbortController: AbortController | null = null
 const chartDataMap = ref<Map<string, ChartSeriesData>>(new Map())
+const loadedDeviceIds = ref<Set<string>>(new Set())
 
 const getPointXAxis = (redisKey: string, pointId: string): string[] => {
   return chartDataMap.value.get(`${redisKey}:${pointId}`)?.xLabels ?? []
@@ -338,20 +326,20 @@ const formatLabel = (ts: string): string => {
 const formatValue = (v: number | null | undefined): number =>
   Number(Number(v ?? 0).toFixed(3))
 
-// ─── 数据获取 ─────────────────────────────────────────────────
-const fetchAllData = async () => {
-  // 取消上一次未完成的请求
+const getExpandedDevices = () =>
+  activeDevices.value.filter((dev) => !collapsedMap[dev.id])
+
+const fetchDevicesData = async (devs: DeviceConfig[]) => {
+  if (devs.length === 0) return
+
   fetchAbortController?.abort()
   fetchAbortController = new AbortController()
   const signal = fetchAbortController.signal
 
   isLoading.value = true
-  chartDataMap.value = new Map()
 
   const { start_time, end_time } = getTimeRange()
-  const devs = activeDevices.value
 
-  // 将每个设备的点位按每批 20 拆分，并行请求（共用同一个 signal）
   const allRequests = devs.flatMap((dev) => {
     const chunks: Array<Array<{ redis_key: string; point_id: string }>> = []
     for (let i = 0; i < dev.points.length; i += 20) {
@@ -363,13 +351,13 @@ const fetchAllData = async () => {
       )
     }
     return chunks.map((chunk) =>
-      batchQueryHistory({ start_time, end_time, limit_per_series: 500, series: chunk }, signal),
+      batchQueryHistory({ start_time, end_time, limit_per_series: 300, series: chunk }, signal),
     )
   })
 
   try {
     const results = await Promise.all(allRequests)
-    const newMap = new Map<string, ChartSeriesData>()
+    const newMap = new Map(chartDataMap.value)
 
     results.forEach((res) => {
       const responses: BatchQueryResponse[] = res.data?.series ?? []
@@ -385,13 +373,28 @@ const fetchAllData = async () => {
     })
 
     chartDataMap.value = newMap
-  } catch (error: any) {
-    // 主动取消时静默处理
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') return
+    devs.forEach((dev) => loadedDeviceIds.value.add(dev.id))
+  } catch (error: unknown) {
+    const err = error as { name?: string; code?: string }
+    if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError') {
+      return
+    }
     console.error('Failed to load curves data:', error)
   } finally {
     isLoading.value = false
   }
+}
+
+const fetchExpandedDevicesData = async () => {
+  loadedDeviceIds.value = new Set()
+  chartDataMap.value = new Map()
+  await fetchDevicesData(getExpandedDevices())
+}
+
+const fetchAllData = async () => {
+  loadedDeviceIds.value = new Set()
+  chartDataMap.value = new Map()
+  await fetchDevicesData(getExpandedDevices())
 }
 
 onUnmounted(() => {
@@ -407,19 +410,20 @@ const handleTimeBtnClick = (event: MouseEvent) => {
     selectedTimeBtn.value = btn.dataset.value as '6h' | '1d' | '1w' | '1m' | 'custom'
     rangeArray.value = []
     if (selectedTimeBtn.value !== 'custom') {
-      fetchAllData()
+      void fetchAllData()
     }
   }
 }
 
 const handleDateRangeChange = () => {
   if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
-    fetchAllData()
+    void fetchAllData()
   }
 }
 
-onMounted(() => {
-  fetchAllData()
+onMounted(async () => {
+  await loadDeviceConfigs()
+  await fetchExpandedDevicesData()
 })
 </script>
 
@@ -450,21 +454,7 @@ onMounted(() => {
 
       .device-select {
         width: 2.2rem;
-
-        :deep(.el-input__wrapper) {
-          background: rgba(255, 255, 255, 0.08);
-          border: 0.01rem solid rgba(255, 255, 255, 0.2);
-          box-shadow: none;
-        }
-
-        :deep(.el-input__inner) {
-          color: rgba(255, 255, 255, 0.85);
-          font-size: 0.14rem;
-        }
-
-        :deep(.el-select__caret) {
-          color: rgba(255, 255, 255, 0.6);
-        }
+        --vt-select-width: 2.2rem;
       }
     }
 

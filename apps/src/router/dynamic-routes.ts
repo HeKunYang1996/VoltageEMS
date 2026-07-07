@@ -5,6 +5,7 @@ import devicesIcon from '@/assets/icons/sidebar-devices.svg'
 import alarmIcon from '@/assets/icons/sidebar-alarm.svg'
 import controlIcon from '@/assets/icons/sidebar-control.svg'
 import statisticsIcon from '@/assets/icons/sidebar-statistics.svg'
+import forecastIcon from '@/assets/icons/sidebar-forecast.svg'
 import settingIcon from '@/assets/icons/sidebar-setting.svg'
 
 // 工具：安全的异步组件（避免被代理）
@@ -205,7 +206,7 @@ export const dynamicRoutes: RouteItem[] = [
         meta: {
           title: 'Rule Management',
           activeNav: '/alarm/ruleManagement',
-          roles: ['Admin'],
+          roles: ['Admin', 'Engineer', 'Viewer'],
         },
       },
     ],
@@ -213,14 +214,26 @@ export const dynamicRoutes: RouteItem[] = [
   {
     path: '/control',
     name: 'control',
-    component: () => import('@/views/Control/ControlRecord/index.vue'),
+    redirect: '/control/ruleManagement',
     meta: {
-      title: 'Control',
-      isSubMenu: false,
+      isSubMenu: true,
       activeNav: '/control',
       icon: controlIcon,
+      title: 'Control',
       roles: ['Admin', 'Viewer', 'Engineer'],
     },
+    children: [
+      {
+        path: 'ruleManagement',
+        name: 'controlRuleManagement',
+        component: () => import('@/views/Control/ControlRecord/index.vue'),
+        meta: {
+          title: 'Rule Management',
+          activeNav: '/control/ruleManagement',
+          roles: ['Admin', 'Viewer', 'Engineer'],
+        },
+      },
+    ],
   },
   // {
   //   path: '/control',
@@ -311,6 +324,18 @@ export const dynamicRoutes: RouteItem[] = [
     ],
   },
   {
+    path: '/forecast',
+    name: 'forecast',
+    component: () => import('@/views/Forecast/index.vue'),
+    meta: {
+      isSubMenu: false,
+      activeNav: '/forecast',
+      icon: forecastIcon,
+      title: 'Forecast',
+      roles: ['Admin', 'Viewer', 'Engineer'],
+    },
+  },
+  {
     path: '/setting',
     name: 'setting',
     meta: {
@@ -318,7 +343,7 @@ export const dynamicRoutes: RouteItem[] = [
       activeNav: '/setting',
       icon: settingIcon,
       title: 'Setting',
-      roles: ['Admin'],
+      roles: ['Admin', 'Engineer'],
     },
     children: [
       {
@@ -328,7 +353,7 @@ export const dynamicRoutes: RouteItem[] = [
         meta: {
           title: 'System Setting',
           activeNav: '/setting/systemSetting',
-          roles: ['Admin'],
+          roles: ['Admin', 'Engineer'],
         },
       },
       {

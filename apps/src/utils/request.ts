@@ -252,8 +252,9 @@ const createResponseInterceptor = (serviceInstance: any, logPrefix: string = '')
           window.location.href = '/login'
           break
         case 403:
-          errorMessage = 'No permission to access this resource'
-          break
+          errorMessage = 'Insufficient permissions. Please contact your administrator.'
+          ElMessage.warning(errorMessage)
+          return Promise.reject(new Error(errorMessage))
         case 404:
           errorMessage = 'Requested resource not found'
           break
@@ -306,6 +307,13 @@ const createResponseInterceptor = (serviceInstance: any, logPrefix: string = '')
 
     const originalRequest = error.config
     const requestConfig = originalRequest as any
+
+    if (error.response?.status === 403) {
+      if (requestConfig?.showErrorMessage !== false) {
+        ElMessage.warning('Insufficient permissions. Please contact your administrator.')
+      }
+      return Promise.reject(error)
+    }
 
     // 如果是刷新token请求返回401，直接跳转登录页，不再尝试刷新
     if (error.response?.status === 401 && requestConfig?._isRefreshTokenRequest) {
