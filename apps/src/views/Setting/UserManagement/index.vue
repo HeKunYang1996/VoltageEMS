@@ -25,9 +25,6 @@
           <el-table-column prop="username" label="UserName">
             <template #default="{ row }">
               <div class="user-info">
-                <div class="user-avatar">
-                  <div class="user-avatar-text">{{ getAvatarName(row.username) }}</div>
-                </div>
                 <div class="user-name">{{ row.username }}</div>
               </div>
             </template>
@@ -170,19 +167,6 @@ const handleDelete = (row: UserManagementInfo) => {
   deleteRow(row.id, 'Are you sure you want to delete this record?', userManagementRef.value)
   // })
 }
-/**
- * 获取用户名头像缩写：名和姓的首字母（如"张三"->"张三"，"John Smith"->"JS"，"王"->"王"）
- * @param name 用户名字符串
- * @returns string 头像缩写
- */
-const getAvatarName = (name: string): string => {
-  const nameStr = name.split(' ')
-  if (nameStr.length === 1) {
-    return name.charAt(0).toUpperCase()
-  } else {
-    return nameStr[0].charAt(0).toUpperCase() + nameStr[1].charAt(0).toUpperCase()
-  }
-}
 </script>
 
 <style scoped lang="scss">
@@ -218,23 +202,8 @@ const getAvatarName = (name: string): string => {
     .user-info {
       display: flex;
       align-items: center;
-      gap: 0.08rem;
       height: var(--vt-table-cell-line-height);
       min-width: 0;
-
-      .user-avatar {
-        width: var(--vt-table-cell-line-height);
-        height: var(--vt-table-cell-line-height);
-        border-radius: 50%;
-        background-color: rgba(29, 134, 255, 0.2);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        font-size: 0.1rem;
-        letter-spacing: 0%;
-        color: rgba(29, 134, 255, 1);
-      }
 
       .user-name {
         font-size: 0.14rem;

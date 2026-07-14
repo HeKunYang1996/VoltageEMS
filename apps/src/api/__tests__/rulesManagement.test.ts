@@ -5,6 +5,7 @@ import {
   disableRule,
   enableRule,
   getRuleDetail,
+  listRuleHistoryRecords,
   listRules,
   submitRuleChain,
   updateRule,
@@ -33,12 +34,23 @@ describe('api/rulesManagement.ts', () => {
     vi.mocked(RequestModule.default.get)
       .mockResolvedValueOnce({ success: true, data: { list: [] } })
       .mockResolvedValueOnce({ success: true, data: { id: 'rule-1' } })
+      .mockResolvedValueOnce({ success: true, data: { list: [] } })
 
     await listRules()
     await getRuleDetail('rule-1')
+    await listRuleHistoryRecords({ rule_name: 'Battery', start_time: 1, end_time: 2 })
 
-    expect(RequestModule.default.get).toHaveBeenNthCalledWith(1, '/ruleApi/api/rules')
+    expect(RequestModule.default.get).toHaveBeenNthCalledWith(1, '/ruleApi/api/rules', {})
     expect(RequestModule.default.get).toHaveBeenNthCalledWith(2, '/ruleApi/api/rules/rule-1')
+    expect(RequestModule.default.get).toHaveBeenNthCalledWith(
+      3,
+      '/ruleApi/api/rules/history',
+      {
+        rule_name: 'Battery',
+        start_time: 1,
+        end_time: 2,
+      },
+    )
   })
 
   it('creates, updates and deletes rules', async () => {

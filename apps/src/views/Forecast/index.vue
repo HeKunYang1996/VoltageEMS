@@ -1,237 +1,155 @@
 <template>
   <div class="voltage-class forecast-view">
-    <!-- 顶部工具栏 -->
-    <div class="forecast__toolbar">
-      <div class="forecast__toolbar-left">
-        <span class="forecast__title">Forecast</span>
-        <span class="forecast__subtitle">Next 24 Hours</span>
+    <div class="forecast__left">
+      <!-- 摘要卡片：4 张 -->
+      <div class="forecast__summary">
+        <div class="summary-cards">
+          <div class="summary-card">
+            <div class="summary-card__icon pv-icon"><el-icon><Sunny /></el-icon></div>
+            <div class="summary-card__content">
+              <div class="summary-card__label">Total PV Generation</div>
+              <div class="summary-card__value">
+                {{ displayFixed(summary.total_pv_generation) }}<span class="summary-card__unit">kWh</span>
+              </div>
+              <div
+                v-if="hasValue(summary.pv_generation_vs_yesterday_pct)"
+                class="summary-card__trend"
+                :class="trendUp(summary.pv_generation_vs_yesterday_pct)"
+              >
+                vs Yesterday <span>{{ displayPct(summary.pv_generation_vs_yesterday_pct) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card__icon load-icon"><el-icon><TrendCharts /></el-icon></div>
+            <div class="summary-card__content">
+              <div class="summary-card__label">Total Load</div>
+              <div class="summary-card__value">
+                {{ displayFixed(summary.total_load) }}<span class="summary-card__unit">kWh</span>
+              </div>
+              <div
+                v-if="hasValue(summary.load_vs_yesterday_pct)"
+                class="summary-card__trend"
+                :class="trendUp(summary.load_vs_yesterday_pct)"
+              >
+                vs Yesterday <span>{{ displayPct(summary.load_vs_yesterday_pct) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card__icon self-icon"><el-icon><DataAnalysis /></el-icon></div>
+            <div class="summary-card__content">
+              <div class="summary-card__label">Self-consumption Rate</div>
+              <div class="summary-card__value">
+                {{ displayFixed(summary.self_consumption_ratio) }}<span class="summary-card__unit">%</span>
+              </div>
+              <div
+                v-if="hasValue(summary.self_consumption_vs_yesterday_pct)"
+                class="summary-card__trend"
+                :class="trendUp(summary.self_consumption_vs_yesterday_pct)"
+              >
+                vs Yesterday <span>{{ displayPct(summary.self_consumption_vs_yesterday_pct) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card__icon net-icon"><el-icon><DataAnalysis /></el-icon></div>
+            <div class="summary-card__content">
+              <div class="summary-card__label">Net Power</div>
+              <div class="summary-card__value">
+                {{ displayFixed(summary.net_power) }}<span class="summary-card__unit">kW</span>
+              </div>
+              <div
+                v-if="hasValue(summary.net_power_vs_yesterday_pct)"
+                class="summary-card__trend"
+                :class="trendUp(summary.net_power_vs_yesterday_pct)"
+              >
+                vs Yesterday <span>{{ displayPct(summary.net_power_vs_yesterday_pct) }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card__icon weather-icon"><el-icon><Cloudy /></el-icon></div>
+            <div class="summary-card__content">
+              <div class="summary-card__label">Weather</div>
+              <div class="summary-card__value">
+                <span style="font-size:0.18rem">{{ displayFixed(summary.weather?.temperature) }}</span><span class="summary-card__unit">°C</span>
+              </div>
+              <div class="summary-card__trend">
+                Cloud {{ displayFixed(summary.weather?.cloud_cover) }}% · Humidity {{ displayFixed(summary.weather?.humidity) }}%
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="forecast__toolbar-right">
-        <el-button class="forecast__btn-setting" @click="handleForecastSettings">
-          <el-icon class="btn-icon"><Setting /></el-icon>
-          Forecast Settings
-        </el-button>
-        <el-button class="forecast__btn-export" type="primary" @click="handleExport">
-          <el-icon class="btn-icon"><Download /></el-icon>
-          Export
-        </el-button>
+
+      <!-- PV 功率预测图表 -->
+      <div class="forecast__chart-section">
+        <div class="section-header">
+          <span class="section-title">PV Power Forecast</span>
+          <span class="section-subtitle">Next 24 Hours</span>
+        </div>
+        <div class="forecast__chart-wrap">
+          <ForecastRangeChart
+            :data="pvChartData"
+            yUnit="kW"
+            :splitLines="splitLines"
+            :showToolbox="false"
+            title="PV Power Forecast"
+          />
+        </div>
+      </div>
+
+      <!-- 负荷预测图表 -->
+      <div class="forecast__chart-section">
+        <div class="section-header">
+          <span class="section-title">Load Forecast</span>
+          <span class="section-subtitle">Next 24 Hours</span>
+        </div>
+        <div class="forecast__chart-wrap">
+          <ForecastRangeChart
+            :data="loadChartData"
+            yUnit="kW"
+            :splitLines="splitLines"
+            forecastColor="#ff6900"
+            actualColor="#a78bfa"
+            bandColor="#a78bfa"
+            :showToolbox="false"
+            title="Load Forecast"
+          />
+        </div>
       </div>
     </div>
 
-    <!-- 主体内容 -->
-    <div class="forecast__body">
-      <!-- 左侧主内容区 -->
-      <div class="forecast__main">
-        <!-- 摘要卡片 -->
-        <div class="forecast__summary">
-          <div class="section-header">
-            <span class="section-title">Forecast Summary</span>
-            <span class="section-subtitle">Next 24 Hours</span>
-          </div>
-          <div class="summary-cards">
-            <div class="summary-card">
-              <div class="summary-card__icon pv-icon">
-                <el-icon><Sunny /></el-icon>
-              </div>
-              <div class="summary-card__content">
-                <div class="summary-card__label">Total PV Generation</div>
-                <div class="summary-card__value">
-                  18.6<span class="summary-card__unit">MWh</span>
-                </div>
-                <div class="summary-card__trend up">
-                  vs Yesterday <span>▲ 8.3%</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="summary-card">
-              <div class="summary-card__icon load-icon">
-                <el-icon><TrendCharts /></el-icon>
-              </div>
-              <div class="summary-card__content">
-                <div class="summary-card__label">Total Load</div>
-                <div class="summary-card__value">
-                  16.2<span class="summary-card__unit">MWh</span>
-                </div>
-                <div class="summary-card__trend up">
-                  vs Yesterday <span>▲ 5.1%</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="summary-card">
-              <div class="summary-card__icon self-icon">
-                <el-icon><DataAnalysis /></el-icon>
-              </div>
-              <div class="summary-card__content">
-                <div class="summary-card__label">Self-consumption Rate</div>
-                <div class="summary-card__value">
-                  87<span class="summary-card__unit">%</span>
-                </div>
-                <div class="summary-card__trend up">
-                  vs Yesterday <span>▲ 2.7%</span>
-                </div>
-              </div>
-            </div>
+    <div class="forecast__right">
+      <div class="panel-card">
+        <div class="panel-card__header">
+          <div class="panel-card__title">
+            <span class="ai-badge">AI</span>
+            <span>AI Suggestions ({{ allSuggestions.length }})</span>
           </div>
         </div>
-
-        <!-- PV 功率预测图表 -->
-        <div class="forecast__chart-section">
-          <div class="section-header">
-            <div class="section-title-row">
-              <span class="section-title">PV Power Forecast</span>
-              <span class="section-subtitle">Next 24 Hours</span>
+        <div class="panel-card__body suggestion-scroll-body">
+          <div
+            v-for="item in allSuggestions"
+            :key="item.id"
+            class="suggestion-item"
+            :class="sugClass(item)"
+          >
+            <div class="suggestion-item__icon" :class="sugClass(item)">
+              <el-icon v-if="item.priority === 'high' || item.suggestion_type === 'warning'"><Lightning /></el-icon>
+              <el-icon v-else><Box /></el-icon>
             </div>
-            <div class="chart-legend">
-              <span class="legend-item">
-                <span class="legend-line solid pv"></span>Actual
-              </span>
-              <span class="legend-item">
-                <span class="legend-line dashed"></span>Forecast
-              </span>
-              <span class="legend-item">
-                <span class="legend-band pv-band"></span>P10-P90 Range
-              </span>
+            <div class="suggestion-item__content">
+              <div class="suggestion-item__title">{{ item.title }}</div>
+              <div class="suggestion-item__desc">{{ item.description }}</div>
+              <div class="suggestion-item__impact">{{ item.recommended_action }}</div>
             </div>
-          </div>
-          <div class="forecast__chart-wrap">
-            <ForecastLineChart
-              :xAxiosOption="chartXOption"
-              :yAxiosOption="{ yUnit: 'kW' }"
-              :series="pvChartSeries"
-              :splitLines="splitLines"
-              :gridConfig="{ left: 55, right: 20, top: 30, bottom: 25 }"
-              :showAreaStyle="true"
-              :showToolbox="false"
-              title="PV Power Forecast"
-            />
-          </div>
-        </div>
-
-        <!-- 负荷预测图表 -->
-        <div class="forecast__chart-section">
-          <div class="section-header">
-            <div class="section-title-row">
-              <span class="section-title">Load Forecast</span>
-              <span class="section-subtitle">Next 24 Hours</span>
-            </div>
-            <div class="chart-legend">
-              <span class="legend-item">
-                <span class="legend-line solid load"></span>Actual
-              </span>
-              <span class="legend-item">
-                <span class="legend-line dashed"></span>Forecast
-              </span>
-              <span class="legend-item">
-                <span class="legend-band load-band"></span>P10-P90 Range
-              </span>
+            <div class="suggestion-item__meta-text">
+              <span class="suggestion-priority" :class="item.priority">{{ item.priority }}</span>
             </div>
           </div>
-          <div class="forecast__chart-wrap">
-            <ForecastLineChart
-              :xAxiosOption="chartXOption"
-              :yAxiosOption="{ yUnit: 'kW' }"
-              :series="loadChartSeries"
-              :splitLines="splitLines"
-              :gridConfig="{ left: 55, right: 20, top: 30, bottom: 25 }"
-              :showAreaStyle="true"
-              :showToolbox="false"
-              title="Load Forecast"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- 右侧面板 -->
-      <div class="forecast__panel">
-        <!-- AI 建议 -->
-        <div class="panel-card">
-          <div class="panel-card__header">
-            <div class="panel-card__title">
-              <span class="ai-badge">AI</span>
-              <span>AI Suggestions</span>
-            </div>
-            <el-button link class="view-all-btn">View All</el-button>
-          </div>
-          <div class="panel-card__body">
-            <div
-              v-for="suggestion in aiSuggestions"
-              :key="suggestion.id"
-              class="suggestion-item"
-              :class="suggestion.type"
-            >
-              <div class="suggestion-item__icon" :class="suggestion.type">
-                <el-icon v-if="suggestion.type === 'warning'"><Lightning /></el-icon>
-                <el-icon v-else><Box /></el-icon>
-              </div>
-              <div class="suggestion-item__content">
-                <div class="suggestion-item__title">{{ suggestion.title }}</div>
-                <div class="suggestion-item__desc">{{ suggestion.desc }}</div>
-                <div class="suggestion-item__impact">Impact: {{ suggestion.impact }}</div>
-              </div>
-              <el-button
-                size="small"
-                class="suggestion-item__btn"
-                :class="suggestion.type"
-              >
-                View Details
-              </el-button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 推荐操作 -->
-        <div class="panel-card">
-          <div class="panel-card__header">
-            <div class="panel-card__title">
-              <span>Recommended Actions</span>
-            </div>
-            <el-button link class="view-all-btn">View All</el-button>
-          </div>
-          <div class="panel-card__body">
-            <div v-for="action in recommendedActions" :key="action.id" class="action-item">
-              <div class="action-item__icon" :class="action.iconType">
-                <el-icon v-if="action.iconType === 'battery'"><Box /></el-icon>
-                <el-icon v-else><Lightning /></el-icon>
-              </div>
-              <div class="action-item__content">
-                <div class="action-item__title">{{ action.title }}</div>
-                <div class="action-item__desc">{{ action.desc }}</div>
-                <div class="action-item__meta">{{ action.meta }}</div>
-              </div>
-              <el-button size="small" class="action-item__btn">
-                {{ action.btnText }}
-              </el-button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 预测准确率 -->
-        <div class="panel-card accuracy-card">
-          <div class="panel-card__header">
-            <div class="panel-card__title">
-              <span>Forecast Accuracy</span>
-              <span class="title-sub">(Last 7 Days)</span>
-            </div>
-          </div>
-          <div class="panel-card__body">
-            <div class="accuracy-metrics">
-              <div class="accuracy-item">
-                <div class="accuracy-item__label">PV Forecast</div>
-                <div class="accuracy-item__value pv">92.3%</div>
-              </div>
-              <div class="accuracy-item">
-                <div class="accuracy-item__label">Load Forecast</div>
-                <div class="accuracy-item__value load">89.7%</div>
-              </div>
-              <div class="accuracy-item overall">
-                <div class="accuracy-item__label">Overall Accuracy</div>
-                <div class="accuracy-item__value overall-val">91.0%</div>
-              </div>
-            </div>
-            <el-button link class="view-details-btn">View Details →</el-button>
-          </div>
+          <div v-if="allSuggestions.length === 0" class="suggestion-empty">No suggestions available</div>
         </div>
       </div>
     </div>
@@ -239,661 +157,292 @@
 </template>
 
 <script setup lang="ts">
+import { Sunny, TrendCharts, DataAnalysis, Lightning, Box, Cloudy } from '@element-plus/icons-vue'
+import ForecastRangeChart from '@/components/charts/ForecastRangeChart.vue'
+import type { RangeChartData } from '@/components/charts/ForecastRangeChart.vue'
 import {
-  Setting,
-  Download,
-  Sunny,
-  TrendCharts,
-  DataAnalysis,
-  Lightning,
-  Box,
-} from '@element-plus/icons-vue'
-import ForecastLineChart from '@/components/charts/ForecastLineChart.vue'
-import type { ForecastSeriesData } from '@/components/charts/ForecastLineChart.vue'
+  fetchForecastLoad,
+  fetchForecastPV,
+  fetchForecastSummary,
+  fetchForecastSuggestions,
+} from '@/api/forecast'
+import type {
+  ForecastSummary,
+  SchedulingSuggestion,
+  TimeSeriesPoint,
+} from '@/types/forecast'
+import dayjs from 'dayjs'
 
-const timeLabels = Array.from({ length: 25 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
-const chartXOption = { xAxiosData: timeLabels }
-const splitLines = [{ index: 14, label: 'Now' }]
+// ─── State ────────────────────────────────────────────────
+const summaryLastUpdated = ref('')
 
-// PV 功率模拟数据（以 14:00 为当前时刻）
-const pvActualData: (number | null)[] = [
-  0, 0, 0, 0, 0, 15, 80, 220, 420, 610, 760, 860, 940, 880,
-  null, null, null, null, null, null, null, null, null, null, null,
-]
-const pvForecastData: (number | null)[] = [
-  null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-  320, 280, 190, 110, 50, 20, 5, 0, 0, 0, 0,
-]
+const summary = reactive<Partial<ForecastSummary>>({
+  weather: null,
+})
 
-const pvChartSeries: ForecastSeriesData[] = [
-  {
-    name: 'PV Power',
-    segments: [
-      { name: 'Actual', data: pvActualData as number[], color: '#69cbff', lineType: 'solid' },
-      { name: 'Forecast', data: pvForecastData as number[], color: '#ff6900', lineType: 'dashed' },
-    ],
-  },
-]
+const allSuggestions = ref<SchedulingSuggestion[]>([])
 
-// 负荷模拟数据（早晚高峰曲线）
-const loadActualData: (number | null)[] = [
-  380, 340, 320, 310, 305, 320, 390, 480, 590, 660, 700, 720, 740, 760,
-  null, null, null, null, null, null, null, null, null, null, null,
-]
-const loadForecastData: (number | null)[] = [
-  null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-  870, 920, 880, 840, 800, 760, 700, 640, 560, 460, 390,
-]
+// ─── Chart data ────────────────────────────────────────────
+const splitLines = computed(() => {
+  const index = findNowIndex(pvChartData.value.length ? pvChartData.value : loadChartData.value)
+  return index >= 0 ? [{ index, label: 'Now' }] : []
+})
 
-const loadChartSeries: ForecastSeriesData[] = [
-  {
-    name: 'Load',
-    segments: [
-      { name: 'Actual', data: loadActualData as number[], color: '#a78bfa', lineType: 'solid' },
-      { name: 'Forecast', data: loadForecastData as number[], color: '#ff6900', lineType: 'dashed' },
-    ],
-  },
-]
+const pvChartData = ref<RangeChartData[]>([])
+const loadChartData = ref<RangeChartData[]>([])
 
-const aiSuggestions = [
-  {
-    id: 1,
-    type: 'warning',
-    title: 'PV power drop predicted in 1h 45m',
-    desc: 'Prepare ESS discharge or connect backup source.',
-    impact: '-1.2 MWh',
-  },
-  {
-    id: 2,
-    type: 'info',
-    title: 'Load peak expected today 14:00 - 16:00',
-    desc: 'Recommend charging ESS before 12:00.',
-    impact: 'Reduce peak by 15%',
-  },
-]
+// ─── Data fetching ─────────────────────────────────────────
+async function loadAll() {
+  try {
+    await Promise.all([loadSummary(), loadForecastCurves(), loadSuggestions()])
+  } catch (e) {
+    console.error('[Forecast] load error:', e)
+  }
+}
 
-const recommendedActions = [
-  {
-    id: 1,
-    iconType: 'battery',
-    title: 'Charge ESS before load peak',
-    desc: 'Recommended: Before 12:00',
-    meta: 'Target SoC: 90%',
-    btnText: 'Schedule',
-  },
-  {
-    id: 2,
-    iconType: 'lightning',
-    title: 'Prepare backup for PV drop',
-    desc: 'Recommended: Before 14:00',
-    meta: 'Duration: ~3h',
-    btnText: 'Prepare',
-  },
-]
+async function loadSummary() {
+  try {
+    const d = await fetchForecastSummary()
+    Object.assign(summary, d)
+    if (d.last_updated) summaryLastUpdated.value = dayjs(d.last_updated).format('MM-DD HH:mm')
+  } catch (e) {
+    console.warn('[Forecast] Summary API failed', e)
+  }
+}
 
-function handleForecastSettings() {}
-function handleExport() {}
+async function loadSuggestions() {
+  try {
+    const d = await fetchForecastSuggestions()
+    allSuggestions.value = Array.isArray(d) ? d : []
+  } catch (e) {
+    console.warn('[Forecast] Suggestions API failed', e)
+    allSuggestions.value = []
+  }
+}
+
+async function loadForecastCurves() {
+  try {
+    const window = getForecastWindow()
+    const [pv, load] = await Promise.all([
+      fetchForecastPV(window.startTime, window.endTime),
+      fetchForecastLoad(window.startTime, window.endTime),
+    ])
+    pvChartData.value = mapTimeSeries(pv.data, window.now)
+    loadChartData.value = mapTimeSeries(load.data, window.now)
+  } catch (e) {
+    console.warn('[Forecast] Time series API failed', e)
+    pvChartData.value = []
+    loadChartData.value = []
+  }
+}
+
+function getForecastWindow() {
+  const now = dayjs()
+  return {
+    now,
+    startTime: now.subtract(6, 'hour').format('YYYY-MM-DDTHH:mm:ssZ'),
+    endTime: now.add(24, 'hour').format('YYYY-MM-DDTHH:mm:ssZ'),
+  }
+}
+
+function mapTimeSeries(data: TimeSeriesPoint[] = [], now = dayjs()): RangeChartData[] {
+  return data.map((item) => {
+    const pointTime = dayjs(item.ts)
+    const isHistory = pointTime.isValid() && pointTime.isBefore(now)
+    const forecastValue = item.p50 ?? item.predicted ?? null
+
+    return {
+      label: pointTime.isValid() ? pointTime.format('MM-DD HH:mm') : item.ts,
+      timestamp: item.ts,
+      actual: item.actual,
+      p50: isHistory ? null : forecastValue,
+      p10: isHistory ? null : item.p10,
+      p90: isHistory ? null : item.p90,
+      weather: item.weather,
+    }
+  })
+}
+
+function findNowIndex(data: RangeChartData[]): number {
+  if (!data.length) return -1
+  const current = dayjs()
+  let best = -1
+  let bestDiff = Number.POSITIVE_INFINITY
+  data.forEach((point, index) => {
+    const candidate = dayjs(point.timestamp ?? point.label)
+    if (!candidate.isValid()) return
+    const diff = Math.abs(candidate.diff(current, 'minute'))
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = index
+    }
+  })
+  return bestDiff <= 45 ? best : -1
+}
+
+// ─── Display helpers ──────────────────────────────────────
+function displayFixed(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-'
+  return v.toFixed(1)
+}
+
+function displayPct(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-'
+  const prefix = v >= 0 ? '▲' : '▼'
+  return `${prefix} ${Math.abs(v).toFixed(1)}%`
+}
+
+function trendUp(v: number | null | undefined): string {
+  if (v === null || v === undefined) return ''
+  return v >= 0 ? 'up' : 'down'
+}
+
+function hasValue(v: number | null | undefined): boolean {
+  return v !== null && v !== undefined
+}
+
+function sugClass(s: SchedulingSuggestion): string {
+  if (s.priority === 'high' || s.suggestion_type === 'warning') return 'warning'
+  return 'info'
+}
+
+onMounted(loadAll)
 </script>
 
 <style lang="scss" scoped>
 .voltage-class.forecast-view {
   display: flex;
-  flex-direction: column;
   height: 100%;
-  //padding: 0.2rem 0.24rem;
-  gap: 0.16rem;
+  gap: 0.12rem;
   overflow: hidden;
 
-  // ── 顶部工具栏 ──
-  .forecast__toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-
-    .forecast__toolbar-left {
-      display: flex;
-      align-items: baseline;
-      gap: 0.1rem;
-
-      .forecast__title {
-        font-size: var(--vt-font-size-xl);
-        font-weight: var(--vt-font-weight-bold);
-        color: var(--vt-text-primary);
-        font-family: var(--vt-font-family-heading);
-      }
-
-      .forecast__subtitle {
-        font-size: var(--vt-font-size-sm);
-        color: var(--vt-text-secondary);
-      }
-    }
-
-    .forecast__toolbar-right {
-      display: flex;
-      align-items: center;
-      gap: 0.1rem;
-
-      .forecast__btn-setting {
-        background: var(--vt-bg-glass);
-        border: 1px solid var(--vt-border-color);
-        color: var(--vt-text-primary);
-        font-size: var(--vt-font-size-sm);
-        height: 0.32rem;
-
-        &:hover {
-          background: var(--vt-bg-glass-strong);
-          border-color: var(--vt-border-color-strong);
-        }
-
-        .btn-icon {
-          margin-right: 0.05rem;
-        }
-      }
-
-      .forecast__btn-export {
-        background: var(--vt-color-primary);
-        border-color: var(--vt-color-primary);
-        font-size: var(--vt-font-size-sm);
-        height: 0.32rem;
-
-        &:hover {
-          background: var(--vt-color-primary-hover);
-        }
-
-        .btn-icon {
-          margin-right: 0.05rem;
-        }
-      }
-    }
-  }
-
-  // ── 主体 ──
-  .forecast__body {
-    display: flex;
-    gap: 0.16rem;
+  // ── 左侧（压缩） ──
+  .forecast__left {
     flex: 1;
-    min-height: 0;
-    overflow: hidden;
-
-    // 左侧主内容（可滚动）
-    .forecast__main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 0.14rem;
-      min-width: 0;
-      overflow-y: auto;
-
-      &::-webkit-scrollbar {
-        width: 0.04rem;
-      }
-      &::-webkit-scrollbar-thumb {
-        background: var(--vt-scrollbar-thumb);
-        border-radius: 0.04rem;
-      }
-    }
-
-    // 右侧固定面板
-    .forecast__panel {
-      width: 3.2rem;
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.12rem;
-      overflow-y: auto;
-
-      &::-webkit-scrollbar {
-        width: 0.04rem;
-      }
-      &::-webkit-scrollbar-thumb {
-        background: var(--vt-scrollbar-thumb);
-        border-radius: 0.04rem;
-      }
-    }
-  }
-
-  // ── 摘要卡片区 ──
-  .forecast__summary {
-    background: var(--vt-bg-glass);
-    border: 1px solid var(--vt-border-color);
-    border-radius: var(--vt-radius-md);
-    padding: 0.14rem 0.16rem;
-    flex-shrink: 0;
-
-    .section-header {
-      display: flex;
-      align-items: center;
-      margin-bottom: 0.1rem;
-      gap: 0.08rem;
-    }
-
-    .summary-cards {
-      display: flex;
-      gap: 0.12rem;
-
-      .summary-card {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        gap: 0.12rem;
-        background: var(--vt-bg-glass-strong);
-        border: 1px solid var(--vt-border-color-soft);
-        border-radius: var(--vt-radius-md);
-        padding: 0.12rem 0.14rem;
-
-        .summary-card__icon {
-          width: 0.4rem;
-          height: 0.4rem;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-shrink: 0;
-          font-size: 0.2rem;
-
-          &.pv-icon {
-            background: rgba(255, 165, 0, 0.15);
-            color: #ffa500;
-          }
-          &.load-icon {
-            background: rgba(105, 203, 255, 0.15);
-            color: #69cbff;
-          }
-          &.self-icon {
-            background: rgba(82, 196, 26, 0.15);
-            color: #52c41a;
-          }
-        }
-
-        .summary-card__content {
-          display: flex;
-          flex-direction: column;
-          gap: 0.03rem;
-
-          .summary-card__label {
-            font-size: var(--vt-font-size-xs);
-            color: var(--vt-text-secondary);
-          }
-
-          .summary-card__value {
-            font-size: var(--vt-font-size-xl);
-            font-weight: var(--vt-font-weight-bold);
-            color: var(--vt-text-primary);
-            line-height: 1.2;
-
-            .summary-card__unit {
-              font-size: var(--vt-font-size-xs);
-              color: var(--vt-text-secondary);
-              margin-left: 0.04rem;
-              font-weight: var(--vt-font-weight-normal);
-            }
-          }
-
-          .summary-card__trend {
-            font-size: var(--vt-font-size-xs);
-            color: var(--vt-text-secondary);
-
-            span {
-              font-weight: var(--vt-font-weight-semibold);
-            }
-
-            &.up span {
-              color: var(--vt-color-success);
-            }
-            &.down span {
-              color: var(--vt-color-danger);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ── 图表区域（PV + Load 共用） ──
-  .forecast__chart-section {
-    background: var(--vt-bg-glass);
-    border: 1px solid var(--vt-border-color);
-    border-radius: var(--vt-radius-md);
-    padding: 0.14rem 0.16rem;
+    min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 0.1rem;
+    overflow: hidden;
+  }
 
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 0.08rem;
+  // ── 右侧（变宽） ──
+  .forecast__right {
+    width: 3.6rem;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    &::-webkit-scrollbar { width: 0.03rem; }
+    &::-webkit-scrollbar-thumb { background: var(--vt-scrollbar-thumb); border-radius: 0.03rem; }
+  }
 
-      .section-title-row {
-        display: flex;
-        align-items: baseline;
-        gap: 0.08rem;
-      }
-
-      .section-title {
-        font-size: var(--vt-font-size-md);
-        font-weight: var(--vt-font-weight-semibold);
-        color: var(--vt-text-primary);
-      }
-
-      .section-subtitle {
-        font-size: var(--vt-font-size-xs);
-        color: var(--vt-text-secondary);
-      }
-
-      .chart-legend {
-        display: flex;
-        align-items: center;
-        gap: 0.14rem;
-
-        .legend-item {
-          display: flex;
-          align-items: center;
-          gap: 0.06rem;
-          font-size: var(--vt-font-size-xs);
-          color: rgba(255, 255, 255, 0.6);
-
-          .legend-line {
-            display: inline-block;
-            width: 0.22rem;
-            height: 0.02rem;
-
-            &.solid.pv {
-              background: #69cbff;
-            }
-            &.solid.load {
-              background: #a78bfa;
-            }
-            &.dashed {
-              background: none;
-              border-top: 0.02rem dashed #ff6900;
-            }
+  // ── 摘要卡片 ──
+  .forecast__summary {
+    flex-shrink: 0;
+    .summary-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.08rem;
+      .summary-card { display: flex; align-items: center; gap: 0.08rem;
+        background: var(--vt-bg-glass); border: 1px solid var(--vt-border-color-soft);
+        border-radius: var(--vt-radius-md); padding: 0.13rem 0.12rem; min-height: 0.84rem;
+        .summary-card__icon { width: 0.32rem; height: 0.32rem; border-radius: 50%; display: flex;
+          align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.16rem;
+          &.pv-icon { background: rgba(255,165,0,0.15); color: #ffa500; }
+          &.load-icon { background: rgba(105,203,255,0.15); color: #69cbff; }
+          &.self-icon { background: rgba(82,196,26,0.15); color: #52c41a; }
+          &.net-icon { background: rgba(255,105,0,0.15); color: #ff6900; }
+          &.weather-icon { background: rgba(167,139,250,0.15); color: #a78bfa; }
+        }
+        .summary-card__content { display: flex; flex-direction: column; gap: 0.02rem; min-width: 0;
+          .summary-card__label { font-size: 0.11rem; color: var(--vt-text-secondary);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .summary-card__value { font-size: var(--vt-font-size-lg); font-weight: var(--vt-font-weight-bold);
+            color: var(--vt-text-primary); line-height: 1.2;
+            .summary-card__unit { font-size: 0.1rem; color: var(--vt-text-secondary);
+              margin-left: 0.03rem; font-weight: var(--vt-font-weight-normal); }
           }
-
-          .legend-band {
-            display: inline-block;
-            width: 0.18rem;
-            height: 0.09rem;
-            border-radius: 0.02rem;
-
-            &.pv-band {
-              background: rgba(105, 203, 255, 0.2);
-              border: 1px dashed rgba(105, 203, 255, 0.4);
-            }
-            &.load-band {
-              background: rgba(167, 139, 250, 0.2);
-              border: 1px dashed rgba(167, 139, 250, 0.4);
-            }
+          .summary-card__trend { font-size: 0.1rem; color: var(--vt-text-secondary);
+            span { font-weight: var(--vt-font-weight-semibold); }
+            &.up span { color: var(--vt-color-success); }
+            &.down span { color: var(--vt-color-danger); }
           }
         }
       }
     }
-
-    .forecast__chart-wrap {
-      height: 2.4rem;
-      position: relative;
-    }
   }
 
-  // ── 右侧面板卡片 ──
+  // ── 图表 ──
+  .forecast__chart-section {
+    flex: 1;
+    min-height: 0;
+    background: var(--vt-bg-glass); border: 1px solid var(--vt-border-color);
+    border-radius: var(--vt-radius-md); padding: 0.08rem 0.1rem;
+    display: flex; flex-direction: column;
+
+    .section-header { display: flex; align-items: center; gap: 0.08rem; margin-bottom: 0.04rem;
+      flex-shrink: 0; }
+    .section-title { font-size: var(--vt-font-size-sm); font-weight: var(--vt-font-weight-semibold);
+      color: var(--vt-text-primary); }
+    .section-subtitle { font-size: 0.1rem; color: var(--vt-text-secondary); }
+
+    .forecast__chart-wrap { flex: 1; min-height: 0; position: relative; }
+  }
+
+  // ── 面板卡片 ──
   .panel-card {
-    background: var(--vt-bg-glass);
-    border: 1px solid var(--vt-border-color);
-    border-radius: var(--vt-radius-md);
-    padding: 0.12rem 0.14rem;
-
-    .panel-card__header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 0.1rem;
-
-      .panel-card__title {
-        display: flex;
-        align-items: center;
-        gap: 0.06rem;
-        font-size: var(--vt-font-size-sm);
-        font-weight: var(--vt-font-weight-semibold);
+    background: var(--vt-bg-glass); border: 1px solid var(--vt-border-color);
+    border-radius: var(--vt-radius-md); padding: 0.1rem;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    .panel-card__header { display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 0.08rem;
+      flex-shrink: 0;
+      .panel-card__title { display: flex; align-items: center; gap: 0.05rem;
+        font-size: var(--vt-font-size-sm); font-weight: var(--vt-font-weight-semibold);
         color: var(--vt-text-primary);
-
-        .ai-badge {
-          background: var(--vt-color-primary);
-          color: #fff;
-          font-size: 0.1rem;
-          font-weight: var(--vt-font-weight-bold);
-          padding: 0.01rem 0.05rem;
-          border-radius: 0.03rem;
-          line-height: 1.4;
-        }
-
-        .title-sub {
-          font-size: var(--vt-font-size-xs);
-          color: var(--vt-text-secondary);
-          font-weight: var(--vt-font-weight-normal);
-        }
-      }
-
-      .view-all-btn {
-        font-size: var(--vt-font-size-xs);
-        color: var(--vt-color-primary);
-        padding: 0;
+        .ai-badge { background: var(--vt-color-primary); color: #fff; font-size: 0.09rem;
+          font-weight: var(--vt-font-weight-bold); padding: 0.01rem 0.04rem;
+          border-radius: 0.02rem; line-height: 1.3; }
       }
     }
-
-    .panel-card__body {
-      display: flex;
-      flex-direction: column;
-      gap: 0.08rem;
-    }
+    .panel-card__body { display: flex; flex-direction: column; gap: 0.06rem; min-height: 0; }
   }
 
-  // ── AI 建议条目 ──
+  .suggestion-scroll-body {
+    flex: 1; overflow-y: auto;
+    &::-webkit-scrollbar { width: 0.03rem; }
+    &::-webkit-scrollbar-thumb { background: var(--vt-scrollbar-thumb); border-radius: 0.03rem; }
+  }
+
   .suggestion-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.08rem;
-    padding: 0.1rem;
-    border-radius: var(--vt-radius-sm);
-    background: var(--vt-bg-glass-strong);
-    border-left: 0.03rem solid transparent;
-
-    &.warning {
-      border-left-color: var(--vt-color-level-warning);
+    display: flex; align-items: flex-start; gap: 0.06rem; padding: 0.08rem;
+    border-radius: var(--vt-radius-sm); background: var(--vt-bg-glass-strong);
+    border-left: 0.02rem solid transparent;
+    &.warning { border-left-color: var(--vt-color-level-warning); }
+    &.info { border-left-color: var(--vt-color-warning); }
+    .suggestion-item__icon { width: 0.24rem; height: 0.24rem; border-radius: 50%; display: flex;
+      align-items: center; justify-content: center; font-size: 0.12rem; flex-shrink: 0; margin-top: 0.01rem;
+      &.warning { background: rgba(255,110,8,0.15); color: var(--vt-color-level-warning); }
+      &.info { background: rgba(250,173,20,0.15); color: var(--vt-color-warning); }
     }
-    &.info {
-      border-left-color: var(--vt-color-warning);
+    .suggestion-item__content { flex: 1; min-width: 0;
+      .suggestion-item__title { font-size: 0.11rem; font-weight: var(--vt-font-weight-semibold);
+        color: var(--vt-text-primary); line-height: 1.3; margin-bottom: 0.02rem; }
+      .suggestion-item__desc { font-size: 0.1rem; color: var(--vt-text-secondary); line-height: 1.3; }
+      .suggestion-item__impact { font-size: 0.1rem; color: var(--vt-text-secondary); margin-top: 0.02rem; }
     }
-
-    .suggestion-item__icon {
-      width: 0.28rem;
-      height: 0.28rem;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.14rem;
-      flex-shrink: 0;
-      margin-top: 0.01rem;
-
-      &.warning {
-        background: rgba(255, 110, 8, 0.15);
-        color: var(--vt-color-level-warning);
-      }
-      &.info {
-        background: rgba(250, 173, 20, 0.15);
-        color: var(--vt-color-warning);
-      }
-    }
-
-    .suggestion-item__content {
-      flex: 1;
-      min-width: 0;
-
-      .suggestion-item__title {
-        font-size: var(--vt-font-size-xs);
-        font-weight: var(--vt-font-weight-semibold);
-        color: var(--vt-text-primary);
-        line-height: 1.4;
-        margin-bottom: 0.03rem;
-      }
-
-      .suggestion-item__desc {
-        font-size: 0.11rem;
-        color: var(--vt-text-secondary);
-        line-height: 1.4;
-      }
-
-      .suggestion-item__impact {
-        font-size: 0.11rem;
-        color: var(--vt-text-secondary);
-        margin-top: 0.03rem;
-      }
-    }
-
-    .suggestion-item__btn {
-      flex-shrink: 0;
-      font-size: 0.11rem;
-      height: 0.26rem;
-      padding: 0 0.08rem;
-      color: #fff;
-
-      &.warning {
-        background: var(--vt-color-primary);
-        border-color: var(--vt-color-primary);
-      }
-      &.info {
-        background: var(--vt-color-warning);
-        border-color: var(--vt-color-warning);
+    .suggestion-item__meta-text { flex-shrink: 0;
+      .suggestion-priority { font-size: 0.09rem; padding: 0.01rem 0.05rem; border-radius: 0.02rem;
+        &.high { background: rgba(255,110,8,0.2); color: var(--vt-color-level-warning); }
+        &.medium { background: rgba(250,173,20,0.2); color: var(--vt-color-warning); }
+        &.low { background: rgba(82,196,26,0.15); color: var(--vt-color-success); }
       }
     }
   }
 
-  // ── 推荐操作条目 ──
-  .action-item {
-    display: flex;
-    align-items: center;
-    gap: 0.08rem;
-    padding: 0.1rem;
-    border-radius: var(--vt-radius-sm);
-    background: var(--vt-bg-glass-strong);
-    border: 1px solid var(--vt-border-color-soft);
-
-    .action-item__icon {
-      width: 0.32rem;
-      height: 0.32rem;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      font-size: 0.15rem;
-
-      &.battery {
-        background: rgba(105, 203, 255, 0.15);
-        color: #69cbff;
-      }
-      &.lightning {
-        background: rgba(255, 105, 0, 0.15);
-        color: var(--vt-color-primary);
-      }
-    }
-
-    .action-item__content {
-      flex: 1;
-      min-width: 0;
-
-      .action-item__title {
-        font-size: var(--vt-font-size-xs);
-        font-weight: var(--vt-font-weight-semibold);
-        color: var(--vt-text-primary);
-      }
-
-      .action-item__desc,
-      .action-item__meta {
-        font-size: 0.11rem;
-        color: var(--vt-text-secondary);
-        line-height: 1.4;
-      }
-    }
-
-    .action-item__btn {
-      flex-shrink: 0;
-      font-size: 0.11rem;
-      height: 0.26rem;
-      padding: 0 0.1rem;
-      background: var(--vt-bg-glass-heavy);
-      border: 1px solid var(--vt-border-color);
-      color: var(--vt-text-primary);
-
-      &:hover {
-        border-color: var(--vt-color-primary);
-        color: var(--vt-color-primary);
-      }
-    }
-  }
-
-  // ── 预测准确率 ──
-  .accuracy-card {
-    .accuracy-metrics {
-      display: flex;
-      flex-direction: column;
-      gap: 0.08rem;
-      margin-bottom: 0.1rem;
-
-      .accuracy-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0.08rem 0.1rem;
-        border-radius: var(--vt-radius-sm);
-        background: var(--vt-bg-glass-strong);
-
-        &.overall {
-          background: rgba(82, 196, 26, 0.08);
-          border: 1px solid rgba(82, 196, 26, 0.2);
-        }
-
-        .accuracy-item__label {
-          font-size: var(--vt-font-size-xs);
-          color: var(--vt-text-secondary);
-        }
-
-        .accuracy-item__value {
-          font-size: var(--vt-font-size-md);
-          font-weight: var(--vt-font-weight-bold);
-
-          &.pv {
-            color: #ffa500;
-          }
-          &.load {
-            color: #a78bfa;
-          }
-          &.overall-val {
-            color: var(--vt-color-success);
-            font-size: var(--vt-font-size-lg);
-          }
-        }
-      }
-    }
-
-    .view-details-btn {
-      font-size: var(--vt-font-size-xs);
-      color: var(--vt-color-primary);
-      padding: 0;
-    }
-  }
-
-  // 通用 section header 变量
-  .section-title {
-    font-size: var(--vt-font-size-md);
-    font-weight: var(--vt-font-weight-semibold);
-    color: var(--vt-text-primary);
-  }
-
-  .section-subtitle {
-    font-size: var(--vt-font-size-xs);
-    color: var(--vt-text-secondary);
-  }
+  .suggestion-empty { text-align: center; color: var(--vt-text-secondary);
+    font-size: var(--vt-font-size-xs); padding: 0.15rem 0; }
 }
 </style>

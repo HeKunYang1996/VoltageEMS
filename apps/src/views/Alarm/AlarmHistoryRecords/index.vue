@@ -1,7 +1,7 @@
 <template>
   <div class="voltage-class alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
-      <!-- 表格工具�?-->
+      <!-- 琛ㄦ牸宸ュ叿锟?-->
       <div class="alarm-records__toolbar vt-toolbar">
         <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
           <el-form :model="filters" inline class="alarm-records__toolbar-form vt-toolbar-form">
@@ -71,7 +71,7 @@
         </div>
       </div>
 
-      <!-- 表格 -->
+      <!-- 琛ㄦ牸 -->
       <div class="alarm-records__table vt-table-shell">
         <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
           <el-table-column
@@ -118,7 +118,7 @@
           </el-table-column>
         </el-table>
 
-        <!-- 分页组件 -->
+        <!-- 鍒嗛〉缁勪欢 -->
         <div id="alarm-history-pagination-anchor" class="alarm-records__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
@@ -151,11 +151,11 @@ const warningLevelText = {
   3: 'Info Alarm',
 }
 
-// 日期选择器显示用的 Date 对象（与 filters 中的 Unix 时间戳分开）
+// 鏃ユ湡閫夋嫨鍣ㄦ樉绀虹敤鐨?Date 瀵硅薄锛堜笌 filters 涓殑 Unix 鏃堕棿鎴冲垎寮€锛?
 const startTimeDisplay = ref<Date | null>(null)
 const endTimeDisplay = ref<Date | null>(null)
 
-// 使用 useTableData composable
+// 浣跨敤 useTableData composable
 const {
   loading,
   tableData,
@@ -173,38 +173,38 @@ const {
   defaultPageSize: 20,
 })
 
-// 重置时同步清空日期选择器显示值
+// 閲嶇疆鏃跺悓姝ユ竻绌烘棩鏈熼€夋嫨鍣ㄦ樉绀哄€?
 const reloadFilters = () => {
   startTimeDisplay.value = null
   endTimeDisplay.value = null
   _reloadFilters()
 }
 
-// 初始化filters
+// 鍒濆鍖杅ilters
 filters.warning_level = null
 filters.start_time = null
 filters.end_time = null
 
-// 处理开始时间变化
+// 澶勭悊寮€濮嬫椂闂村彉鍖?
 const handleStartTimeChange = (value: Date | null) => {
   startTimeDisplay.value = value
-  // 记录原始 Date 以便禁用规则计算
+  // 璁板綍鍘熷 Date 浠ヤ究绂佺敤瑙勫垯璁＄畻
   filters.startTime = value || null
-  // 如果开始时间晚于或等于结束时间，清空结束时间
+  // 濡傛灉寮€濮嬫椂闂存櫄浜庢垨绛変簬缁撴潫鏃堕棿锛屾竻绌虹粨鏉熸椂闂?
   if (value && filters.endTime && value.getTime() >= new Date(filters.endTime).getTime()) {
     filters.endTime = null
     filters.end_time = null
     endTimeDisplay.value = null
   }
-  // 转为后端需要的 Unix 秒时间戳
+  // 杞彉涓哄悗绔渶瑕佺殑 Unix 绉掓椂闂存埑
   filters.start_time = value ? Math.floor(value.getTime() / 1000) : null
 }
 
-// 处理结束时间变化
+// 澶勭悊缁撴潫鏃堕棿鍙樺寲
 const handleEndTimeChange = (value: Date | null) => {
-  // 记录原始 Date 以便禁用规则计算
+  // 璁板綍鍘熷 Date 浠ヤ究绂佺敤瑙勫垯璁＄畻
   const adjusted: Date | null = value ? new Date(value) : null
-  // 若时间未指定（00:00:00），默认设置到当天 23:59:59
+  // 鑻ユ椂闂存湭鎸囧畾锛?0:00:00锛夛紝榛樿璁剧疆鍒板綋澶?23:59:59
   if (
     adjusted &&
     adjusted.getHours() === 0 &&
@@ -215,7 +215,7 @@ const handleEndTimeChange = (value: Date | null) => {
   }
   endTimeDisplay.value = adjusted
   filters.endTime = adjusted || null
-  // 如果结束时间早于或等于开始时间，清空开始时间
+  // 濡傛灉缁撴潫鏃堕棿鏃╀簬鎴栫瓑浜庡紑濮嬫椂闂达紝娓呯┖寮€濮嬫椂闂?
   if (
     adjusted &&
     filters.startTime &&
@@ -225,18 +225,18 @@ const handleEndTimeChange = (value: Date | null) => {
     filters.start_time = null
     startTimeDisplay.value = null
   }
-  // 转为后端需要的 Unix 秒时间戳
+  // 杞彉涓哄悗绔渶瑕佺殑 Unix 绉掓椂闂存埑
   filters.end_time = adjusted ? Math.floor(adjusted.getTime() / 1000) : null
 }
 
-// 禁用开始时间的日期选择
+// 绂佺敤寮€濮嬫椂闂寸殑鏃ユ湡閫夋嫨
 const disableStartDate = (time: Date) => {
   if (!filters.endTime) return false
-  // 开始日期不得晚于结束日期（同日允许，具体时间由 disableStartTime 控制）
+  // 寮€濮嬫棩鏈熶笉寰楁櫄浜庣粨鏉熸棩鏈燂紙鍚屾棩鍏佽锛屽叿浣撴椂闂寸敱 disableStartTime 鎺у埗锛?
   return time.getTime() > new Date(filters.endTime).getTime()
 }
 
-// 禁用开始时间的时间选择
+// 绂佺敤寮€濮嬫椂闂寸殑鏃堕棿閫夋嫨
 const disableStartTime = (date: Date, type: string) => {
   if (!filters.endTime || type !== 'minute') return {}
   const endTime = new Date(filters.endTime)
@@ -251,14 +251,14 @@ const disableStartTime = (date: Date, type: string) => {
   return {}
 }
 
-// 禁用结束时间的日期选择
+// 绂佺敤缁撴潫鏃堕棿鐨勬棩鏈熼€夋嫨
 const disableEndDate = (time: Date) => {
   if (!filters.startTime) return false
-  // 结束日期不得早于开始日期（同日允许，具体时间由 disableEndTime 控制）
+  // 缁撴潫鏃ユ湡涓嶅緱鏃╀簬寮€濮嬫棩鏈燂紙鍚屾棩鍏佽锛屽叿浣撴椂闂寸敱 disableEndTime 鎺у埗锛?
   return time.getTime() < new Date(filters.startTime).getTime()
 }
 
-// 禁用结束时间的时间选择
+// 绂佺敤缁撴潫鏃堕棿鐨勬椂闂撮€夋嫨
 const disableEndTime = (date: Date, type: string) => {
   if (!filters.startTime || type !== 'minute') return {}
   const startTime = new Date(filters.startTime)
@@ -273,11 +273,11 @@ const disableEndTime = (date: Date, type: string) => {
   return {}
 }
 
-// 格式化时间（支持 Unix 秒时间戳和日期字符串）
+// 鏍煎紡鍖栨椂闂达紙鏀寔 Unix 绉掓椂闂存埑鍜屾棩鏈熷瓧绗︿覆锛?
 const formatDateTime = (dateTime: number | string | null | undefined): string => {
   if (dateTime === null || dateTime === undefined || dateTime === '') return '-'
   try {
-    // Unix 时间戳为秒，需转换为毫秒
+    // Unix 鏃堕棿鎴充负绉掞紝闇€杞崲涓烘绉?
     const date = typeof dateTime === 'number' ? new Date(dateTime * 1000) : new Date(dateTime)
     if (isNaN(date.getTime())) return String(dateTime)
     const year = date.getFullYear()
@@ -292,7 +292,7 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
   }
 }
 
-// 处理导出
+// 澶勭悊瀵煎嚭
 </script>
 
 <style scoped lang="scss">

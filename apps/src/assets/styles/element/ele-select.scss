@@ -63,7 +63,7 @@ $hover-bg: rgba(255, 255, 255, 0.1);
 
 .voltage-class {
   .el-select {
-    width: min(100%, var(--vt-select-width));
+    // width: min(100%, var(--vt-select-width));
 
     .el-select__wrapper {
       min-height: $button-height-base;
@@ -149,7 +149,7 @@ $hover-bg: rgba(255, 255, 255, 0.1);
   }
 
   .el-select__popper.el-popper {
-    width: min(100%, var(--vt-select-width));
+    // width: min(100%, var(--vt-select-width));
     @extend %popper-base;
 
     .el-select-dropdown {

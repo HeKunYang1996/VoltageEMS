@@ -5,7 +5,6 @@ import devicesIcon from '@/assets/icons/sidebar-devices.svg'
 import alarmIcon from '@/assets/icons/sidebar-alarm.svg'
 import controlIcon from '@/assets/icons/sidebar-control.svg'
 import statisticsIcon from '@/assets/icons/sidebar-statistics.svg'
-import forecastIcon from '@/assets/icons/sidebar-forecast.svg'
 import settingIcon from '@/assets/icons/sidebar-setting.svg'
 
 // 工具：安全的异步组件（避免被代理）
@@ -214,7 +213,7 @@ export const dynamicRoutes: RouteItem[] = [
   {
     path: '/control',
     name: 'control',
-    redirect: '/control/ruleManagement',
+    redirect: '/control/historyRecords',
     meta: {
       isSubMenu: true,
       activeNav: '/control',
@@ -224,12 +223,12 @@ export const dynamicRoutes: RouteItem[] = [
     },
     children: [
       {
-        path: 'ruleManagement',
-        name: 'controlRuleManagement',
+        path: 'historyRecords',
+        name: 'controlHistoryRecords',
         component: () => import('@/views/Control/ControlRecord/index.vue'),
         meta: {
-          title: 'Rule Management',
-          activeNav: '/control/ruleManagement',
+          title: 'History Records',
+          activeNav: '/control/historyRecords',
           roles: ['Admin', 'Viewer', 'Engineer'],
         },
       },
@@ -322,18 +321,6 @@ export const dynamicRoutes: RouteItem[] = [
       //   },
       // },
     ],
-  },
-  {
-    path: '/forecast',
-    name: 'forecast',
-    component: () => import('@/views/Forecast/index.vue'),
-    meta: {
-      isSubMenu: false,
-      activeNav: '/forecast',
-      icon: forecastIcon,
-      title: 'Forecast',
-      roles: ['Admin', 'Viewer', 'Engineer'],
-    },
   },
   {
     path: '/setting',

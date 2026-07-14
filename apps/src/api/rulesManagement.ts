@@ -1,7 +1,12 @@
 import Request from '@/utils/request'
 import type { Rule, CreateRulePayload, UpdateRulePayload } from '@/types/ruleConfiguration'
 import type { RuleChainPayload } from '@/types/ruleConfiguration'
-import type { ModRuleSummary, PaginatedList, RuleHistoryItem } from '@/types/controlRule'
+import type {
+  ModRuleSummary,
+  PaginatedList,
+  RuleHistoryItem,
+  RuleHistoryRecord,
+} from '@/types/controlRule'
 
 export interface ModRuleListQuery {
   page?: number
@@ -19,6 +24,14 @@ export interface ModRuleHistoryQuery {
   end_time?: number
 }
 
+export interface RuleHistoryListQuery {
+  page?: number
+  page_size?: number
+  rule_name?: string
+  start_time?: number
+  end_time?: number
+}
+
 export const listModRules = async (params: ModRuleListQuery = {}) => {
   return await Request.get<PaginatedList<ModRuleSummary>>('/ruleApi/api/rules', params)
 }
@@ -31,6 +44,10 @@ export const getModRuleHistory = async (
     `/ruleApi/api/rules/${id}/history`,
     params,
   )
+}
+
+export const listRuleHistoryRecords = async (params: RuleHistoryListQuery = {}) => {
+  return await Request.get<PaginatedList<RuleHistoryRecord>>('/ruleApi/api/rules/history', params)
 }
 
 export const listRules = async (params: ModRuleListQuery = {}) => {

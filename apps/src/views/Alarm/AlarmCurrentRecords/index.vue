@@ -1,7 +1,7 @@
 <template>
   <div class="voltage-class alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
-      <!-- 表格工具栏 -->
+      <!-- 琛ㄦ牸宸ュ叿鏍?-->
       <div class="alarm-records__toolbar vt-toolbar">
         <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
           <el-form
@@ -42,7 +42,7 @@
         </div>
       </div>
 
-      <!-- 表格 -->
+      <!-- 琛ㄦ牸 -->
       <div class="alarm-records__table vt-table-shell">
         <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
           <el-table-column
@@ -81,7 +81,7 @@
           </el-table-column>
         </el-table>
 
-        <!-- 分页组件 -->
+        <!-- 鍒嗛〉缁勪欢 -->
         <div id="alarm-current-pagination-anchor" class="alarm-records__pagination vt-pagination">
           <el-pagination
             v-model:current-page="pagination.page"
@@ -112,13 +112,13 @@ const levelTextList = {
   3: 'Info Alarm',
 }
 const toolbarLeftRef = ref<HTMLElement | null>(null)
-// 表格配置
+// 琛ㄦ牸閰嶇疆
 const tableConfig: TableConfig = {
   listUrl: '/alarmApi/alerts',
   defaultPageSize: 20,
 }
 
-// 使用 useTableData composable
+// 浣跨敤 useTableData composable
 const {
   loading,
   tableData,
@@ -132,11 +132,11 @@ const {
 
 filters.warning_level = null
 
-// 格式化时间（支持 Unix 秒时间戳和日期字符串）
+// 鏍煎紡鍖栨椂闂达紙鏀寔 Unix 绉掓椂闂存埑鍜屾棩鏈熷瓧绗︿覆锛?
 const formatDateTime = (dateTime: number | string | null | undefined): string => {
   if (dateTime === null || dateTime === undefined || dateTime === '') return '-'
   try {
-    // Unix 时间戳为秒，需转换为毫秒
+    // Unix 鏃堕棿鎴充负绉掞紝闇€杞崲涓烘绉?
     const date = typeof dateTime === 'number' ? new Date(dateTime * 1000) : new Date(dateTime)
     if (isNaN(date.getTime())) return String(dateTime)
     const year = date.getFullYear()

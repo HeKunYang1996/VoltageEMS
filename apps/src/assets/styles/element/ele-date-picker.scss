@@ -370,4 +370,7 @@
       font-size: 0.14rem;
     }
   }
+  .el-date-editor.el-input, .el-date-editor.el-input__wrapper{
+    width: 100% !important;
+  }
 }

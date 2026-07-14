@@ -3,7 +3,7 @@
 .voltage-class {
   .el-input,
   .el-input-number {
-    width: min(100%, var(--vt-field-width));
+    // width: min(100%, var(--vt-field-width));
     &.is-without-controls {
       .el-input__wrapper {
         padding: 0;

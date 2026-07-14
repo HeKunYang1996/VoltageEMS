@@ -98,6 +98,12 @@ export default defineConfig(({ mode }) => ({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/modApi/, ''),
       },
+      // Forecast 服务代理：转发到 forecastsrv
+      '/forecastApi': {
+        target: 'http://192.168.30.10:36008',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/forecastApi/, ''),
+      },
       // WebSocket 代理：将前端的 /ws 转发到本机 127.0.0.1:6005
       '/ws': {
         target: 'ws://192.168.30.62:6005',

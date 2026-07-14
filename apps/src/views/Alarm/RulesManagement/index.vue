@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-// 正确引入SVG图标，避免部署后图片加载不出�?
+// 姝ｇ‘寮曞叆SVG鍥炬爣锛岄伩鍏嶉儴缃插悗鍥剧墖鍔犺浇涓嶅嚭锟?
 import tableRefreshIcon from '@/assets/icons/table-refresh.svg'
 import tableSearchIcon from '@/assets/icons/table-search.svg'
 import userAddIcon from '@/assets/icons/user-add.svg'
@@ -169,7 +169,7 @@ const levelSelectRef = ref<HTMLElement | null>(null)
 const rulesOperationFormRef = ref()
 const switchLoadingId = ref<string | number | null>(null)
 
-// 格式�?MonitorData
+// 鏍煎紡锟?MonitorData
 const formatMonitorData = (row: RuleInfo) => {
   if (!row) return '-'
   return [row.service_type || 'comsrv', row.channel_id, row.data_type, row.point_id]
@@ -182,11 +182,11 @@ const formatCondition = (row: RuleInfo) => {
   return `${row.operator} ${row.value}`
 }
 
-// 格式化时间（支持 Unix 秒时间戳和日期字符串）
+// 鏍煎紡鍖栨椂闂达紙鏀寔 Unix 绉掓椂闂存埑鍜屾棩鏈熷瓧绗︿覆锛?
 const formatDateTime = (dateTime: number | string | null | undefined): string => {
   if (dateTime === null || dateTime === undefined || dateTime === '') return '-'
   try {
-    // Unix 时间戳为秒，需转换为毫秒
+    // Unix 鏃堕棿鎴充负绉掞紝闇€杞崲涓烘绉?
     const date = typeof dateTime === 'number' ? new Date(dateTime * 1000) : new Date(dateTime)
     if (isNaN(date.getTime())) return String(dateTime)
     const year = date.getFullYear()
@@ -201,17 +201,17 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
   }
 }
 
-// 添加规则
+// 娣诲姞瑙勫垯
 const handleAddUser = () => {
   rulesOperationFormRef.value?.open(undefined, 'create')
 }
 
-// 编辑规则
+// 缂栬緫瑙勫垯
 const handleEdit = (row: RuleInfo) => {
   rulesOperationFormRef.value?.open(row.id, 'edit')
 }
 
-// 删除规则
+// 鍒犻櫎瑙勫垯
 const handleDelete = async (row: RuleInfo) => {
   deleteRow(
     row.id,
@@ -238,7 +238,7 @@ const handleSwitchChange = async (row: RuleInfo) => {
   }
 }
 
-// 处理规则表单取消
+// 澶勭悊瑙勫垯琛ㄥ崟鍙栨秷
 const handleRuleCancel = () => {
   console.log('Rule form cancelled')
 }

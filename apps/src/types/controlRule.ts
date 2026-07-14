@@ -59,3 +59,8 @@ export interface RuleHistoryItem {
   error: string | null
   result: RuleExecutionResult | null
 }
+
+/** 控制模块历史记录列表项 */
+export interface RuleHistoryRecord extends RuleHistoryItem {
+  rule_name?: string
+}
