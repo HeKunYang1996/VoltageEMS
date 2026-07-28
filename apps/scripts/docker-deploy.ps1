@@ -5,7 +5,7 @@
 .DESCRIPTION
     支持三种模式：
       local  （默认）本地单平台构建并运行
-      export         构建 ARM64 镜像并导出为 .tar 文件
+      export         构建单架构镜像并导出为 .tar 文件（默认 ARM64，可切到 AMD64）
       push           构建 amd64+arm64 并推送到镜像仓库
 
 .PARAMETER Mode
@@ -29,6 +29,7 @@
 .EXAMPLE
     .\scripts\docker-deploy.ps1                                                      # 本地运行
     .\scripts\docker-deploy.ps1 -Mode export                                         # 导出 arm64 tar
+    .\scripts\docker-deploy.ps1 -Mode export -Platform linux/amd64                   # 导出 amd64 tar
     .\scripts\docker-deploy.ps1 -Mode export -RemoteHost root@192.168.30.21          # 导出并远程部署
     .\scripts\docker-deploy.ps1 -Mode push -Registry docker.io/myuser                # 多架构推送
     .\scripts\docker-deploy.ps1 -Tag v1.2.3 -NoCache                                 # 指定版本完整构建
@@ -52,7 +53,6 @@ $OutputEncoding           = [System.Text.Encoding]::UTF8
 
 $BuilderName = "voltage-multiarch-builder"
 $AppsDir     = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$ExportTar   = Join-Path (Get-Location) "${ContainerName}-arm64-${Tag}.tar"
 
 # ── 根据模式自动选择平台 ───────────────────────────────────────────────────────
 if (-not $Platform) {
@@ -63,6 +63,23 @@ if (-not $Platform) {
     }
 }
 
+$PlatformArch = switch ($Platform) {
+    "linux/amd64" { "amd64" }
+    "linux/arm64" { "arm64" }
+    default { "" }
+}
+
+$ExportTar = if ($Mode -eq "export" -and $PlatformArch) {
+    Join-Path (Get-Location) "${ContainerName}-${PlatformArch}-${Tag}.tar"
+} else {
+    ""
+}
+$RemoteTar = if ($Mode -eq "export" -and $PlatformArch) {
+    "/tmp/${ContainerName}-${PlatformArch}-${Tag}.tar"
+} else {
+    ""
+}
+
 # ── 镜像全名 ──────────────────────────────────────────────────────────────────
 $ImageFull = if ($Registry) { "${Registry}/${ContainerName}:${Tag}" } else { "${ContainerName}:${Tag}" }
 
@@ -71,6 +88,14 @@ function Write-Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Yellow
 function Write-OK($msg)        { Write-Host "  OK $msg"  -ForegroundColor Green  }
 function Write-Info($msg)      { Write-Host "  -> $msg"  -ForegroundColor Gray   }
 function Write-Fail($msg)      { Write-Host "[ERROR] $msg" -ForegroundColor Red; exit 1 }
+
+if ($Mode -eq "export" -and $Platform.Contains(",")) {
+    Write-Fail "export mode only supports a single platform. Use -Platform linux/amd64 or linux/arm64."
+}
+
+if ($Mode -eq "export" -and -not $PlatformArch) {
+    Write-Fail "Unsupported export platform: $Platform"
+}
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
@@ -180,8 +205,7 @@ switch ($Mode) {
         Write-OK "Image exported: $ExportTar"
         if ($RemoteHost) {
             Write-Info "Uploading to $RemoteHost..."
-            $remoteTar = "/tmp/${ContainerName}-arm64.tar"
-            scp $ExportTar "${RemoteHost}:${remoteTar}"
+            scp $ExportTar "${RemoteHost}:${RemoteTar}"
             if ($LASTEXITCODE -ne 0) { Write-Fail "scp failed" }
             Write-OK "Upload complete"
 
@@ -189,7 +213,7 @@ switch ($Mode) {
             $remoteCmd = @"
 docker stop $ContainerName 2>/dev/null || true
 docker rm   $ContainerName 2>/dev/null || true
-docker load -i $remoteTar
+docker load -i $RemoteTar
 docker run -d --name $ContainerName --restart unless-stopped --network host $ImageFull
 echo 'Remote container started'
 "@
@@ -198,10 +222,10 @@ echo 'Remote container started'
             Write-OK "Remote deploy complete"
         } else {
             Write-Host ""
-            Write-Host "  To deploy on ARM64 server, run:" -ForegroundColor Gray
-            Write-Host "    scp $ExportTar root@<ARM64_HOST>:/tmp/" -ForegroundColor Gray
-            Write-Host "    ssh root@<ARM64_HOST> 'docker load -i /tmp/${ContainerName}-arm64-${Tag}.tar'" -ForegroundColor Gray
-            Write-Host "    ssh root@<ARM64_HOST> 'docker run -d --name $ContainerName -p ${Port}:8080 $ImageFull'" -ForegroundColor Gray
+            Write-Host "  To deploy on ${PlatformArch.ToUpper()} server, run:" -ForegroundColor Gray
+            Write-Host "    scp $ExportTar root@<${PlatformArch.ToUpper()}_HOST>:/tmp/" -ForegroundColor Gray
+            Write-Host "    ssh root@<${PlatformArch.ToUpper()}_HOST> 'docker load -i $RemoteTar'" -ForegroundColor Gray
+            Write-Host "    ssh root@<${PlatformArch.ToUpper()}_HOST> 'docker run -d --name $ContainerName -p ${Port}:8080 $ImageFull'" -ForegroundColor Gray
         }
     }
     "push" {

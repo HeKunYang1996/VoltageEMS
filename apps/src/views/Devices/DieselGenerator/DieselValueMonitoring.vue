@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class pv__content">
+  <div class="pv__content">
     <div class="devices-pv__tables">
       <LoadingBg :loading="globalStore.loading">
         <DeviceMonitoringTable :leftTableData="leftTableData" :rightTableData="rightTableData" />
@@ -81,7 +81,7 @@ useTopologySubscribe(
 </script>
 
 <style scoped lang="scss">
-.voltage-class.pv__content {
+.pv__content {
   width: 100%;
   height: calc(100% - 0.4rem);
 

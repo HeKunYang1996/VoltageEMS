@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class rule-management vt-page-shell" ref="ruleManagementRef">
+  <div class="rule-management vt-page-shell" ref="ruleManagementRef">
     <LoadingBg :loading="loading">
       <div class="rule-management__header vt-toolbar">
         <div class="rule-management__toolbar-left vt-toolbar__left" ref="levelSelectRef">
@@ -172,7 +172,9 @@ const switchLoadingId = ref<string | number | null>(null)
 // 鏍煎紡锟?MonitorData
 const formatMonitorData = (row: RuleInfo) => {
   if (!row) return '-'
-  return [row.service_type || 'comsrv', row.channel_id, row.data_type, row.point_id]
+  const dataTypeLabel =
+    row.data_type === 'M' ? 'Measurement' : row.data_type === 'A' ? 'Action' : row.data_type
+  return [row.service_type || 'inst', row.channel_id, dataTypeLabel, row.point_id]
     .filter((v) => v !== null && v !== undefined && v !== '')
     .join(' / ')
 }
@@ -245,7 +247,7 @@ const handleRuleCancel = () => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.rule-management {
+.rule-management {
   .rule-management__header {
     .rule-management__toolbar-left {
       position: relative;

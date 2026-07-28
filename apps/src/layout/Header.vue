@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class header">
+  <div class="header">
     <div class="header__left">
       <div class="header__left-title">Norton Creek Solar Energy Center</div>
       <div class="header__left-status">
@@ -94,7 +94,7 @@ const getAvatarName = (name: string) => {
 </script>
 
 <style lang="scss" scoped>
-.voltage-class.header {
+.header {
   position: relative;
   z-index: 99;
   display: flex;
@@ -250,7 +250,7 @@ const getAvatarName = (name: string) => {
     font-weight: var(--vt-font-weight-bold);
     line-height: 100%;
     letter-spacing: 0;
-    color: #1d86ff;
+    color: var(--vt-color-accent);
   }
 }
 
@@ -268,7 +268,7 @@ const getAvatarName = (name: string) => {
   width: 0.1rem;
   height: 0.08rem;
   font-size: 0.12rem;
-  color: #909399;
+  color: var(--vt-text-placeholder);
 }
 
 .header__right-noticeBadge {

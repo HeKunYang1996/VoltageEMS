@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class main-layout">
+  <div class="main-layout">
     <div class="main-layout__left">
       <!-- 侧边导航栏 -->
       <Sidebar />
@@ -29,7 +29,7 @@ const globalStore = useGlobalStore()
 </script>
 
 <style lang="scss" scoped>
-.voltage-class.main-layout {
+.main-layout {
   height: 100%;
   width: 100%;
   display: flex;

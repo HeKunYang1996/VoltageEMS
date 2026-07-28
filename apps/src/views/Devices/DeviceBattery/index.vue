@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class devices-battery vt-page-shell">
+  <div class="devices-battery vt-page-shell">
     <!-- 页面头部 -->
     <div class="devices-battery__header vt-page-header">
       <div class="devices-battery__tabs vt-page-tabs">
@@ -67,7 +67,7 @@ const handleTabClick = (tab: 'overview' | 'value' | 'management') => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.devices-battery {
+.devices-battery {
   .devices-battery__content {
     padding-top: 0.2rem;
     min-height: 0;

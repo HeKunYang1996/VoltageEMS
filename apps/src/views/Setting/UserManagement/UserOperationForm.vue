@@ -36,7 +36,6 @@
           v-if="mode === 'edit'"
           label="Enabled:"
           prop="is_active"
-          class="user-form__status-row"
         >
           <el-switch v-model="form.is_active" />
         </el-form-item>
@@ -243,37 +242,23 @@ defineExpose({ open, close })
 </script>
 
 <style scoped lang="scss">
-.voltage-class {
-  // .user-form {
-  //   &.el-form--inline .el-form-item{
-  //     margin-right: 0 !important;
-  //   }
-  // }
-  .monitor-data-group,
-  .role-group,
-  .condition-group {
-    width: 100%;
-    // display: flex;
-    // gap: 0.16rem;
-  }
-
-  .status-group {
-    width: 100%;
-    display: flex;
-  }
-
-  :deep(.el-input__inner) {
-    width: 2.4rem;
-  }
-
-  .user-form__status-row {
-    // width: 100%;
-    width: 3.8rem;
-    display: block;
-
-    :deep(.el-form-item__content) {
-      width: 6.6rem;
-    }
-  }
+// .user-form {
+//   &.el-form--inline .el-form-item{
+//     margin-right: 0 !important;
+//   }
+// }
+.monitor-data-group,
+.role-group,
+.condition-group {
+  width: 100%;
+  // display: flex;
+  // gap: 0.16rem;
 }
+
+.status-group {
+  width: 100%;
+  display: flex;
+}
+
+
 </style>

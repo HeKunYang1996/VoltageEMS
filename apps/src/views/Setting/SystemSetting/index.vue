@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class system-setting">
+  <div class="system-setting">
     <div class="system-setting-left">
       <TimeSetting />
     </div>

@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class devices-diesel vt-page-shell">
+  <div class="devices-diesel vt-page-shell">
     <!-- 页面头部 -->
     <div class="devices-diesel__header vt-page-header">
       <div class="devices-diesel__tabs vt-page-tabs">
@@ -57,7 +57,7 @@ const handleTabClick = (tab: 'overview' | 'monitoring') => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.devices-diesel {
+.devices-diesel {
   .devices-diesel__main {
     min-height: 0;
   }

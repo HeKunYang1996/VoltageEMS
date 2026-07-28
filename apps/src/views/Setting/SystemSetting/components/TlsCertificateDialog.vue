@@ -6,7 +6,7 @@
     @close="handleClose"
   >
     <template #dialog-body>
-      <div class="voltage-class tls-certificate-dialog">
+      <div class="tls-certificate-dialog">
         <div class="cert-dir" v-if="certDir">Certificate Directory: {{ certDir }}</div>
 
         <div class="cert-table">
@@ -195,67 +195,66 @@ defineExpose({ open, close })
 </script>
 
 <style scoped lang="scss">
-.voltage-class {
-  .tls-certificate-dialog {
-    display: flex;
-    flex-direction: column;
-    gap: 0.16rem;
-    padding-bottom: 0.2rem;
-  }
-
-  .cert-table {
-    display: flex;
-    flex-direction: column;
-    gap: 0.12rem;
-    max-height: 4rem;
-    overflow-y: auto;
-  }
-
-  .cert-dir {
-    font-size: 0.13rem;
-    color: rgba(245, 247, 255, 0.9);
-    word-break: break-all;
-  }
-
-  .cert-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.2rem;
-    padding: 0.14rem;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 0.08rem;
-    background: rgba(44, 66, 106, 0.1);
-  }
-
-  .cert-row__title {
-    font-size: 0.16rem;
-    font-weight: 700;
-    color: #fff;
-  }
-
-  .cert-row__desc,
-  .cert-row__status {
-    margin-top: 0.04rem;
-    font-size: 0.12rem;
-    color: rgba(245, 247, 255, 0.9);
-    line-height: 1.5;
-    word-break: break-all;
-  }
-
-  .cert-row__actions {
-    display: flex;
-    gap: 0.1rem;
-  }
-
-  .is-success {
-    color: #67c23a;
-    font-weight: 700;
-  }
-
-  .is-empty {
-    color: #f56c6c;
-    font-weight: 700;
-  }
+.tls-certificate-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+  padding-bottom: 0.2rem;
 }
+
+.cert-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  max-height: 4rem;
+  overflow-y: auto;
+}
+
+.cert-dir {
+  font-size: 0.13rem;
+  color: rgba(245, 247, 255, 0.9);
+  word-break: break-all;
+}
+
+.cert-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.14rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.08rem;
+  background: rgba(44, 66, 106, 0.1);
+}
+
+.cert-row__title {
+  font-size: 0.16rem;
+  font-weight: 700;
+  color: var(--vt-text-primary);
+}
+
+.cert-row__desc,
+.cert-row__status {
+  margin-top: 0.04rem;
+  font-size: 0.12rem;
+  color: rgba(245, 247, 255, 0.9);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.cert-row__actions {
+  display: flex;
+  gap: 0.1rem;
+}
+
+.is-success {
+  color: #67c23a;
+  font-weight: 700;
+}
+
+.is-empty {
+  color: #f56c6c;
+  font-weight: 700;
+}
+
 </style>

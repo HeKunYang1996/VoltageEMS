@@ -1,232 +1,248 @@
-@use './theme-vars.scss' as *;
+// ============================================
+// Element Plus: Radio (el-radio)
+// ============================================
 
-.voltage-class {
-  .view-mode-switch {
-    display: inline-flex;
-    align-items: center;
-    gap: $spacing-sm;
+// --- Base ---
+.el-radio {
+  display: inline-flex;
+  align-items: center;
+  height: 0.32rem;
+  margin-right: var(--vt-space-4);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: var(--vt-font-size-base);
+  font-weight: var(--vt-font-weight-normal);
+  line-height: var(--vt-line-height-normal);
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
 
-    .switch-label {
-      margin-right: 0.02rem;
-      color: rgba(255, 255, 255, 0.9);
-      font-size: 0.18rem;
-      font-weight: 600;
-    }
+  &:last-child {
+    margin-right: 0;
   }
 
-  .el-radio {
-    display: inline-flex;
-    align-items: center;
-    height: 0.32rem;
-    margin-right: $spacing-md;
-    color: rgba(255, 255, 255, 0.6);
-    font-size: $font-size-base;
-    font-weight: $font-weight-normal;
-    line-height: $line-height-normal;
-    white-space: nowrap;
-    user-select: none;
-    cursor: pointer;
-
-    &:last-child {
-      margin-right: 0;
-    }
-
-    &.is-disabled {
-      color: $text-color-disabled;
-      opacity: $opacity-disabled;
-      cursor: not-allowed;
-    }
-
-    &.is-checked {
-      .el-radio__inner {
-        background-color: $primary-color;
-        border-color: $primary-color;
-
-        &::after {
-          transform: translate(-50%, -50%) scale(1);
-        }
-      }
-
-      .el-radio__label {
-        color: rgba(255, 255, 255, 0.8);
-      }
-
-      &.is-disabled {
-        .el-radio__inner {
-          background-color: $text-color-disabled;
-          border-color: $text-color-disabled;
-        }
-
-        .el-radio__label {
-          color: $text-color-disabled;
-        }
-      }
-    }
-
-    &.is-focus {
-      .el-radio__inner {
-        border-color: $primary-color;
-        box-shadow: 0 0 0 0.02rem rgba(255, 105, 0, 0.2);
-      }
-    }
-
-    &:hover:not(.is-disabled) {
-      .el-radio__inner {
-        border-color: rgba(148, 166, 197, 0.48);
-      }
+  &:hover:not(.is-disabled) {
+    .el-radio__inner {
+      border-color: rgba(148, 166, 197, 0.48);
     }
   }
+}
 
-  .el-radio__input {
-    position: relative;
-    display: inline-flex;
-    margin-right: $spacing-xs;
-    line-height: 1;
-    vertical-align: middle;
-    cursor: pointer;
-
-    .el-radio__original {
-      position: absolute;
-      inset: 0;
-      z-index: -1;
-      margin: 0;
-      opacity: 0;
-      outline: none;
-    }
-  }
-
+// --- Checked ---
+.el-radio.is-checked {
   .el-radio__inner {
-    position: relative;
-    display: inline-block;
-    width: 0.12rem;
-    height: 0.12rem;
-    background-color: transparent;
-    border: 0.01rem solid rgba(148, 166, 197, 0.3);
-    border-radius: 50%;
-    box-sizing: border-box;
-    transition: all $transition-fast;
+    background-color: var(--vt-color-primary);
+    border-color: var(--vt-color-primary);
 
     &::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 0.06rem;
-      height: 0.06rem;
-      background-color: #ffffff;
-      border-radius: 50%;
-      transform: translate(-50%, -50%) scale(0);
-      transition: transform $transition-fast;
+      transform: translate(-50%, -50%) scale(1);
     }
   }
 
   .el-radio__label {
-    padding-left: $spacing-xs;
-    color: rgba(255, 255, 255, 0.6);
-    font-size: $font-size-base;
-    transition: color $transition-fast;
-    user-select: none;
+    color: rgba(255, 255, 255, 0.8);
   }
 
-  .el-radio-group {
+  &.is-disabled {
+    .el-radio__inner {
+      background-color: var(--vt-text-disabled);
+      border-color: var(--vt-text-disabled);
+    }
+
+    .el-radio__label {
+      color: var(--vt-text-disabled);
+    }
+  }
+}
+
+// --- Focus ---
+.el-radio.is-focus {
+  .el-radio__inner {
+    border-color: var(--vt-color-primary);
+    box-shadow: 0 0 0 0.02rem rgba(255, 105, 0, 0.2);
+  }
+}
+
+// --- Disabled ---
+.el-radio.is-disabled {
+  color: var(--vt-text-disabled);
+  opacity: var(--vt-opacity-disabled);
+  cursor: not-allowed;
+}
+
+// --- Input ---
+.el-radio__input {
+  position: relative;
+  display: inline-flex;
+  margin-right: var(--vt-space-1);
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+
+  .el-radio__original {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    margin: 0;
+    opacity: 0;
+    outline: none;
+  }
+}
+
+// --- Inner ---
+.el-radio__inner {
+  position: relative;
+  display: inline-block;
+  width: 0.12rem;
+  height: 0.12rem;
+  background-color: transparent;
+  border: 0.01rem solid rgba(148, 166, 197, 0.3);
+  border-radius: 50%;
+  box-sizing: border-box;
+  transition: all var(--vt-transition-fast);
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0.06rem;
+    height: 0.06rem;
+    background-color: #ffffff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform var(--vt-transition-fast);
+  }
+}
+
+// --- Label ---
+.el-radio__label {
+  padding-left: var(--vt-space-1);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: var(--vt-font-size-base);
+  transition: color var(--vt-transition-fast);
+  user-select: none;
+}
+
+// ============================================
+// Element Plus: Radio Group (el-radio-group)
+// ============================================
+.el-radio-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--vt-space-2);
+  font-size: 0;
+
+  &--vertical {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  // --- Button mode ---
+  &--button {
     display: inline-flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: $spacing-sm;
-    font-size: 0;
+    gap: 0;
 
-    &--vertical {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-
-    &--button {
-      display: inline-flex;
-      gap: 0;
-
-      .el-radio {
-        margin-right: 0;
-        padding: $spacing-xs $spacing-md;
-        background-color: transparent;
-        border: 0.01rem solid $border-color-base;
-        border-radius: 0;
-        transition: all $transition-fast;
-
-        &:first-child {
-          border-top-left-radius: $border-radius-small;
-          border-bottom-left-radius: $border-radius-small;
-        }
-
-        &:last-child {
-          border-top-right-radius: $border-radius-small;
-          border-bottom-right-radius: $border-radius-small;
-        }
-
-        &:not(:first-child) {
-          border-left: none;
-        }
-
-        .el-radio__input {
-          display: none;
-        }
-
-        .el-radio__label {
-          padding-left: 0;
-          color: $text-color-primary;
-        }
-
-        &:hover:not(.is-disabled) {
-          border-color: $primary-color;
-          color: #ffffff;
-          z-index: 1;
-        }
-
-        &.is-checked {
-          z-index: 2;
-          background-color: $primary-color;
-          border-color: $primary-color;
-          color: #ffffff;
-
-          .el-radio__label {
-            color: #ffffff;
-          }
-        }
-
-        &.is-disabled {
-          background-color: rgba(84, 98, 140, 0.1);
-          border-color: $border-color-base;
-
-          .el-radio__label {
-            color: $text-color-disabled;
-          }
-
-          &.is-checked {
-            background-color: $text-color-disabled;
-            border-color: $text-color-disabled;
-          }
-        }
-      }
-    }
-  }
-
-  .view-mode-switch .el-radio-group.el-radio-group--button {
     .el-radio {
-      border-color: rgba($primary-color, 0.55);
+      margin-right: 0;
+      padding: var(--vt-space-1) var(--vt-space-4);
+      background-color: transparent;
+      border: 0.01rem solid var(--vt-border-color);
+      border-radius: 0;
+      transition: all var(--vt-transition-fast);
+
+      &:first-child {
+        border-top-left-radius: var(--vt-radius-sm);
+        border-bottom-left-radius: var(--vt-radius-sm);
+      }
+
+      &:last-child {
+        border-top-right-radius: var(--vt-radius-sm);
+        border-bottom-right-radius: var(--vt-radius-sm);
+      }
+
+      &:not(:first-child) {
+        border-left: none;
+      }
+
+      .el-radio__input {
+        display: none;
+      }
 
       .el-radio__label {
-        color: rgba(255, 255, 255, 0.85);
-        font-size: 0.16rem;
-        font-weight: 600;
+        padding-left: 0;
+        color: var(--vt-text-primary);
+      }
+
+      &:hover:not(.is-disabled) {
+        border-color: var(--vt-color-primary);
+        color: #ffffff;
+        z-index: 1;
       }
 
       &.is-checked {
-        background: rgba($primary-color, 0.14);
-        border-color: $primary-color;
+        z-index: 2;
+        background-color: var(--vt-color-primary);
+        border-color: var(--vt-color-primary);
+        color: #ffffff;
 
         .el-radio__label {
-          color: $primary-color;
+          color: #ffffff;
+        }
+      }
+
+      &.is-disabled {
+        background-color: rgba(84, 98, 140, 0.1);
+        border-color: var(--vt-border-color);
+
+        .el-radio__label {
+          color: var(--vt-text-disabled);
+        }
+
+        &.is-checked {
+          background-color: var(--vt-text-disabled);
+          border-color: var(--vt-text-disabled);
         }
       }
     }
   }
 }
+
+// ============================================
+// View mode switch override
+// ============================================
+.view-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vt-space-2);
+
+  .switch-label {
+    margin-right: 0.02rem;
+    color: var(--vt-text-primary);
+    opacity: 0.9;
+    font-size: 0.18rem;
+    font-weight: 600;
+  }
+}
+
+.view-mode-switch .el-radio-group--button {
+  .el-radio {
+    border-color: color-mix(in srgb, var(--vt-color-primary) 55%, transparent);
+
+    .el-radio__label {
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 0.16rem;
+      font-weight: 600;
+    }
+
+    &.is-checked {
+      background: color-mix(in srgb, var(--vt-color-primary) 14%, transparent);
+      border-color: var(--vt-color-primary);
+
+      .el-radio__label {
+        color: var(--vt-color-primary);
+      }
+    }
+  }
+}
+

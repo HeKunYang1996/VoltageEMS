@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class operationLog">
+  <div class="operationLog">
     <!-- 表格区域 -->
     <div class="operationLog__table">
       <el-table :data="tableData" class="operationLog__table-content">
@@ -72,7 +72,7 @@ const handlePageChange = (page: number) => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.operationLog {
+.operationLog {
   height: 100%;
   width: 100%;
   display: flex;

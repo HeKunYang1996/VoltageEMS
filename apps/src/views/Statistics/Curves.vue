@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class curves">
+  <div class="curves">
     <div class="curves__content">
       <!-- 工具栏 -->
       <div class="curves__toolbar">
@@ -143,12 +143,12 @@ const PRODUCT_LABELS: Record<string, string> = {
 }
 
 const PRODUCT_ACCENT: Record<string, string> = {
-  Battery: '#6DD400',
-  Diesel: '#F6C85F',
-  PCS: '#4FADF7',
-  'PV DCDC': '#69CBFF',
-  PVInverter: '#69CBFF',
-  Load: '#FF4D4F',
+  Battery: '#6DD400',       // --vt-color-chart-online
+  Diesel: '#F6C85F',        // --vt-color-chart-dg
+  PCS: '#4FADF7',           // --vt-color-chart-ess
+  'PV DCDC': '#69CBFF',     // --vt-color-chart-pv
+  PVInverter: '#69CBFF',    // --vt-color-chart-pv
+  Load: '#FF4D4F',          // --vt-color-chart-alarm
 }
 
 const getProductLabel = (productName: string) => PRODUCT_LABELS[productName] ?? productName
@@ -428,7 +428,7 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.curves {
+.curves {
   height: 100%;
   width: 100%;
 
@@ -492,13 +492,13 @@ onMounted(async () => {
 
   // ── 图表区域外层（撑满剩余高度） ─────────────────
   .curves__charts-outer {
-    flex: 1;
+    height: calc(100% - 0.52rem);
     min-height: 0;
   }
 
   // ── 图表滚动区域（LoadingBg 的 slot 内容） ────────
   .curves__charts {
-    flex: 1;
+    height: 100%;
     overflow-y: auto;
 
     // 自定义滚动条
@@ -524,7 +524,7 @@ onMounted(async () => {
         gap: 0.12rem;
         padding: 0.1rem 0.12rem 0.12rem 0.12rem;
         margin-bottom: 0.12rem;
-        border-left: 0.03rem solid #4fadf7;
+        border-left: 0.03rem solid var(--vt-color-chart-ess);
         cursor: pointer;
         user-select: none;
 

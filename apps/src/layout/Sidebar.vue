@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class sidebar" :class="{ collapse: globalStore.isCollapse }">
+  <div class="sidebar" :class="{ collapse: globalStore.isCollapse }">
     <div class="sidebar__header" :class="{ collapse: globalStore.isCollapse }">
       <div class="sidebar__header-img" :class="{ collapse: globalStore.isCollapse }"></div>
     </div>
@@ -7,12 +7,8 @@
     <nav class="sidebar__nav">
       <el-menu
         :collapse="globalStore.isCollapse"
-        class="sidebar__menu"
         :default-active="activeMenuPath"
         router
-        background-color="transparent"
-        text-color="#fff"
-        active-text-color="#fff"
         :unique-opened="true"
       >
         <template v-for="item in filterRoutesList" :key="item.path">
@@ -88,7 +84,7 @@ const handleShrink = () => {
 </script>
 
 <style lang="scss" scoped>
-.voltage-class.sidebar {
+.sidebar {
   position: relative;
   height: 100vh;
   padding: 0.2rem 0;
@@ -98,7 +94,7 @@ const handleShrink = () => {
   backdrop-filter: var(--vt-backdrop-blur);
   display: flex;
   flex-direction: column;
-
+  background: #54628c66;
   transition: width 0.3s ease-in-out;
   width: 2.2rem;
 

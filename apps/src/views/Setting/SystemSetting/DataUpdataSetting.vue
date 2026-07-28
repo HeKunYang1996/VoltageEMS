@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class data-update-setting">
+  <div class="data-update-setting">
     <ModuleCard title="MQTT Config">
       <el-form
         ref="formRef"
@@ -458,7 +458,7 @@ const handleUpdate = async () => {
         flex: 1;
         font-size: 0.16rem;
         font-weight: 600;
-        color: #ffffff;
+        color: var(--vt-text-primary);
       }
     }
 

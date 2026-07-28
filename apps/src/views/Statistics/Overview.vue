@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class curves">
+  <div class="curves">
     <div class="curves__content">
       <!-- 工具栏 -->
       <div class="curves__toolbar">
@@ -421,7 +421,7 @@ const handleDateRangeChange = () => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.curves {
+.curves {
   height: 100%;
   width: 100%;
 
@@ -471,12 +471,12 @@ const handleDateRangeChange = () => {
   }
 
   .curves__charts-outer {
-    flex: 1;
+    height: calc(100% - 0.52rem);
     min-height: 0;
   }
 
   .curves__charts {
-    flex: 1;
+    height: 100%;
     display: flex;
     flex-wrap: wrap;
     gap: 0.2rem;

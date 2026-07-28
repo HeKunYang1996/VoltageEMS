@@ -1,69 +1,81 @@
-@use './theme-vars.scss' as *;
+// ============================================
+// Element Plus: Form (el-form)
+// Overrides: layout, label, error states, sizes
+// ============================================
 
-.voltage-class {
-  .el-form {
-    .el-form-item {
-      display: flex;
-      align-items: flex-start;
-      margin-bottom: 0.2rem;
+// ==============================
+// el-form
+// ==============================
+.el-form {
 
-      .el-form-item__label {
-        display: block;
-        height: $button-height-base;
-        margin-right: $spacing-md;
-        margin-bottom: 0;
-        padding: 0;
-        color: $text-color-primary;
-        font-family: var(--vt-font-family-base);
-        font-size: $font-size-base;
-        font-weight: $font-weight-normal;
-        line-height: $button-height-base;
-        text-align: left;
+  // ---- Form item ----
+  .el-form-item {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 0.2rem;
+    // ==============================
+    // el-form-item elements
+    // ==============================
 
-        &::before {
-          margin-right: $spacing-xs;
-        }
-      }
+    // ---- Label ----
+    .el-form-item__label {
+      display: block;
+      height: var(--vt-control-height);
+      margin-right: var(--vt-space-4);
+      margin-bottom: 0;
+      padding: 0;
+      color: var(--vt-text-primary);
+      font-family: var(--vt-font-family-base);
+      font-size: var(--vt-font-size-base);
+      font-weight: var(--vt-font-weight-normal);
+      line-height: var(--vt-control-height);
+      // text-align: left;
 
-      .el-form-item__content {
-        position: relative;
-        flex: 1;
-        min-width: var(--vt-field-width);
-        display: flex;
-        align-items: center;
-        line-height: $button-height-base;
-
-        .el-form-item__error {
-          position: absolute;
-          top: 100%;
-          left: 0;
-          z-index: 1;
-          display: block;
-          margin-top: $spacing-xs;
-          padding-top: 0;
-          color: $danger-color;
-          // font-size: 0.1rem;
-          line-height: $line-height-normal;
-        }
-
-        .el-form-item__help {
-          display: block;
-          margin-top: $spacing-xs;
-          color: $text-color-secondary;
-          font-size: $font-size-small;
-          line-height: $line-height-normal;
-        }
+      &::before {
+        margin-right: var(--vt-space-1);
       }
     }
 
+    // ---- Content ----
+    .el-form-item__content {
+      position: relative;
+      flex: 1;
+      min-width: var(--vt-field-width);
+      display: flex;
+      align-items: center;
+      line-height: var(--vt-control-height);
+    }
+
+    // ---- Error / Help ----
+    .el-form-item__error {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      z-index: 1;
+      display: block;
+      margin-top: var(--vt-space-1);
+      padding-top: 0;
+      color: var(--vt-color-danger);
+      line-height: var(--vt-line-height-normal);
+    }
+
+    .el-form-item__help {
+      display: block;
+      margin-top: var(--vt-space-1);
+      color: var(--vt-text-secondary);
+      font-size: var(--vt-font-size-sm);
+      line-height: var(--vt-line-height-normal);
+    }
+
+    // ---- States ----
     .el-form-item.is-error {
       .el-form-item__label {
-        color: $text-color-primary;
+        color: var(--vt-text-primary);
       }
 
       .el-input__wrapper,
       .el-textarea__inner {
-        border-color: $danger-color;
+        border-color: var(--vt-color-danger);
         box-shadow: none;
       }
     }
@@ -71,127 +83,119 @@
     .el-form-item.is-success,
     .el-form-item.is-warning {
       .el-form-item__label {
-        color: $text-color-primary;
+        color: var(--vt-text-primary);
       }
     }
 
-    &.is-disabled {
-      .el-form-item__label {
-        color: $text-color-disabled;
+    .el-form-item.is-validating .el-form-item__content::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: var(--vt-space-2);
+      width: 0.16rem;
+      height: 0.16rem;
+      transform: translateY(-50%);
+      border-top: 0.02rem solid var(--vt-color-primary);
+      border-right: 0.02rem solid transparent;
+      border-radius: 50%;
+      animation: form-loading 1s linear infinite;
+    }
+
+    // ==============================
+    // el-form-actions
+    // ==============================
+    .el-form-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--vt-space-2);
+      margin-top: var(--vt-space-6);
+      padding-top: var(--vt-space-5);
+
+      .el-button {
+        min-width: 0.8rem;
       }
 
-      .el-form-item__content {
-        opacity: $opacity-disabled;
-        cursor: not-allowed;
+      &--left {
+        justify-content: flex-start;
+      }
+
+      &--center {
+        justify-content: center;
+      }
+
+      &--space-between {
+        justify-content: space-between;
       }
     }
 
-    &.el-form--label-right {
-      .el-form-item__label {
-        padding-right: 0;
-        text-align: right;
+    @keyframes form-loading {
+      0% {
+        transform: translateY(-50%) rotate(0deg);
       }
-    }
 
-    &.el-form--inline {
-      .el-form-item {
-        display: inline-flex;
-        margin-right: 0.4rem;
-        margin-bottom: 0.2rem;
-
-        .el-form-item__label {
-          margin-bottom: 0;
-          white-space: nowrap;
-        }
-      }
-    }
-
-    &.el-form--label-top {
-      .el-form-item {
-        flex-direction: column;
-        align-items: flex-start;
-
-        .el-form-item__label {
-          height: auto;
-          margin-right: 0;
-          margin-bottom: 0.09rem;
-          line-height: 0.22rem;
-        }
-
-        .el-form-item__content {
-          width: 100%;
-        }
-      }
-    }
-
-    &.el-form--small {
-      .el-form-item {
-        margin-bottom: $spacing-md;
-
-        .el-form-item__label {
-          font-size: $font-size-small;
-        }
-
-        .el-form-item__content {
-          .el-form-item__error,
-          .el-form-item__help {
-            font-size: $font-size-extra-small;
-          }
-        }
-      }
-    }
-
-    .el-form-item.is-validating {
-      .el-form-item__content {
-        &::after {
-          content: '';
-          position: absolute;
-          top: 50%;
-          right: $spacing-sm;
-          width: 0.16rem;
-          height: 0.16rem;
-          transform: translateY(-50%);
-          border-top: 0.02rem solid $primary-color;
-          border-right: 0.02rem solid transparent;
-          border-radius: 50%;
-          animation: form-loading 1s linear infinite;
-        }
+      100% {
+        transform: translateY(-50%) rotate(360deg);
       }
     }
   }
 
-  .el-form-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: $spacing-sm;
-    margin-top: $spacing-xl;
-    padding-top: $spacing-lg;
-
-    .el-button {
-      min-width: 0.8rem;
-    }
-
-    &.el-form-actions--left {
-      justify-content: flex-start;
-    }
-
-    &.el-form-actions--center {
-      justify-content: center;
-    }
-
-    &.el-form-actions--space-between {
-      justify-content: space-between;
-    }
-  }
-}
-
-@keyframes form-loading {
-  0% {
-    transform: translateY(-50%) rotate(0deg);
+  // ---- Layout variants ----
+  &--label-right .el-form-item__label {
+    padding-right: 0;
+    text-align: right;
   }
 
-  100% {
-    transform: translateY(-50%) rotate(360deg);
+  &--inline .el-form-item {
+    display: inline-flex;
+    margin-right: 0.4rem;
+    margin-bottom: 0.2rem;
+
+    .el-form-item__label {
+      margin-bottom: 0;
+      white-space: nowrap;
+    }
+  }
+
+  &--label-top .el-form-item {
+    flex-direction: column;
+    align-items: flex-start;
+
+    .el-form-item__label {
+      height: auto;
+      margin-right: 0;
+      margin-bottom: 0.09rem;
+      line-height: 0.22rem;
+    }
+
+    .el-form-item__content {
+      width: 100%;
+    }
+  }
+
+  // ---- Size variant ----
+  &--small .el-form-item {
+    margin-bottom: var(--vt-space-4);
+
+    .el-form-item__label {
+      font-size: var(--vt-font-size-sm);
+    }
+
+    .el-form-item__error,
+    .el-form-item__help {
+      font-size: var(--vt-font-size-xs);
+    }
+  }
+
+  // ---- Disabled ----
+  &.is-disabled {
+    .el-form-item__label {
+      color: var(--vt-text-disabled);
+    }
+
+    .el-form-item__content {
+      opacity: var(--vt-opacity-disabled);
+      cursor: not-allowed;
+    }
   }
 }

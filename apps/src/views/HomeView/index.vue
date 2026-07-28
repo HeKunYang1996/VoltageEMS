@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class home">
+  <div class="home">
     <!-- <EnergyBgCopy></EnergyBgCopy> -->
     <div class="home-left">
       <div class="home-left-top">
@@ -586,7 +586,7 @@ const handleNext = () => {
           height: 33.33%;
           padding-top: 0.12rem;
           padding-bottom: 0.13rem;
-          border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
 
           &:last-child {
             border-bottom: none;
@@ -617,7 +617,7 @@ const handleNext = () => {
             width: 100%;
             padding: 0.15rem 0;
             margin-bottom: 0.2rem;
-            border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+            border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
             display: flex;
             justify-content: space-between;
 
@@ -640,7 +640,7 @@ const handleNext = () => {
               .deviceValue-item-value {
                 font-size: 0.22rem;
                 font-weight: 700;
-                color: #fff;
+                color: var(--vt-text-primary);
                 line-height: 0.26rem;
               }
 
@@ -706,7 +706,7 @@ const handleNext = () => {
 
         .home-altersItem {
           min-height: 0.9rem;
-          border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
           display: flex;
           align-items: center;
 

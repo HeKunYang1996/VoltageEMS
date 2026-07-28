@@ -40,12 +40,12 @@ import {
   DataZoomComponent,
   ToolboxComponent,
 } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -72,7 +72,7 @@ echarts.use([
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  CanvasRenderer,
+  SVGRenderer,
   DataZoomComponent,
   ToolboxComponent,
 ])
@@ -93,7 +93,6 @@ export interface YAxisOption {
   yUnit?: string
 }
 
-// Grid配置接口
 export interface GridConfig {
   left?: number
   right?: number
@@ -119,7 +118,6 @@ const props = withDefaults(
     lazy?: boolean
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
@@ -204,7 +202,6 @@ function customTooltipFormatter(
   return html
 }
 
-// Grid配置转换函数
 function getGridConfig(isFullScreen: boolean) {
   return isFullScreen
     ? {
@@ -217,17 +214,16 @@ function getGridConfig(isFullScreen: boolean) {
         left: pxToResponsive(props.gridConfig.left || 0),
         right: pxToResponsive(props.gridConfig.right || 0),
         top: pxToResponsive(props.gridConfig.top || 45),
-        bottom: pxToResponsive(props.gridConfig.bottom || 15),
+        bottom: pxToResponsive(props.gridConfig.bottom || 10),
       }
 }
 
-// 统一生成option的方法
+// 统一生成option的方法（使用 ECharts 原生百分比/固定 px）
 function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // 配置参数
   const xUnit = props.xAxiosOption.xUnit ?? ''
   const yUnit = props.yAxiosOption.yUnit ?? ''
 
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -393,32 +389,12 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
             color: '#fff',
             type: 'dashed',
             opacity: 0.2,
-            width: pxToResponsive(1),
           },
         },
       }
 
   // series
   const seriesData = [
-    // {
-    //   name: 'background',
-    //   type: 'bar',
-    //   barWidth: '70%',
-    //   barGap: '-100%',
-    //   itemStyle: {
-    //     color: 'rgba(255,255,255,0)',
-    //   },
-    //   data: totalData,
-    //   showBackground: true,
-    //   backgroundStyle: {
-    //     color: 'rgba(252, 252, 253, 0.04)',
-    //   },
-    //   silent: true,
-    //   emphasis: { disabled: true },
-    //   tooltip: { show: false },
-    //   label: { show: false },
-    //   z: 0,
-    // },
     ...props.series.map((s: SeriesData) => ({
       name: s.name,
       type: 'line',
@@ -434,7 +410,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       itemStyle: {
         color: s.color,
         borderColor: s.color,
-        borderWidth: isFullScreen ? 3 : 2,
+        borderWidth: isFullScreen ? pxToResponsive(3) : pxToResponsive(2),
       },
       emphasis: {
         focus: 'series',
@@ -514,26 +490,24 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   ]
   const toolbox = isFullScreen
     ? {
-        itemSize: pxToResponsive(20),
-        itemGap: pxToResponsive(26),
-        top: pxToResponsive(-10),
-        right: pxToResponsive(40),
+        itemSize: 20,
+        itemGap: 26,
+        top: -10,
+        right: 40,
         iconStyle: {
-          // color: '#fff',
           borderColor: '#fff',
-          borderWidth: pxToResponsive(1),
+          borderWidth: 1,
         },
         emphasis: {
           iconStyle: {
-            // color: '#fff',
             borderColor: '#fff',
-            borderWidth: pxToResponsive(1),
+            borderWidth: 1,
           },
         },
         textStyle: {
           fontFamily: 'Arimo',
           fontWeight: 400,
-          fontSize: pxToResponsive(12),
+          fontSize: 12,
           color: 'rgba(255,255,255,1)',
         },
         feature: {
@@ -565,10 +539,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
 const initChart = () => {
   if (!chartRef.value) return
   if (!chartInstance) {
-    chartInstance = echarts.init(chartRef.value, {
-      renderer: 'canvas',
-      devicePixelRatio: window.devicePixelRatio,
-    })
+    chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
   }
   chartInstance.setOption(getChartOption({ isFullScreen: false }), { notMerge: true })
 }
@@ -595,7 +566,7 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
   fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 }
 
@@ -662,6 +633,7 @@ watch(
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
@@ -669,7 +641,10 @@ const resizeFullScreenChart = () => {
 
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 

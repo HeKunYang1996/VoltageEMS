@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class user-management" ref="userManagementRef">
+  <div class="user-management" ref="userManagementRef">
     <div class="user-management__header">
       <IconButton
         v-permission="'admin'"
@@ -170,7 +170,7 @@ const handleDelete = (row: UserManagementInfo) => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.user-management {
+.user-management {
   position: relative;
   width: 100%;
   height: 100%;

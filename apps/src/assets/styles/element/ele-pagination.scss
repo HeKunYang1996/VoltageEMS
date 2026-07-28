@@ -1,0 +1,119 @@
+// ============================================
+// Element Plus: Pagination (el-pagination)
+// ============================================
+@use './_select-trigger.scss' as select-trigger;
+
+// --- Base ---
+.el-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--vt-control-height);
+  margin-top: 0.2rem;
+
+  // --- Navigation buttons ---
+  button {
+    min-width: 0.32rem;
+    height: 0.32rem;
+    padding: 0 0.04rem;
+    font-size: 0.14rem;
+
+    .el-icon {
+      font-size: 0.12rem;
+    }
+
+    &.btn-prev {
+      margin-left: 0.16rem;
+    }
+
+    &.btn-next {
+      margin-right: 0.16rem;
+    }
+
+    &:disabled {
+      background-color: transparent;
+    }
+  }
+
+  // --- Total ---
+  .el-pagination__total {
+    margin-right: 0.16rem;
+    color: var(--vt-text-primary);
+    font-size: 0.14rem;
+  }
+
+  // --- Sizes select ---
+  .el-pagination__sizes {
+    display: flex;
+    align-items: center;
+    margin-left: 0.16rem;
+
+    .el-select {
+      width: 1.28rem;
+      --vt-select-width: 1.28rem;
+      @include select-trigger.vt-el-select-trigger;
+    }
+  }
+
+  // --- Pager ---
+  .el-pager {
+    li {
+      min-width: 0.32rem;
+      height: 0.32rem;
+      margin: 0 0.02rem;
+      padding: 0 0.04rem;
+      color: var(--vt-text-primary);
+      font-weight: 500;
+      font-size: 0.14rem;
+      line-height: 0.32rem;
+      background-color: transparent;
+      border-radius: 0;
+
+      &:hover {
+        color: var(--vt-color-primary);
+        background-color: transparent;
+      }
+
+      &.is-active {
+        color: var(--vt-text-primary);
+        background-color: var(--vt-bg-hover);
+      }
+    }
+  }
+
+  // --- Prev / Next ---
+  .btn-prev,
+  .btn-next {
+    color: var(--vt-text-primary);
+    background-color: transparent;
+    border-radius: 0;
+
+    &:hover {
+      color: var(--vt-color-primary);
+    }
+
+    &:disabled {
+      color: var(--vt-text-disabled);
+      cursor: not-allowed;
+
+      &:hover {
+        background-color: transparent;
+      }
+    }
+  }
+
+  // --- Jump ---
+  .el-pagination__jump {
+    color: var(--vt-text-secondary);
+    font-size: 0.14rem;
+
+    .el-input__inner {
+      border-color: var(--vt-text-disabled);
+      border-radius: 0.06rem;
+
+      &:hover {
+        border-color: var(--vt-text-empty);
+      }
+    }
+  }
+}

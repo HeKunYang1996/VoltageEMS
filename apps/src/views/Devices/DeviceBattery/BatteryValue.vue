@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class devices-pv__content">
+  <div class="devices-pv__content">
     <div class="devices-pv__tables">
       <LoadingBg :loading="globalStore.loading">
         <el-tabs v-model="activeTab" type="card" class="devices-pv__tabs">

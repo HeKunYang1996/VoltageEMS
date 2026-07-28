@@ -1,38 +1,40 @@
-@use './theme-vars.scss' as *;
-
 @mixin vt-el-select-trigger {
   .el-select__wrapper {
-    min-height: $button-height-base;
+    min-height: var(--vt-control-height);
     padding: 0 0.12rem;
-    line-height: $button-height-base;
-    font-size: $font-size-base;
-    background-color: $bg-color-input;
-    border: 0.01rem solid $border-color-base;
-    border-radius: 0;
+    line-height: var(--vt-control-height);
+    font-size: var(--vt-font-size-base);
+    background-color: var(--vt-bg-input);
+    // EP Select draws its "border" with inset box-shadow; match Input by using a
+    // real border and clearing that shadow (including hover / focus states).
+    border: 0.01rem solid var(--vt-border-color);
+    border-radius: var(--vt-radius-none);
     box-shadow: none;
     transition:
-      border-color $transition-fast,
-      box-shadow $transition-fast,
-      background-color $transition-fast;
+      border-color var(--vt-transition-fast),
+      box-shadow var(--vt-transition-fast),
+      background-color var(--vt-transition-fast);
 
-    &:hover {
-      border-color: $border-color-base;
-      box-shadow: none;
-    }
-
-    &.is-focused {
-      border-color: $border-color-base;
+    &:hover,
+    &.is-hovering,
+    &.is-focused,
+    &.is-focus {
+      border-color: var(--vt-border-color);
       box-shadow: none;
     }
 
     .el-select__input {
-      height: $button-height-base;
+      height: var(--vt-control-height);
     }
-    .el-select__selected-item,
-    .el-select__placeholder {
-      color: $text-color-primary;
-      font-size: $font-size-base;
-    }
+
+    // .el-select__selected-item,
+    // .el-select__placeholder {
+    //   // color: var(--vt-text-primary);
+    //   font-size: var(--vt-font-size-base);
+    //   &.is-placeholder {
+    //     // color: var(--vt-text-placeholder);
+    //   }
+    // }
   }
 
   .el-select__suffix {
@@ -45,17 +47,13 @@
     }
   }
 
-  .is-hovering:not(.is-focused) {
-    box-shadow: none;
-  }
-
   .el-select__close {
-    margin-left: $spacing-xs;
-    color: $text-color-secondary;
-    transition: color $transition-fast;
+    margin-left: var(--vt-space-1);
+    color: var(--vt-text-secondary);
+    transition: color var(--vt-transition-fast);
 
     &:hover {
-      color: $text-color-regular;
+      color: var(--vt-text-regular);
     }
   }
 

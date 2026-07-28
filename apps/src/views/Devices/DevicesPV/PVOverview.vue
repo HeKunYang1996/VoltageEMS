@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class pv-overview">
+  <div class="pv-overview">
     <div class="pv-overview__header">
       <div class="cards-item" v-for="item in energyCardData" :key="item.title">
         <PVCard :title="item.title" :icon="item.icon" :value="item.value" :unit="item.unit" />
@@ -127,7 +127,7 @@ watch(
 )
 </script>
 <style scoped lang="scss">
-.voltage-class.pv-overview {
+.pv-overview {
   height: 100%;
   width: 100%;
   display: flex;
@@ -178,8 +178,8 @@ watch(
         align-items: flex-end;
       }
 
-      .card-name  { font-weight: 400; font-size: 0.16rem; color: #ffffff; margin-right: 0.09rem; }
-      .card-value { font-weight: 700; font-size: 0.16rem; text-transform: capitalize; color: #ffffff; vertical-align: bottom; margin-right: 0.04rem; }
+      .card-name  { font-weight: 400; font-size: 0.16rem; color: var(--vt-text-primary); margin-right: 0.09rem; }
+      .card-value { font-weight: 700; font-size: 0.16rem; text-transform: capitalize; color: var(--vt-text-primary); vertical-align: bottom; margin-right: 0.04rem; }
       .card-unit  { font-weight: 400; font-size: 0.12rem; text-transform: capitalize; color: rgba(255,255,255,0.5); vertical-align: bottom; }
     }
   }

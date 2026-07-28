@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class forecast-view">
+  <div class="forecast-view">
     <div class="forecast__left">
       <!-- 摘要卡片：4 张 -->
       <div class="forecast__summary">
@@ -310,7 +310,7 @@ onMounted(loadAll)
 </script>
 
 <style lang="scss" scoped>
-.voltage-class.forecast-view {
+.forecast-view {
   display: flex;
   height: 100%;
   gap: 0.12rem;
@@ -348,9 +348,9 @@ onMounted(loadAll)
         .summary-card__icon { width: 0.32rem; height: 0.32rem; border-radius: 50%; display: flex;
           align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.16rem;
           &.pv-icon { background: rgba(255,165,0,0.15); color: #ffa500; }
-          &.load-icon { background: rgba(105,203,255,0.15); color: #69cbff; }
-          &.self-icon { background: rgba(82,196,26,0.15); color: #52c41a; }
-          &.net-icon { background: rgba(255,105,0,0.15); color: #ff6900; }
+          &.load-icon { background: rgba(105,203,255,0.15); color: var(--vt-color-chart-pv); }
+          &.self-icon { background: rgba(82,196,26,0.15); color: var(--vt-color-success); }
+          &.net-icon { background: rgba(255,105,0,0.15); color: var(--vt-color-primary); }
           &.weather-icon { background: rgba(167,139,250,0.15); color: #a78bfa; }
         }
         .summary-card__content { display: flex; flex-direction: column; gap: 0.02rem; min-width: 0;
@@ -402,7 +402,7 @@ onMounted(loadAll)
       .panel-card__title { display: flex; align-items: center; gap: 0.05rem;
         font-size: var(--vt-font-size-sm); font-weight: var(--vt-font-weight-semibold);
         color: var(--vt-text-primary);
-        .ai-badge { background: var(--vt-color-primary); color: #fff; font-size: 0.09rem;
+        .ai-badge { background: var(--vt-color-primary); color: var(--vt-text-primary); font-size: 0.09rem;
           font-weight: var(--vt-font-weight-bold); padding: 0.01rem 0.04rem;
           border-radius: 0.02rem; line-height: 1.3; }
       }

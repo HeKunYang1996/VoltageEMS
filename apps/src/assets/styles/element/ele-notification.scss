@@ -1,0 +1,144 @@
+// ============================================
+// Element Plus: Notification (ElNotification)
+// 告警通知样式 — alarm-trigger / alarm-recovery
+// ============================================
+// ============================================
+// Alarm Notification — base
+// ============================================
+.alarm-notification {
+  width: 3.6rem;
+  padding: 0.14rem 0.16rem 0.12rem;
+  border-width: 0.01rem;
+  border-style: solid;
+  border-radius: 0.04rem;
+  box-shadow: var(--vt-shadow-dialog);
+
+  .el-notification__title {
+    font-size: 0.15rem;
+    font-weight: 700;
+    line-height: 1.4;
+    letter-spacing: 0.01em;
+  }
+
+  .el-notification__content {
+    font-size: 0.13rem;
+    color: var(--vt-text-primary);
+    margin-top: 0.08rem;
+    line-height: 1.5;
+  }
+
+  .el-notification__icon {
+    font-size: 0.24rem;
+    margin-right: 0.1rem;
+  }
+
+  .el-notification__closeBtn {
+    font-size: 0.15rem;
+    color: var(--vt-text-secondary);
+
+    &:hover {
+      color: var(--vt-text-primary);
+    }
+  }
+}
+
+// ============================================
+// Alarm Notification — error (trigger)
+// ============================================
+.alarm-notification--error {
+  background-color: var(--vt-notification-error-bg) !important;
+  border-color: var(--vt-notification-error-border) !important;
+
+  .el-notification__title {
+    color: #ff8a80;
+  }
+
+  .el-notification__icon {
+    color: #ff8a80;
+  }
+
+  .el-notification__content {
+    color: #ffcdd2;
+  }
+
+  .alarm-notification-msg {
+    color: #ffcdd2;
+  }
+
+  .alarm-detail-btn {
+    background-color: #e53935;
+    color: #fff;
+
+    &:hover {
+      background-color: #f44336;
+    }
+
+    &:active {
+      background-color: #c62828;
+    }
+  }
+}
+
+// ============================================
+// Alarm Notification — success (recovery)
+// ============================================
+.alarm-notification--success {
+  background-color: var(--vt-notification-success-bg) !important;
+  border-color: var(--vt-notification-success-border) !important;
+
+  .el-notification__title {
+    color: #a5d6a7;
+  }
+
+  .el-notification__icon {
+    color: #a5d6a7;
+  }
+
+  .el-notification__content {
+    color: #c8e6c9;
+  }
+}
+
+// ============================================
+// Alarm Notification — content blocks (flat)
+// ============================================
+.alarm-notification-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.alarm-notification-msg {
+  display: block;
+  font-size: 0.13rem;
+  color: var(--vt-text-primary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.alarm-notification-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.04rem;
+}
+
+.alarm-detail-btn {
+  padding: 0.04rem 0.12rem;
+  border: none;
+  border-radius: 0.02rem;
+  background-color: var(--vt-color-primary);
+  color: var(--vt-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--vt-font-size-base);
+  line-height: 1.4;
+  transition: background-color var(--vt-transition-fast);
+
+  &:hover {
+    background-color: var(--vt-color-primary-hover);
+  }
+
+  &:active {
+    background-color: var(--vt-color-primary-active);
+  }
+}

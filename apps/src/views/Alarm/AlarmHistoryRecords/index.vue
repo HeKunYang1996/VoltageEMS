@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class alarm-records vt-page-shell">
+  <div class="alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
       <!-- 琛ㄦ牸宸ュ叿锟?-->
       <div class="alarm-records__toolbar vt-toolbar">
@@ -296,7 +296,7 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 </script>
 
 <style scoped lang="scss">
-.voltage-class.alarm-records {
+.alarm-records {
   position: relative;
   height: 100%;
   display: flex;
@@ -355,15 +355,15 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
   }
 
   .alarm-level--1 {
-    color: #da2d2c;
+    color: var(--vt-color-level-critical);
   }
 
   .alarm-level--2 {
-    color: #ff6e08;
+    color: var(--vt-color-level-warning);
   }
 
   .alarm-level--3 {
-    color: #fe9900;
+    color: var(--vt-color-level-info);
   }
 }
 </style>

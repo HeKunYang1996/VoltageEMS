@@ -1,5 +1,5 @@
 <template>
-  <div class="app-skeleton voltage-class">
+  <div class="app-skeleton">
     <div class="app-skeleton__left">
       <div class="app-skeleton__sidebar">
         <div class="app-skeleton__logo" aria-hidden="true">

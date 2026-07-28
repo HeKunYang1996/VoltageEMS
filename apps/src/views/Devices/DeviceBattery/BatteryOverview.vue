@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class pv-overview">
+  <div class="pv-overview">
     <div class="pv-overview__right">
       <BatteryCard
         class="battery-card"
@@ -75,7 +75,7 @@ const batteryCardData = ref<BatteryCardItem[]>([
 ])
 </script>
 <style scoped lang="scss">
-.voltage-class.pv-overview {
+.pv-overview {
   height: 100%;
   width: 100%;
   display: flex;

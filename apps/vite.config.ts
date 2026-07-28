@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => ({
     // vueDevTools(), // 暂时关闭 Vue DevTools 调试工具
     AutoImport({
       imports: ['vue', 'vue-router', 'pinia'],
-      resolvers: [ElementPlusResolver()],
+      resolvers: [ElementPlusResolver({})],
       dts: true,
     }),
     Components({
@@ -60,7 +60,7 @@ export default defineConfig(({ mode }) => ({
   ],
   server: {
     host: '0.0.0.0', // 允许外部访问
-    port: 8080, // 指定端口号
+    port: 8081, // 指定端口号
     open: true, // 自动打开浏览器
     proxy: {
       '/api': {
@@ -121,12 +121,6 @@ export default defineConfig(({ mode }) => ({
     },
   },
   css: {
-    preprocessorOptions: {
-      scss: {
-        // 如果需要全局 SCSS 变量，可以在这里添加
-        additionalData: `@use "@/assets/styles/element/theme-vars.scss" as *;`,
-      },
-    },
     postcss: {
       plugins: [
         // 自动添加浏览器前缀

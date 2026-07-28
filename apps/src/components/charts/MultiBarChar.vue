@@ -40,12 +40,12 @@ import {
   ToolboxComponent,
   DataZoomComponent,
 } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import * as XLSX from 'xlsx'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -57,7 +57,7 @@ echarts.use([
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  CanvasRenderer,
+  SVGRenderer,
   ToolboxComponent,
   DataZoomComponent,
 ])
@@ -78,7 +78,6 @@ export interface YAxisOption {
   yUnit?: string
 }
 
-// Grid配置接口
 export interface GridConfig {
   left?: number
   right?: number
@@ -105,7 +104,6 @@ const props = withDefaults(
     autoScrollInterval?: number
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
@@ -114,7 +112,7 @@ const props = withDefaults(
     }),
     fullScreenGridConfig: () => ({
       left: 50,
-      right: 80,
+      right: 50,
       top: 90,
       bottom: 50,
     }),
@@ -197,7 +195,6 @@ function customTooltipFormatter(
   return html
 }
 
-// Grid配置转换函数
 function getGridConfig(isFullScreen: boolean) {
   return isFullScreen
     ? {
@@ -209,19 +206,13 @@ function getGridConfig(isFullScreen: boolean) {
     : {
         left: pxToResponsive(props.gridConfig.left || 0),
         right: pxToResponsive(props.gridConfig.right || 0),
-        top: pxToResponsive(props.gridConfig.top || 35),
-        bottom: pxToResponsive(props.gridConfig.bottom || 15),
+        top: pxToResponsive(props.gridConfig.top || 45),
+        bottom: pxToResponsive(props.gridConfig.bottom || 10),
       }
 }
 
 // 统一生成option的方法
-function getChartOption({
-  isFullScreen = false,
-  chartWidth: _chartWidth = 600,
-}: {
-  isFullScreen?: boolean
-  chartWidth?: number
-}) {
+function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // 配置参数
   const xUnit = props.xAxiosOption.xUnit ?? ''
   const yUnit = props.yAxiosOption.yUnit ?? ''
@@ -239,7 +230,6 @@ function getChartOption({
   //     )
   //     : Math.min(pxToResponsive(60), (chartWidth - margin - barSpacing * (dataCount - 1)) / dataCount)
 
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -410,20 +400,20 @@ function getChartOption({
       }
   const toolbox = isFullScreen
     ? {
-        itemSize: pxToResponsive(20),
-        itemGap: pxToResponsive(26),
-        top: pxToResponsive(-18),
-        right: pxToResponsive(40),
+        itemSize: 20,
+        itemGap: 26,
+        top: -18,
+        right: 40,
         iconStyle: {
           // color: '#fff',
           borderColor: '#fff',
-          borderWidth: pxToResponsive(1),
+          borderWidth: 1,
         },
         emphasis: {
           iconStyle: {
             // color: '#fff',
             borderColor: '#fff',
-            borderWidth: pxToResponsive(1),
+            borderWidth: 1,
           },
         },
         feature: {
@@ -443,11 +433,11 @@ function getChartOption({
               back: '',
             },
             iconStyle: {
-              borderWidth: pxToResponsive(2),
+              borderWidth: 2,
             },
             emphasis: {
               iconStyle: {
-                borderWidth: pxToResponsive(2),
+                borderWidth: 2,
               },
             },
           },
@@ -484,14 +474,14 @@ function getChartOption({
         confine: true,
         backgroundColor: '#3f4f75',
         borderColor: 'rgba(255,255,255,0.12)',
-        borderWidth: pxToResponsive(2),
+borderWidth: pxToResponsive(2),
         padding: [pxToResponsive(30), pxToResponsive(40), pxToResponsive(30), pxToResponsive(40)],
         extraCssText: `
-            border-radius: ${pxToResponsive(24)}px;
-            box-shadow: 0 ${pxToResponsive(16)}px ${pxToResponsive(32)}px 0 rgba(0,0,0,0.15);
-            max-width: ${pxToResponsive(500)}px;
-            min-height: ${pxToResponsive(120)}px;
-          `,
+          border-radius: ${pxToResponsive(24)}px;
+          box-shadow: 0 ${pxToResponsive(16)}px ${pxToResponsive(32)}px 0 rgba(0,0,0,0.15);
+          max-width: ${pxToResponsive(500)}px;
+          min-height: ${pxToResponsive(120)}px;
+        `,
         textStyle: {
           fontFamily: 'Arimo',
           fontWeight: 400,
@@ -518,10 +508,10 @@ function getChartOption({
         borderWidth: pxToResponsive(1),
         padding: [pxToResponsive(10), pxToResponsive(16), pxToResponsive(10), pxToResponsive(16)],
         extraCssText: `
-            border-radius: ${pxToResponsive(8)}px;
-            box-shadow: 0 ${pxToResponsive(4)}px ${pxToResponsive(16)}px 0 rgba(0,0,0,0.12);
-            max-width: ${pxToResponsive(220)}px;
-          `,
+          border-radius: ${pxToResponsive(8)}px;
+          box-shadow: 0 ${pxToResponsive(4)}px ${pxToResponsive(16)}px 0 rgba(0,0,0,0.12);
+          max-width: ${pxToResponsive(220)}px;
+        `,
         textStyle: {
           fontFamily: 'Arimo',
           fontWeight: 400,
@@ -641,9 +631,8 @@ const initChart = () => {
   if (chartInstance) {
     chartInstance.dispose()
   }
-  const chartWidth = chartRef.value.clientWidth || 600
-  chartInstance = echarts.init(chartRef.value)
-  chartInstance.setOption(getChartOption({ isFullScreen: false, chartWidth }))
+  chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
+  chartInstance.setOption(getChartOption({ isFullScreen: false }))
 
   // 添加鼠标事件监听 - 监听整个图表容器
   if (chartRef.value) {
@@ -658,9 +647,8 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  const chartWidth = fullScreenChartRef.value.clientWidth || 1200
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
-  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true, chartWidth }))
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
+  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 
   // 添加鼠标事件监听 - 监听整个图表容器
   if (fullScreenChartRef.value) {
@@ -731,13 +719,17 @@ watch(
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
 }
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 watch(

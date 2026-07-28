@@ -32,7 +32,7 @@ const handleClick = () => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class {
+.icon-button {
   display: flex;
   align-items: center;
   gap: 0.08rem;

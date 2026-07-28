@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class devices-pv vt-page-shell">
+  <div class="devices-pv vt-page-shell">
     <!-- 页面头部 -->
     <div class="devices-pv__header vt-page-header">
       <div class="devices-pv__tabs vt-page-tabs">
@@ -81,7 +81,7 @@ const handleTabClick = (tab: 'overview' | 'curves' | 'operationLog' | 'runingLog
 </script>
 
 <style scoped lang="scss">
-.voltage-class.devices-pv {
+.devices-pv {
   .devices-pv__content {
     min-height: 0;
   }

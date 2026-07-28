@@ -43,13 +43,13 @@ import {
   LegendComponent,
   ToolboxComponent,
 } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -62,7 +62,7 @@ echarts.use([
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  CanvasRenderer,
+  SVGRenderer,
   ToolboxComponent,
 ])
 
@@ -94,7 +94,6 @@ interface YAxisOption {
   yUnit?: string[]
 }
 
-// Grid配置接口
 interface GridConfig {
   left?: number
   right?: number
@@ -236,7 +235,6 @@ function customTooltipFormatter(
   return html
 }
 
-// Grid配置转换函数
 function getGridConfig(isFullScreen: boolean) {
   return isFullScreen
     ? {
@@ -248,8 +246,8 @@ function getGridConfig(isFullScreen: boolean) {
     : {
         left: pxToResponsive(props.gridConfig.left || 0),
         right: pxToResponsive(props.gridConfig.right || 0),
-        top: pxToResponsive(props.gridConfig.top || 35),
-        bottom: pxToResponsive(props.gridConfig.bottom || 15),
+        top: pxToResponsive(props.gridConfig.top || 45),
+        bottom: pxToResponsive(props.gridConfig.bottom || 10),
       }
 }
 
@@ -260,7 +258,6 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   const yUnit = props.yAxiosOption.yUnit ?? ''
   const yUnitRight = props.yAxiosOption.yUnit?.[1] ?? ''
 
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -523,20 +520,20 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   const yAxis = [yAxisLeft, yAxisRight]
   const toolbox = isFullScreen
     ? {
-        itemSize: pxToResponsive(20),
-        itemGap: pxToResponsive(26),
-        top: pxToResponsive(-18),
-        right: pxToResponsive(40),
+        itemSize: 20,
+        itemGap: 26,
+        top: -18,
+        right: 40,
         iconStyle: {
           // color: '#fff',
           borderColor: '#fff',
-          borderWidth: pxToResponsive(1),
+          borderWidth: 1,
         },
         emphasis: {
           iconStyle: {
             // color: '#fff',
             borderColor: '#fff',
-            borderWidth: pxToResponsive(1),
+            borderWidth: 1,
           },
         },
         feature: {
@@ -556,11 +553,11 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
               back: '',
             },
             iconStyle: {
-              borderWidth: pxToResponsive(2),
+              borderWidth: 2,
             },
             emphasis: {
               iconStyle: {
-                borderWidth: pxToResponsive(2),
+                borderWidth: 2,
               },
             },
           },
@@ -632,7 +629,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       itemStyle: {
         color: s.color,
         borderColor: s.color,
-        borderWidth: isFullScreen ? 3 : 2,
+        borderWidth: isFullScreen ? pxToResponsive(3) : pxToResponsive(2),
       },
       emphasis: {
         focus: 'series',
@@ -806,10 +803,7 @@ const initChart = () => {
   if (chartInstance) {
     chartInstance.dispose()
   }
-  chartInstance = echarts.init(chartRef.value, {
-    renderer: 'canvas',
-    devicePixelRatio: window.devicePixelRatio,
-  })
+  chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
   chartInstance.setOption(getChartOption({ isFullScreen: false }))
 
   // 添加鼠标事件监听 - 监听整个图表容器
@@ -825,7 +819,7 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
   fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 
   // 添加鼠标事件监听 - 监听整个图表容器
@@ -889,6 +883,7 @@ const handleExport = () => {
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
@@ -896,7 +891,10 @@ const resizeFullScreenChart = () => {
 
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 

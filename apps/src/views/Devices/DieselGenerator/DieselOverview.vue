@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class pv-overview">
+  <div class="pv-overview">
     <div class="pv-overview__header">
       <div class="card-item" v-for="item in energyCardData" :key="item.title">
         <PVCard :title="item.title" :icon="item.icon" :value="item.value" :unit="item.unit" />
@@ -56,7 +56,7 @@ watch(
 )
 </script>
 <style scoped lang="scss">
-.voltage-class.pv-overview {
+.pv-overview {
   height: 100%;
   width: 100%;
   display: flex;

@@ -34,12 +34,12 @@
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -60,7 +60,7 @@ watch(
   },
 )
 
-echarts.use([PieChart, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
+echarts.use([PieChart, TooltipComponent, LegendComponent, TitleComponent, SVGRenderer])
 
 // 定义数据类型
 interface SeriesData {
@@ -70,7 +70,6 @@ interface SeriesData {
   unit?: string
 }
 
-// Grid配置接口
 interface GridConfig {
   left?: number
   right?: number
@@ -94,7 +93,6 @@ const props = withDefaults(
     showDownload?: boolean
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
@@ -196,29 +194,22 @@ function getGridConfig(isFullScreen: boolean) {
         left: pxToResponsive(props.fullScreenGridConfig.left || 50),
         right: pxToResponsive(props.fullScreenGridConfig.right || 50),
         top: pxToResponsive(props.fullScreenGridConfig.top || 80),
-        bottom: pxToResponsive(props.fullScreenGridConfig.bottom || -10),
+        bottom: pxToResponsive(props.fullScreenGridConfig.bottom || 50),
       }
     : {
         left: pxToResponsive(props.gridConfig.left || 0),
         right: pxToResponsive(props.gridConfig.right || 0),
-        top: pxToResponsive(props.gridConfig.top || 80),
+        top: pxToResponsive(props.gridConfig.top || 100),
         bottom: pxToResponsive(props.gridConfig.bottom || 0),
       }
 }
 // 统一生成option的方法
-function getChartOption({
-  isFullScreen = false,
-  chartWidth: _chartWidth = 600,
-}: {
-  isFullScreen?: boolean
-  chartWidth?: number
-}) {
+function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // 获取配置参数，使用默认值
   const radius = props.radius || ['40%', '70%']
   // 普通预览时把饼图中心下移，为顶部图例和标签留出足够空间
   const center = props.center || (isFullScreen ? ['50%', '50%'] : ['50%', '60%'])
 
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -441,9 +432,8 @@ const initChart = () => {
   if (chartInstance) {
     chartInstance.dispose()
   }
-  const chartWidth = chartRef.value.clientWidth || 600
-  chartInstance = echarts.init(chartRef.value)
-  chartInstance.setOption(getChartOption({ isFullScreen: false, chartWidth }))
+  chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
+  chartInstance.setOption(getChartOption({ isFullScreen: false }))
 }
 
 // 初始化全屏图表
@@ -452,9 +442,8 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  const chartWidth = fullScreenChartRef.value.clientWidth || 1200
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
-  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true, chartWidth }))
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
+  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 }
 
 const handleFullScreen = () => {
@@ -514,6 +503,7 @@ watch(
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
@@ -521,7 +511,10 @@ const resizeFullScreenChart = () => {
 
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 

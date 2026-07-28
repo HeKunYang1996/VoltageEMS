@@ -37,20 +37,20 @@ import {
   ToolboxComponent,
   MarkLineComponent,
 } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive as px } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
 import type { WeatherData } from '@/types/forecast'
+import { pxToResponsive as px } from '@/utils/responsive'
 
 echarts.use([
   LineChart,
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  CanvasRenderer,
+  SVGRenderer,
   DataZoomComponent,
   ToolboxComponent,
   MarkLineComponent,
@@ -121,6 +121,7 @@ function alpha(c: string, a: number): string {
 }
 
 function buildOption(isFull: boolean) {
+  const R = isFull ? px : (v: number) => v
   const d = props.data
   const labels = d.map(x => x.label)
   const actuals = d.map(x => x.actual)
@@ -135,15 +136,13 @@ function buildOption(isFull: boolean) {
   const hasP50 = p50s.some(v => v !== null)
   const hasBand = d.some(x => x.p10 !== null && x.p90 !== null)
 
-  const R = isFull ? px : (v: number) => v
-
   const grid = {
-    left: R(55), right: R(20), top: R(40), bottom: R(25),
+    left: '5%', right: '5%', top: 40, bottom: 25,
   }
 
   const axisLabel = {
     color: 'rgba(255,255,255,0.6)', fontFamily: 'Arimo',
-    fontSize: isFull ? px(16) : px(12),
+    fontSize: R(16),
   }
 
   const series: any[] = []
@@ -273,36 +272,36 @@ function buildOption(isFull: boolean) {
     confine: true,
     backgroundColor: '#3f4f75',
     borderColor: 'rgba(255,255,255,0.12)',
-    borderWidth: isFull ? px(2) : 1,
-    padding: isFull ? [px(30), px(40), px(30), px(40)] : [px(10), px(16), px(10), px(16)],
+    borderWidth: R(2),
+    padding: [R(30), R(40), R(30), R(40)],
     extraCssText: `border-radius:${R(8)}px;box-shadow:0 ${R(4)}px ${R(16)}px 0 rgba(0,0,0,0.12);`,
     axisPointer: { type: 'cross', crossStyle: { color: 'rgba(255,255,255,0.2)' } },
     formatter: (params: any) => {
       const idx = params[0]?.dataIndex ?? -1
       if (idx < 0 || idx >= d.length) return ''
       const pt = d[idx]
-      const fs1 = R(14), fs2 = R(12), fs3 = R(11)
+      const fs1 = 14, fs2 = 12, fs3 = 11
 
       let html = `<div style="max-width:2.4rem;font-family:Arimo;">
-        <div style="color:rgba(255,255,255,0.85);font-size:${fs1}px;font-weight:600;margin-bottom:${R(4)}px;">${pt.label}</div>`
+        <div style="color:rgba(255,255,255,0.85);font-size:${fs1}px;font-weight:600;margin-bottom:4px;">${pt.label}</div>`
       if (pt.actual !== null) {
-        html += `<div style="display:flex;justify-content:space-between;font-size:${fs2}px;color:#69cbff;margin-bottom:${R(2)}px;">
+        html += `<div style="display:flex;justify-content:space-between;font-size:${fs2}px;color:#69cbff;margin-bottom:2px;">
           <span>Actual</span><span style="font-weight:600;">${pt.actual.toFixed(2)} ${props.yUnit}</span>
         </div>`
       }
       if (pt.p50 !== null) {
-        html += `<div style="display:flex;justify-content:space-between;font-size:${fs2}px;color:${props.forecastColor};margin-bottom:${R(2)}px;">
+        html += `<div style="display:flex;justify-content:space-between;font-size:${fs2}px;color:${props.forecastColor};margin-bottom:2px;">
           <span>Forecast (P50)</span><span style="font-weight:600;">${pt.p50.toFixed(2)} ${props.yUnit}</span>
         </div>`
       }
       if (pt.p10 !== null && pt.p90 !== null) {
-        html += `<div style="display:flex;justify-content:space-between;font-size:${fs3}px;color:rgba(255,255,255,0.5);margin-bottom:${R(2)}px;">
+        html += `<div style="display:flex;justify-content:space-between;font-size:${fs3}px;color:rgba(255,255,255,0.5);margin-bottom:2px;">
           <span>P10 - P90</span><span>${pt.p10.toFixed(2)} ~ ${pt.p90.toFixed(2)} ${props.yUnit}</span>
         </div>`
       }
       if (pt.weather) {
         const w = pt.weather
-        html += `<div style="border-top:1px solid rgba(255,255,255,0.15);margin:${R(4)}px 0 ${R(2)}px;"></div>`
+        html += `<div style="border-top:1px solid rgba(255,255,255,0.15);margin:4px 0 2px;"></div>`
         if (w.temperature !== null) html += `<div style="font-size:${fs3}px;color:rgba(255,255,255,0.6);">🌡️ Temp: ${w.temperature.toFixed(1)}°C</div>`
         if (w.humidity !== null) html += `<div style="font-size:${fs3}px;color:rgba(255,255,255,0.6);">💧 Humidity: ${w.humidity.toFixed(1)}%</div>`
         if (w.ghi !== null) html += `<div style="font-size:${fs3}px;color:rgba(255,255,255,0.6);">☀️ GHI: ${w.ghi.toFixed(1)} W/m²</div>`
@@ -329,11 +328,11 @@ function buildOption(isFull: boolean) {
       show: true,
       orient: 'horizontal',
       right: 0,
-      top: px(10),
-      itemWidth: px(12),
-      itemHeight: px(12),
-      itemGap: px(25),
-      textStyle: { color: 'rgba(255,255,255,0.6)', fontSize: px(12) },
+      top: 10,
+      itemWidth: R(12),
+      itemHeight: R(12),
+      itemGap: R(25),
+      textStyle: { color: 'rgba(255,255,255,0.6)', fontSize: R(12) },
       data: legendData,
     },
     grid,
@@ -355,14 +354,14 @@ function buildOption(isFull: boolean) {
 function initChart() {
   if (!chartRef.value) return
   chartInstance?.dispose()
-  chartInstance = echarts.init(chartRef.value)
+  chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
   chartInstance.setOption(buildOption(false))
 }
 
 function initFullScreenChart() {
   if (!fullScreenChartRef.value) return
   fullScreenChartInstance?.dispose()
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
   fullScreenChartInstance.setOption(buildOption(true))
 }
 
@@ -384,7 +383,12 @@ watch(() => props.data, () => nextTick(initChart), { deep: true })
 
 onMounted(() => {
   initChart()
-  window.addEventListener('resize', () => chartInstance?.resize())
+  window.addEventListener('resize', () => {
+    if (chartInstance) {
+      chartInstance.setOption(buildOption(false), true)
+      chartInstance.resize()
+    }
+  })
 })
 onBeforeUnmount(() => {
   chartInstance?.dispose()

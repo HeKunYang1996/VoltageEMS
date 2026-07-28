@@ -1,11 +1,11 @@
-@use './theme-vars.scss' as *;
-
 @mixin vt-table-cell-shell {
   box-sizing: border-box;
-  height: $table-row-height;
-  padding: $table-cell-padding-y $table-cell-padding-x;
+  height: var(--vt-table-row-height);
+  // Keep vertical rhythm on td; horizontal padding stays on .cell so it matches
+  // Element Plus show-overflow-tooltip (it sets .cell width = column width).
+  padding: var(--vt-table-cell-padding-y) 0;
   font-size: 0.14rem;
-  line-height: $table-cell-line-height;
+  line-height: var(--vt-table-cell-line-height);
   border: none;
   border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
 }
@@ -13,30 +13,20 @@
 @mixin vt-table-cell-inner {
   display: block;
   box-sizing: border-box;
-  height: $table-cell-inner-height;
-  min-height: $table-cell-inner-height;
-  max-height: $table-cell-inner-height;
-  padding: 0 !important;
+  height: var(--vt-table-cell-inner-height);
+  min-height: var(--vt-table-cell-inner-height);
+  max-height: var(--vt-table-cell-inner-height);
+  padding: 0 var(--vt-table-cell-padding-x) !important;
   overflow: hidden;
-  line-height: $table-cell-inner-height;
+  line-height: var(--vt-table-cell-inner-height);
   text-overflow: ellipsis;
   white-space: nowrap;
 
+  // EP injects inline width = column.realWidth when tooltip is on.
+  // With box-sizing:border-box + padding on .cell, that width is correct.
+  // Force 100% as a safety net if column width math drifts.
   &.el-tooltip {
-    span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  > *:only-child {
-    display: inline-flex;
-    align-items: center;
-    box-sizing: border-box;
-    height: $table-cell-inner-height;
+    width: 100% !important;
     max-width: 100%;
-    min-width: 0;
-    vertical-align: top;
   }
 }

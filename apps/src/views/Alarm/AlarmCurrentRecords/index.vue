@@ -1,21 +1,13 @@
 <template>
-  <div class="voltage-class alarm-records vt-page-shell">
+  <div class="alarm-records vt-page-shell">
     <LoadingBg :loading="loading">
-      <!-- 琛ㄦ牸宸ュ叿鏍?-->
+      <!-- toolbar -->
       <div class="alarm-records__toolbar vt-toolbar">
         <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
-          <el-form
-            :model="filters"
-            :inline="true"
-            class="test-form alarm-records__toolbar-form vt-toolbar-form"
-          >
+          <el-form :model="filters" :inline="true" class="test-form alarm-records__toolbar-form vt-toolbar-form">
             <el-form-item label="Alarm Level:">
-              <el-select
-                v-model="filters.warning_level"
-                :append-to="toolbarLeftRef"
-                clearable
-                placeholder="Please select level"
-              >
+              <el-select v-model="filters.warning_level" clearable placeholder="Please select level"
+                :append-to="toolbarLeftRef">
                 <el-option label="Critical Alarm" :value="1" />
                 <el-option label="Warning Alarm" :value="2" />
                 <el-option label="Info Alarm" :value="3" />
@@ -25,75 +17,40 @@
         </div>
 
         <div class="alarm-records__toolbar-right vt-toolbar__right">
-          <IconButton
-            type="warning"
-            :icon="reloadIcon"
-            text="Reload"
-            custom-class="alarm-records__export-btn"
-            @click="reloadFilters"
-          />
-          <IconButton
-            type="primary"
-            :icon="searchIcon"
-            text="Search"
-            custom-class="alarm-records__export-btn"
-            @click="fetchTableData(true)"
-          />
+          <IconButton type="warning" :icon="reloadIcon" text="Reload" custom-class="alarm-records__export-btn"
+            @click="reloadFilters" />
+          <IconButton type="primary" :icon="searchIcon" text="Search" custom-class="alarm-records__export-btn"
+            @click="fetchTableData(true)" />
         </div>
       </div>
 
-      <!-- 琛ㄦ牸 -->
+      <!-- table -->
       <div class="alarm-records__table vt-table-shell">
         <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
-          <el-table-column
-            prop="rule_name"
-            label="Name"
-            min-width="1.2rem"
-            class-name="table-ellipsis"
-          />
-          <el-table-column
-            prop="channel_id"
-            label="Channel ID"
-            min-width="1.2rem"
-            class-name="table-ellipsis"
-          />
+          <el-table-column prop="rule_name" label="Name" min-width="1.2rem" class-name="table-ellipsis" />
+          <el-table-column prop="channel_id" label="Channel ID" min-width="1.2rem" class-name="table-ellipsis" />
           <el-table-column prop="warning_level" label="Level" min-width="1rem">
             <template #default="scope">
-              <span
-                class="alarm-records__table-level-text"
-                :class="`alarm-level--${scope.row.warning_level}`"
-              >
+              <span class="alarm-records__table-level-text" :class="`alarm-level--${scope.row.warning_level}`">
                 {{ levelTextList[scope.row.warning_level as 1 | 2 | 3] || '-' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column
-            prop="triggered_at"
-            label="Start Time"
-            min-width="1.2rem"
-            class-name="table-ellipsis"
-          >
+          <el-table-column prop="triggered_at" label="Start Time" min-width="1.2rem" class-name="table-ellipsis">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{
                 formatDateTime(row.triggered_at)
-              }}</span>
+                }}</span>
             </template>
           </el-table-column>
         </el-table>
 
-        <!-- 鍒嗛〉缁勪欢 -->
+        <!-- pagination -->
         <div id="alarm-current-pagination-anchor" class="alarm-records__pagination vt-pagination">
-          <el-pagination
-            v-model:current-page="pagination.page"
-            v-model:page-size="pagination.pageSize"
-            :page-sizes="[10, 20, 50, 100]"
-            :total="pagination.total"
-            layout="total, sizes, prev, pager, next"
-            :teleported="false"
-            append-size-to="#alarm-current-pagination-anchor"
-            @size-change="handlePageSizeChange"
-            @current-change="handlePageChange"
-          />
+          <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.pageSize"
+            :page-sizes="[10, 20, 50, 100]" :total="pagination.total" layout="total, sizes, prev, pager, next"
+            :teleported="false" append-size-to="#alarm-current-pagination-anchor" @size-change="handlePageSizeChange"
+            @current-change="handlePageChange" />
         </div>
       </div>
     </LoadingBg>
@@ -112,13 +69,13 @@ const levelTextList = {
   3: 'Info Alarm',
 }
 const toolbarLeftRef = ref<HTMLElement | null>(null)
-// 琛ㄦ牸閰嶇疆
+// table config
 const tableConfig: TableConfig = {
   listUrl: '/alarmApi/alerts',
   defaultPageSize: 20,
 }
 
-// 浣跨敤 useTableData composable
+// use useTableData composable
 const {
   loading,
   tableData,
@@ -132,11 +89,11 @@ const {
 
 filters.warning_level = null
 
-// 鏍煎紡鍖栨椂闂达紙鏀寔 Unix 绉掓椂闂存埑鍜屾棩鏈熷瓧绗︿覆锛?
+// format date time
 const formatDateTime = (dateTime: number | string | null | undefined): string => {
   if (dateTime === null || dateTime === undefined || dateTime === '') return '-'
   try {
-    // Unix 鏃堕棿鎴充负绉掞紝闇€杞崲涓烘绉?
+    // Unix timestamp to date time
     const date = typeof dateTime === 'number' ? new Date(dateTime * 1000) : new Date(dateTime)
     if (isNaN(date.getTime())) return String(dateTime)
     const year = date.getFullYear()
@@ -153,7 +110,7 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 </script>
 
 <style scoped lang="scss">
-.voltage-class.alarm-records {
+.alarm-records {
   .alarm-records__toolbar {
     .alarm-records__toolbar-left {
       position: relative;

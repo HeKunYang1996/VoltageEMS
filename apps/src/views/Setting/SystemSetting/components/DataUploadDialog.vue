@@ -362,69 +362,68 @@ defineExpose({ open })
 </script>
 
 <style scoped lang="scss">
-.voltage-class {
-  .data-upload-dialog {
-    max-height: 6rem;
-    overflow-y: auto;
-  }
-  .config-title {
-    font-size: 0.16rem;
-    color: #fff;
-    margin-bottom: 0.16rem;
-    font-weight: 700;
-    padding-bottom: 0.1rem;
-    border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
+.data-upload-dialog {
+  max-height: 6rem;
+  overflow-y: auto;
+}
+.config-title {
+  font-size: 0.16rem;
+  color: var(--vt-text-primary);
+  margin-bottom: 0.16rem;
+  font-weight: 700;
+  padding-bottom: 0.1rem;
+  border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
 
-    &:not(:first-child) {
-      margin-top: 0.22rem;
-    }
-  }
-  .config-collapse {
-    border: none;
-    display: flex;
-    flex-wrap: wrap;
-    :deep(.el-form-item) {
-      position: relative;
-      margin-right: 0;
-      margin-bottom: 0.2rem;
-    }
-  }
-
-  :deep(.data-upload-dialog__full-row) {
-    width: 100%;
-  }
-
-  :deep(.data-upload-dialog__full-field) {
-    width: 100%;
-  }
-
-  .upload-hint {
-    position: absolute;
-    top: 0.27rem;
-    left: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.08rem;
-    font-size: 0.12rem;
-    color: #fff;
-    // margin-top: 0.06rem;
-
-    .upload-hint__progress {
-      color: #ff6900;
-    }
-  }
-
-  .dialog-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-  }
-
-  .dialog-footer__right {
-    display: flex;
-    gap: 0.1rem;
-    margin-left: auto;
+  &:not(:first-child) {
+    margin-top: 0.22rem;
   }
 }
+.config-collapse {
+  border: none;
+  display: flex;
+  flex-wrap: wrap;
+  :deep(.el-form-item) {
+    position: relative;
+    margin-right: 0;
+    margin-bottom: 0.2rem;
+  }
+}
+
+:deep(.data-upload-dialog__full-row) {
+  width: 100%;
+}
+
+:deep(.data-upload-dialog__full-field) {
+  width: 100%;
+}
+
+.upload-hint {
+  position: absolute;
+  top: 0.27rem;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.08rem;
+  font-size: 0.12rem;
+  color: var(--vt-text-primary);
+  // margin-top: 0.06rem;
+
+  .upload-hint__progress {
+    color: #ff6900;
+  }
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.dialog-footer__right {
+  display: flex;
+  gap: 0.1rem;
+  margin-left: auto;
+}
+
 </style>

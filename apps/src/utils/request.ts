@@ -106,11 +106,7 @@ const service = axios.create({
  */
 const requestInterceptor = (config: any) => {
   // 添加时间戳防止缓存 (GET请求) - 在生成 key 之前添加，但 normalizeForKey 会过滤掉 _t
-  if (
-    config.method?.toLowerCase() === 'get' &&
-    config.url !== '/modApi/api/instances/search' &&
-    config.url !== '/comApi/api/channels/search'
-  ) {
+  if (config.method?.toLowerCase() === 'get') {
     config.params = {
       ...config.params,
       _t: Date.now(),

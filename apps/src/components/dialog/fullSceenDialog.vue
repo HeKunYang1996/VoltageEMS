@@ -59,7 +59,7 @@ defineExpose({
     font-size: 18px;
     line-height: 100%;
     letter-spacing: 0%;
-    color: #fff;
+    color: var(--vt-text-primary);
   }
 }
 </style>

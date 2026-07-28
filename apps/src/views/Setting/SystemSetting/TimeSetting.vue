@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class time-setting">
+  <div class="time-setting">
     <ModuleCard title="Time Setting" :isShowFooter="true">
       <el-form
         ref="formRef"
