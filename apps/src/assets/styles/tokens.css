@@ -17,6 +17,17 @@
   --vt-color-info: #8c8c8c;
   --vt-color-info-hover: #7a7a7a;
   --vt-color-info-active: #686868;
+  --vt-color-chart-pv: #69cbff;
+  --vt-color-chart-ess: #4fadf7;
+  --vt-color-chart-dg: #f6c85f;
+  --vt-color-chart-online: #6dd400;
+  --vt-color-chart-alarm: #ff4d4f;
+
+  /* Accent */
+  --vt-color-accent: #1d86ff;
+  --vt-color-level-critical: #da2d2c;
+  --vt-color-level-warning: #ff6e08;
+  --vt-color-level-info: #fe9900;
 
   /* Text */
   --vt-text-primary: #ffffff;
@@ -29,14 +40,66 @@
   --vt-bg-body: #17233d;
   --vt-bg-page: #212c49;
   --vt-bg-panel: rgba(33, 44, 73, 0.92);
-  --vt-bg-overlay: rgba(10, 18, 33, 0.72);
+  --vt-bg-overlay: transparent;
   --vt-bg-elevated: rgba(58, 82, 121, 0.32);
   --vt-bg-input: rgba(84, 98, 140, 0.2);
   --vt-bg-muted: rgba(255, 255, 255, 0.08);
+  --vt-bg-glass: rgba(84, 98, 140, 0.2);
+  --vt-bg-glass-strong: rgba(84, 98, 140, 0.3);
+  --vt-bg-glass-heavy: rgba(84, 98, 140, 0.5);
+  --vt-bg-status-online: rgba(106, 193, 97, 0.2);
+  --vt-bg-hover: rgba(255, 255, 255, 0.1);
+
+  /* Brand — interaction */
+  --vt-color-hover: #505f79;
+
+  /* Table */
+  --vt-table-header-bg: rgba(84, 98, 140, 0.2);
+  --vt-table-fixed-bg: #243b65;
+  --vt-table-row-hover-bg: #283f69;
+  --vt-table-sort-color: #3b82f6;
+  --vt-text-empty: #9ca3af;
+
+  /* Dialog */
+  --vt-dialog-fixed-bg: #2b3755;
+  --vt-dialog-row-hover-bg: #38425c;
+
+  /* Message box / notification */
+  --vt-message-box-bg: #1f2e4a;
+  --vt-notification-error-bg: #3c1212;
+  --vt-notification-error-border: #e53935;
+  --vt-notification-success-bg: #0d2e14;
+  --vt-notification-success-border: #43a047;
+
+  /* Picker */
+  --vt-picker-popper-bg: rgba(30, 47, 80, 0.3);
 
   /* Border */
   --vt-border-color: rgba(148, 166, 197, 0.3);
   --vt-border-color-strong: rgba(148, 166, 197, 0.5);
+  --vt-border-color-soft: rgba(255, 255, 255, 0.1);
+  --vt-border-color-dashed: rgba(255, 255, 255, 0.2);
+  --vt-border-gradient: linear-gradient(
+    117.31deg,
+    rgba(148, 166, 197, 0.3) 2.77%,
+    rgba(148, 166, 197, 0) 32.18%,
+    rgba(148, 166, 197, 0.103266) 72.63%,
+    rgba(148, 166, 197, 0.3) 99.05%
+  );
+  --vt-border-gradient-strong: linear-gradient(
+    147.24deg,
+    rgba(148, 166, 197, 0.72) 39.16%,
+    rgba(148, 166, 197, 0.36) 66.27%,
+    rgba(148, 166, 197, 0.72) 98.58%
+  );
+  --vt-border-gradient-popper: linear-gradient(
+    117.64deg,
+    rgba(148, 166, 197, 0.3) 2.73%,
+    rgba(148, 166, 197, 0) 25.27%,
+    rgba(148, 166, 197, 0.3) 41.05%,
+    rgba(148, 166, 197, 0.103266) 61.63%,
+    rgba(148, 166, 197, 0.3) 97.67%
+  ) 1;
 
   /* Radius */
   --vt-radius-none: 0rem;
@@ -50,12 +113,14 @@
 
   /* Typography */
   --vt-font-family-base: Arimo, sans-serif;
+  --vt-font-family-heading: Montserrat, sans-serif;
   --vt-font-size-xs: 0.12rem;
   --vt-font-size-sm: 0.13rem;
   --vt-font-size-base: 0.14rem;
   --vt-font-size-md: 0.16rem;
   --vt-font-size-lg: 0.18rem;
   --vt-font-size-xl: 0.2rem;
+  --vt-font-size-2xl: 0.3rem;
   --vt-font-weight-normal: 400;
   --vt-font-weight-medium: 500;
   --vt-font-weight-semibold: 600;
@@ -70,7 +135,7 @@
   --vt-space-2: 0.08rem;
   --vt-space-3: 0.12rem;
   --vt-space-4: 0.16rem;
-  --vt-space-5: 0.24rem;
+  --vt-space-5: 0.2rem;
   --vt-space-6: 0.32rem;
   --vt-space-7: 0.48rem;
   --vt-button-padding-sm: 0 0.12rem;
@@ -90,11 +155,26 @@
   --vt-control-height-sm: 0.28rem;
   --vt-control-height: 0.32rem;
   --vt-control-height-lg: 0.4rem;
+  --vt-table-row-height: 0.4rem;
+  --vt-table-cell-padding-y: 0.09rem;
+  --vt-table-cell-padding-x: 0.2rem;
+  --vt-table-cell-line-height: 0.22rem;
+  --vt-table-cell-inner-height: calc(
+    var(--vt-table-row-height) - var(--vt-table-cell-padding-y) * 2
+  );
   --vt-field-width: 2.4rem;
   --vt-select-width: 2.4rem;
   --vt-z-toast: 3000;
 
   /* Scrollbar */
   --vt-scrollbar-thumb: rgba(88, 114, 148, 0.4);
+  --vt-scrollbar-thumb-hover: rgba(148, 166, 197, 0.5);
   --vt-scrollbar-track: transparent;
+  --vt-scrollbar-thumb-light: #c1c1c1;
+  --vt-scrollbar-track-light: #f1f1f1;
+  --vt-scrollbar-thumb-light-hover: #a8a8a8;
+
+  /* Effect */
+  --vt-backdrop-blur: blur(0.1rem);
+  --vt-backdrop-blur-strong: blur(0.2rem);
 }

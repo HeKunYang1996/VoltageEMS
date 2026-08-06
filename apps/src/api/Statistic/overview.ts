@@ -1,7 +1,11 @@
 import Request, { type ApiResponse } from '@/utils/request'
-import type { QueryPowerTrendParams } from '@/types/Statistics/OverView'
+import type { BatchQueryRequest, BatchQueryData } from '@/types/Statistics/OverView'
 
-// 查询指定测点的功率趋势数据
-export const queryPowerTrend = (params: QueryPowerTrendParams): Promise<ApiResponse<any>> => {
-  return Request.get('/hisApi/data/query', params)
+// 批量查询历史数据（batch-query POST接口）
+// signal 可选，用于外部通过 AbortController 取消请求
+export const batchQueryHistory = (
+  data: BatchQueryRequest,
+  signal?: AbortSignal,
+): Promise<ApiResponse<BatchQueryData>> => {
+  return Request.post('/hisApi/data/batch-query', data, signal ? { signal } : undefined)
 }

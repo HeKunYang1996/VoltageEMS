@@ -96,7 +96,7 @@ const props = defineProps({
       display: flex;
       align-items: center;
 
-      color: #fff;
+      color: var(--vt-text-primary);
 
       .card__right-contain {
         display: flex;
@@ -122,7 +122,7 @@ const props = defineProps({
           font-weight: 700;
           font-size: 0.2rem;
           line-height: 0.16rem;
-          color: #ffffff;
+          color: var(--vt-text-primary);
 
           .card__right-unit {
             font-size: 0.12rem;

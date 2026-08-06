@@ -205,7 +205,7 @@ export const dynamicRoutes: RouteItem[] = [
         meta: {
           title: 'Rule Management',
           activeNav: '/alarm/ruleManagement',
-          roles: ['Admin'],
+          roles: ['Admin', 'Engineer', 'Viewer'],
         },
       },
     ],
@@ -213,32 +213,23 @@ export const dynamicRoutes: RouteItem[] = [
   {
     path: '/control',
     name: 'control',
+    redirect: '/control/historyRecords',
     meta: {
-      title: 'Control',
       isSubMenu: true,
       activeNav: '/control',
       icon: controlIcon,
+      title: 'Control',
       roles: ['Admin', 'Viewer', 'Engineer'],
     },
     children: [
       {
-        path: 'controlRecord',
-        name: 'controlRecord',
+        path: 'historyRecords',
+        name: 'controlHistoryRecords',
         component: () => import('@/views/Control/ControlRecord/index.vue'),
         meta: {
-          title: 'Control Record',
-          activeNav: '/control/controlRecord',
+          title: 'History Records',
+          activeNav: '/control/historyRecords',
           roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
-      {
-        path: 'controlManagement',
-        name: 'controlManagement',
-        component: () => import('@/views/Control/ControlManagement/index.vue'),
-        meta: {
-          title: 'Control Management',
-          activeNav: '/control/controlManagement',
-          roles: ['Admin'],
         },
       },
     ],
@@ -246,7 +237,6 @@ export const dynamicRoutes: RouteItem[] = [
   {
     path: '/statistics',
     name: 'statistics',
-    // component: () => import('@/views/Statistics/index.vue'),
     redirect: '/statistics/overview',
     meta: {
       isSubMenu: true,
@@ -276,26 +266,26 @@ export const dynamicRoutes: RouteItem[] = [
           roles: ['Admin', 'Viewer', 'Engineer'],
         },
       },
-      {
-        path: 'operationLog',
-        name: 'statisticsOperationLog',
-        component: () => import('@/views/Statistics/OperationLog.vue'),
-        meta: {
-          title: 'Operation Log',
-          activeNav: '/statistics/operationLog',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
-      {
-        path: 'runingLog',
-        name: 'statisticsRuningLog',
-        component: () => import('@/views/Statistics/RuningLog.vue'),
-        meta: {
-          title: 'Runing Log',
-          activeNav: '/statistics/runingLog',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
+      // {
+      //   path: 'operationLog',
+      //   name: 'statisticsOperationLog',
+      //   component: () => import('@/views/Statistics/OperationLog.vue'),
+      //   meta: {
+      //     title: 'Operation Log',
+      //     activeNav: '/statistics/operationLog',
+      //     roles: ['Admin', 'Viewer', 'Engineer'],
+      //   },
+      // },
+      // {
+      //   path: 'runingLog',
+      //   name: 'statisticsRuningLog',
+      //   component: () => import('@/views/Statistics/RuningLog.vue'),
+      //   meta: {
+      //     title: 'Runing Log',
+      //     activeNav: '/statistics/runingLog',
+      //     roles: ['Admin', 'Viewer', 'Engineer'],
+      //   },
+      // },
     ],
   },
   {
@@ -306,7 +296,7 @@ export const dynamicRoutes: RouteItem[] = [
       activeNav: '/setting',
       icon: settingIcon,
       title: 'Setting',
-      roles: ['Admin'],
+      roles: ['Admin', 'Engineer'],
     },
     children: [
       {
@@ -316,7 +306,7 @@ export const dynamicRoutes: RouteItem[] = [
         meta: {
           title: 'System Setting',
           activeNav: '/setting/systemSetting',
-          roles: ['Admin'],
+          roles: ['Admin', 'Engineer'],
         },
       },
       {
@@ -329,63 +319,6 @@ export const dynamicRoutes: RouteItem[] = [
           roles: ['Admin'],
         },
       },
-      /*
-      {
-        path: 'configuration',
-        name: 'configuration',
-        component: () => import('@/views/Setting/Configuration/index.vue'),
-        redirect: '/setting/configuration/channelConfiguration',
-        meta: {
-          title: 'Configuration',
-          activeNav: '/setting/configuration',
-          roles: ['Admin'],
-        },
-        children: [
-          {
-            path: 'channelConfiguration',
-            name: 'channelConfiguration',
-            component: () => import('@/views/Setting/Configuration/ChannelConfiguration/index.vue'),
-            meta: {
-              title: 'Channel Configuration',
-              activeNav: '/setting/configuration',
-              roles: ['Admin'],
-            },
-          },
-          {
-            path: 'modelConfiguration',
-            name: 'modelConfiguration',
-            component: () => import('@/views/Setting/Configuration/DeviceConfiguration/index.vue'),
-            meta: {
-              title: 'Model Configuration',
-              activeNav: '/setting/configuration',
-              roles: ['Admin'],
-            },
-          },
-          {
-            path: 'ruleConfiguration',
-            name: 'ruleConfiguration',
-            component: () => import('@/views/Setting/Configuration/RuleConfiguration/index.vue'),
-
-            meta: {
-              title: 'Rule Configuration',
-              activeNav: '/setting/configuration',
-              roles: ['Admin'],
-            },
-          },
-          {
-            path: 'ruleChainEditor/:id',
-            name: 'ruleChainEditor',
-            component: () =>
-              import('@/views/Setting/Configuration/RuleConfiguration/RuleChainEditorView.vue'),
-            meta: {
-              title: 'Rule Chain Editor',
-              activeNav: '/setting/configuration',
-              roles: ['Admin'],
-            },
-          },
-        ],
-      },
-      */
     ],
   },
 ]

@@ -2,8 +2,9 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 // import vFitColumns from 'v-fit-columns'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
+// import ElementPlus from 'element-plus'
+// import 'element-plus/dist/index.css'
+import 'element-plus/theme-chalk/el-message-box.css'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
@@ -29,7 +30,7 @@ pinia.use(piniaPluginPersistedstate)
 
 app.use(pinia)
 app.use(router)
-app.use(ElementPlus)
+// app.use(ElementPlus)
 // app.use(vFitColumns)
 // 注册自定义指令 v-permission
 app.directive('permission', permissionDirective)
@@ -45,4 +46,13 @@ initResponsive()
 // 启动应用
 app.mount('#app')
 
-// 应用启动后初始化WebSocket
+// 过滤 Chrome 扩展引起的 message channel 误报错误
+window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+  const msg: string = event.reason?.message ?? ''
+  if (
+    msg.includes('message channel closed') ||
+    msg.includes('listener indicated an asynchronous')
+  ) {
+    event.preventDefault()
+  }
+})

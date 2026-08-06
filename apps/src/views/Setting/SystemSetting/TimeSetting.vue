@@ -1,6 +1,6 @@
 <template>
-  <div class="voltage-class time-setting">
-    <ModuleCard title="Time Setting:" :isShowFooter="true">
+  <div class="time-setting">
+    <ModuleCard title="Time Setting" :isShowFooter="true">
       <el-form
         ref="formRef"
         :model="formData"
@@ -30,7 +30,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <div class="card__content-footer">
+        <div v-permission="'engineer'" class="card__content-footer">
           <el-button type="primary">Submit</el-button>
         </div>
       </template>

@@ -1,6 +1,11 @@
 :root:root {
+  /* ===== Brand / status ===== */
   --el-color-primary: var(--vt-color-primary);
   --el-color-primary-light-3: var(--vt-color-primary-hover);
+  --el-color-primary-light-5: color-mix(in srgb, var(--vt-color-primary) 50%, white);
+  --el-color-primary-light-7: color-mix(in srgb, var(--vt-color-primary) 30%, white);
+  --el-color-primary-light-8: color-mix(in srgb, var(--vt-color-primary) 20%, white);
+  --el-color-primary-light-9: color-mix(in srgb, var(--vt-color-primary) 10%, white);
   --el-color-primary-dark-2: var(--vt-color-primary-active);
 
   --el-color-success: var(--vt-color-success);
@@ -8,28 +13,41 @@
   --el-color-danger: var(--vt-color-danger);
   --el-color-info: var(--vt-color-info);
 
+  /* ===== Text ===== */
   --el-text-color-primary: var(--vt-text-primary);
   --el-text-color-regular: var(--vt-text-regular);
   --el-text-color-secondary: var(--vt-text-secondary);
   --el-text-color-placeholder: var(--vt-text-placeholder);
   --el-text-color-disabled: var(--vt-text-disabled);
 
+  /* ===== Surface / fill ===== */
   --el-bg-color: var(--vt-bg-page);
   --el-bg-color-page: var(--vt-bg-body);
   --el-bg-color-overlay: var(--vt-bg-overlay);
-  --el-fill-color-blank: transparent;
-  --el-fill-color-light: var(--vt-bg-muted);
+  --el-fill-color: var(--vt-bg-muted);
+  --el-fill-color-light: var(--vt-bg-input);
+  --el-fill-color-lighter: var(--vt-bg-muted);
+  --el-fill-color-extra-light: transparent;
   --el-fill-color-dark: var(--vt-bg-elevated);
+  --el-fill-color-darker: var(--vt-bg-elevated);
+  --el-fill-color-blank: transparent;
+  --el-fill-color-disabled: var(--vt-bg-input);
 
+  /* ===== Border ===== */
   --el-border-color: var(--vt-border-color);
   --el-border-color-light: var(--vt-border-color);
   --el-border-color-lighter: rgba(148, 166, 197, 0.18);
+  --el-border-color-extra-light: var(--vt-border-color-soft);
   --el-border-color-dark: var(--vt-border-color-strong);
+  --el-border-color-hover: var(--vt-border-color-strong);
 
+  /* ===== Overlay / mask ===== */
   --el-mask-color: var(--vt-bg-overlay);
   --el-overlay-color-light: rgba(10, 18, 33, 0.56);
   --el-overlay-color: var(--vt-bg-overlay);
+  --el-popup-modal-bg-color: var(--vt-bg-overlay);
 
+  /* ===== Shadow / radius / font ===== */
   --el-box-shadow: var(--vt-shadow-base);
   --el-box-shadow-light: var(--vt-shadow-base);
   --el-box-shadow-dark: var(--vt-shadow-dialog);
@@ -50,32 +68,134 @@
   --el-component-size: var(--vt-control-height);
   --el-component-size-large: var(--vt-control-height-lg);
 
+  /* ===== Button ===== */
+  --el-button-font-weight: var(--vt-font-weight-normal);
+  --el-button-border-color: transparent;
+  --el-button-bg-color: var(--vt-bg-hover);
+  --el-button-text-color: var(--vt-text-primary);
+  --el-button-disabled-text-color: var(--vt-text-disabled);
+  --el-button-disabled-bg-color: var(--vt-bg-muted);
+  --el-button-disabled-border-color: transparent;
+  --el-button-hover-text-color: var(--vt-text-primary);
+  --el-button-hover-bg-color: var(--vt-color-hover);
+  --el-button-hover-border-color: transparent;
+  --el-button-active-text-color: var(--vt-text-primary);
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: transparent;
+
+  /* ===== Input / textarea ===== */
   --el-input-bg-color: var(--vt-bg-input);
   --el-input-border-color: var(--vt-border-color);
   --el-input-hover-border-color: var(--vt-border-color);
   --el-input-focus-border-color: var(--vt-border-color);
   --el-input-text-color: var(--vt-text-primary);
   --el-input-placeholder-color: var(--vt-text-placeholder);
-  --el-fill-color-disabled: var(--vt-bg-input);
-  --el-fill-color-light: var(--vt-bg-input);
+  --el-input-icon-color: var(--vt-text-secondary);
+  --el-input-transparent-bg-color: transparent;
 
+  /* ===== Select ===== */
   --el-select-input-color: var(--vt-text-placeholder);
-  --el-fill-color-blank: transparent;
-  --el-dialog-bg-color: var(--vt-bg-panel);
-  --el-dialog-box-shadow: var(--vt-shadow-dialog);
-  --el-messagebox-bg-color: var(--vt-bg-panel);
-  --el-popup-modal-bg-color: var(--vt-bg-overlay);
+  --el-select-input-focus-border-color: var(--vt-border-color);
+  --el-select-border-color-hover: var(--vt-border-color);
+  --el-select-disabled-border: var(--vt-border-color);
+  --el-select-disabled-color: var(--vt-text-disabled);
+  --el-select-close-hover-color: var(--vt-text-regular);
+  --el-select-dropdown-bg-color: var(--vt-picker-popper-bg);
+  --el-select-option-hover-background: var(--vt-bg-hover);
+  --el-select-option-selected-text-color: var(--vt-text-primary);
+
+  /* ===== Checkbox / Radio / Switch ===== */
+  --el-checkbox-font-size: var(--vt-font-size-base);
+  --el-checkbox-font-weight: var(--vt-font-weight-normal);
+  --el-checkbox-text-color: var(--vt-text-primary);
+  --el-checkbox-checked-text-color: var(--vt-text-primary);
+  --el-checkbox-checked-bg-color: var(--vt-color-primary);
+  --el-checkbox-checked-input-border-color: var(--vt-color-primary);
+  --el-checkbox-input-border-color-hover: var(--vt-color-primary);
+  --el-checkbox-disabled-checked-bg-color: var(--vt-bg-input);
+  --el-checkbox-disabled-checked-input-border-color: var(--vt-border-color);
+
+  --el-radio-font-size: var(--vt-font-size-base);
+  --el-radio-text-color: var(--vt-text-primary);
+  --el-radio-input-border-color: var(--vt-border-color);
+  --el-radio-input-bg-color: transparent;
+  --el-radio-input-border-color-hover: var(--vt-color-primary);
+
+  --el-switch-on-color: var(--vt-color-primary);
+  --el-switch-off-color: var(--vt-bg-muted);
+  --el-switch-border-color: var(--vt-border-color);
+
+  /* ===== Form ===== */
+  --el-form-label-font-size: var(--vt-font-size-base);
+
+  /* ===== Dialog / Message ===== */
+
+
+  --el-messagebox-bg-color: var(--vt-message-box-bg);
+  --el-messagebox-title-color: var(--vt-text-primary);
+  --el-messagebox-width: 4.5rem;
+  --el-messagebox-font-size: var(--vt-font-size-base);
+  --el-messagebox-font-line-height: var(--vt-line-height-relaxed);
+  --el-messagebox-padding-primary: var(--vt-space-3);
+
   --el-message-bg-color: rgba(33, 44, 73, 0.96);
   --el-message-border-color: var(--vt-border-color);
+  --el-message-close-size: var(--vt-font-size-md);
+  --el-message-close-icon-color: var(--vt-text-secondary);
+  --el-message-close-hover-color: var(--vt-text-primary);
 
+  /* ===== Menu ===== */
   --el-menu-bg-color: transparent;
   --el-menu-text-color: var(--vt-text-primary);
-  --el-menu-hover-bg-color: rgba(84, 98, 140, 0.2);
-  --el-menu-active-color: var(--vt-color-primary);
+  --el-menu-hover-bg-color: transparent;
+  --el-menu-hover-text-color: var(--vt-text-primary);
+  --el-menu-active-color: var(--vt-text-primary);
+  --el-menu-item-height: 0.42rem;
+  --el-menu-item-font-size: var(--vt-font-size-base);
+  --el-menu-base-level-padding: var(--vt-space-5);
+  --el-menu-icon-width: 0.24rem;
+  --el-menu-border-color: transparent;
 
+  /* ===== Table ===== */
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
-  --el-table-header-bg-color: rgba(58, 82, 121, 0.8);
-  --el-table-border-color: rgba(255, 255, 255, 0.1);
-  --el-table-row-hover-bg-color: rgba(64, 158, 255, 0.1);
+  --el-table-header-bg-color: var(--vt-table-header-bg);
+  --el-table-header-text-color: var(--vt-text-secondary);
+  --el-table-text-color: var(--vt-text-primary);
+  --el-table-row-hover-bg-color: var(--vt-table-row-hover-bg);
+  --el-table-current-row-bg-color: var(--vt-table-row-hover-bg);
+  --el-table-border-color: var(--vt-border-color-soft);
+  --el-table-fixed-box-shadow: 0.03rem 0 0.06rem rgba(0, 0, 0, 0.06);
+  --el-table-index: var(--el-index-normal);
+
+  /* ===== Pagination ===== */
+  --el-pagination-font-size: var(--vt-font-size-base);
+  --el-pagination-bg-color: transparent;
+  --el-pagination-text-color: var(--vt-text-primary);
+  --el-pagination-button-color: var(--vt-text-primary);
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-button-disabled-color: var(--vt-text-disabled);
+  --el-pagination-button-disabled-bg-color: transparent;
+  --el-pagination-hover-color: var(--vt-color-primary);
+  --el-pagination-font-size-small: var(--vt-font-size-sm);
+
+  /* ===== Tag / Tabs ===== */
+  --el-tag-bg-color: var(--vt-bg-input);
+  --el-tag-border-color: var(--vt-border-color);
+  --el-tag-text-color: var(--vt-text-primary);
+  --el-tag-font-size: var(--vt-font-size-sm);
+
+  --el-tabs-header-height: var(--vt-control-height-lg);
+
+  /* ===== Date picker ===== */
+  --el-datepicker-border-color: var(--vt-border-color);
+  --el-datepicker-inner-border-color: var(--vt-border-color-soft);
+  --el-datepicker-inrange-bg-color: var(--vt-bg-elevated);
+  --el-datepicker-inrange-hover-bg-color: var(--vt-bg-hover);
+  --el-datepicker-active-color: var(--vt-color-primary);
+  --el-datepicker-hover-text-color: var(--vt-color-primary);
+  --el-datepicker-text-color: var(--vt-text-primary);
+  --el-datepicker-off-text-color: var(--vt-text-disabled);
+  --el-datepicker-header-text-color: var(--vt-text-primary);
+  --el-datepicker-icon-color: var(--vt-text-secondary);
 }

@@ -15,7 +15,7 @@
     </div>
     <FullSceenDialog
       ref="fullScreenDialogRef"
-      title="Doughnut Chart Full Screen"
+      :title="props.title || 'Doughnut Chart Full Screen'"
       fullscreen
       :append-to-body="true"
       :modal-append-to-body="true"
@@ -34,12 +34,12 @@
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
-import { downloadCsv } from '@/utils/csv'
+import * as XLSX from 'xlsx'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -60,16 +60,16 @@ watch(
   },
 )
 
-echarts.use([PieChart, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
+echarts.use([PieChart, TooltipComponent, LegendComponent, TitleComponent, SVGRenderer])
 
 // 定义数据类型
 interface SeriesData {
   name: string
   value: number
   color: string
+  unit?: string
 }
 
-// Grid配置接口
 interface GridConfig {
   left?: number
   right?: number
@@ -93,12 +93,11 @@ const props = withDefaults(
     showDownload?: boolean
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
-      top: 55,
-      bottom: 10,
+      top: 100,
+      bottom: 0,
     }),
     fullScreenGridConfig: () => ({
       left: 50,
@@ -120,7 +119,6 @@ function customTooltipFormatter(
   params: any,
   sizeConfig: {
     width: number
-    minHeight: number
     fontSize: number
     itemFontSize: number
     itemLineHeight: number
@@ -128,15 +126,14 @@ function customTooltipFormatter(
     gap: number
   },
 ) {
-  const { width, minHeight, fontSize, itemFontSize, itemLineHeight, dotSize, gap } = sizeConfig
-  const name = params.name || ''
+  const { width, fontSize, itemFontSize, itemLineHeight, dotSize, gap } = sizeConfig
+  const name = params.name ?? ''
   const value = params.value || 0
   const percent = params.percent || 0
-
+  const unit = params.data.unit ? ' ' + params.data.unit : ''
   const html = `
     <div style="
       max-width:${width}px;
-      min-height:${minHeight}px;
       display:flex;
       flex-direction:column;
       gap:${gap}px;
@@ -169,9 +166,9 @@ function customTooltipFormatter(
             background:${params.color};
             margin-right:${dotSize / 2}px;
           "></span>
-          <span>数值</span>
+          <span>Value</span>
         </div>
-        <div style="font-weight:600;">${value}</div>
+        <div style="font-weight:600;">${value}${unit}</div>
       </div>
       <div style="
         display:flex;
@@ -183,7 +180,7 @@ function customTooltipFormatter(
         line-height:${itemLineHeight}px;
         gap:${gap * 2}px;
       ">
-        <span>占比</span>
+        <span>Proportion</span>
         <div style="font-weight:600;">${percent}%</div>
       </div>
     </div>
@@ -194,37 +191,28 @@ function customTooltipFormatter(
 function getGridConfig(isFullScreen: boolean) {
   return isFullScreen
     ? {
-        left: pxToResponsive(props.gridConfig.left || 0),
-        right: pxToResponsive(props.gridConfig.right || 0),
-        top: pxToResponsive(props.gridConfig.top || 45),
-        bottom: pxToResponsive(props.gridConfig.bottom || 15),
+        left: pxToResponsive(props.fullScreenGridConfig.left || 50),
+        right: pxToResponsive(props.fullScreenGridConfig.right || 50),
+        top: pxToResponsive(props.fullScreenGridConfig.top || 80),
+        bottom: pxToResponsive(props.fullScreenGridConfig.bottom || 50),
       }
     : {
-        left: pxToResponsive(props.fullScreenGridConfig.left || 0),
-        right: pxToResponsive(props.fullScreenGridConfig.right || 0),
-        top: pxToResponsive(props.fullScreenGridConfig.top || 45),
-        bottom: pxToResponsive(props.fullScreenGridConfig.bottom || 15),
+        left: pxToResponsive(props.gridConfig.left || 0),
+        right: pxToResponsive(props.gridConfig.right || 0),
+        top: pxToResponsive(props.gridConfig.top || 100),
+        bottom: pxToResponsive(props.gridConfig.bottom || 0),
       }
 }
-
 // 统一生成option的方法
-function getChartOption({
-  isFullScreen = false,
-  chartWidth = 600,
-}: {
-  isFullScreen?: boolean
-  chartWidth?: number
-}) {
+function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // 获取配置参数，使用默认值
-  const title = props.title || ''
   const radius = props.radius || ['40%', '70%']
-  const center = props.center || ['50%', '50%']
+  // 普通预览时把饼图中心下移，为顶部图例和标签留出足够空间
+  const center = props.center || (isFullScreen ? ['50%', '50%'] : ['50%', '60%'])
 
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
-        minHeight: pxToResponsive(120),
         fontSize: pxToResponsive(32),
         itemFontSize: pxToResponsive(24),
         itemLineHeight: pxToResponsive(32),
@@ -233,7 +221,6 @@ function getChartOption({
       }
     : {
         width: pxToResponsive(220),
-        minHeight: pxToResponsive(100),
         fontSize: pxToResponsive(14),
         itemFontSize: pxToResponsive(12),
         itemLineHeight: pxToResponsive(18),
@@ -248,7 +235,7 @@ function getChartOption({
         type: 'plain',
         orient: 'horizontal',
         right: pxToResponsive(50),
-        top: pxToResponsive(30),
+        top: pxToResponsive(50),
         itemWidth: pxToResponsive(20),
         itemHeight: pxToResponsive(20),
         itemGap: pxToResponsive(40),
@@ -279,7 +266,7 @@ function getChartOption({
       }
 
   const grid = getGridConfig(isFullScreen)
-
+  //
   // tooltip
   const tooltip = isFullScreen
     ? {
@@ -293,7 +280,6 @@ function getChartOption({
           border-radius: ${pxToResponsive(24)}px;
           box-shadow: 0 ${pxToResponsive(16)}px ${pxToResponsive(32)}px 0 rgba(0,0,0,0.15);
           max-width: ${pxToResponsive(500)}px;
-          min-height: ${pxToResponsive(120)}px;
         `,
         textStyle: {
           fontFamily: 'Arimo',
@@ -315,7 +301,6 @@ function getChartOption({
           border-radius: ${pxToResponsive(8)}px;
           box-shadow: 0 ${pxToResponsive(4)}px ${pxToResponsive(16)}px 0 rgba(0,0,0,0.12);
           max-width: ${pxToResponsive(220)}px;
-          min-height: ${pxToResponsive(100)}px;
         `,
         textStyle: {
           fontFamily: 'Arimo',
@@ -329,7 +314,6 @@ function getChartOption({
 
   const titleConfig = isFullScreen
     ? {
-        text: title,
         left: 'center',
         top: pxToResponsive(20),
         textStyle: {
@@ -340,7 +324,6 @@ function getChartOption({
         },
       }
     : {
-        text: title,
         left: 'center',
         top: pxToResponsive(10),
         textStyle: {
@@ -353,13 +336,13 @@ function getChartOption({
 
   const series = [
     {
-      name: title || '数据分布',
       type: 'pie',
       radius: radius,
       center: center,
       data: props.series.map((s: SeriesData) => ({
         name: s.name,
         value: s.value,
+        unit: s.unit ?? '',
         itemStyle: {
           color: s.color,
         },
@@ -369,7 +352,7 @@ function getChartOption({
         position: 'outside',
         formatter: '{b}\n{d}%',
         color: 'rgba(255, 255, 255, 0.8)',
-        fontSize: isFullScreen ? pxToResponsive(18) : pxToResponsive(12),
+        fontSize: isFullScreen ? pxToResponsive(20) : pxToResponsive(12),
         fontFamily: 'Arimo',
         fontWeight: 400,
       },
@@ -377,27 +360,67 @@ function getChartOption({
         show: true,
         lineStyle: {
           color: 'rgba(255, 255, 255, 0.3)',
-          width: isFullScreen ? 2 : 1,
+          width: isFullScreen ? pxToResponsive(2) : pxToResponsive(1),
         },
       },
       emphasis: {
         scale: true,
         scaleSize: isFullScreen ? pxToResponsive(8) : pxToResponsive(5),
         label: {
-          fontSize: isFullScreen ? pxToResponsive(20) : pxToResponsive(14),
+          fontSize: isFullScreen ? pxToResponsive(24) : pxToResponsive(14),
           fontWeight: 600,
         },
       },
       animationType: 'scale',
       animationEasing: 'elasticOut',
-      animationDelay: (idx: number) => Math.random() * 200,
+      animationDelay: (_idx: number) => Math.random() * 200,
     },
   ]
-
+  const toolbox = isFullScreen
+    ? {
+        itemSize: pxToResponsive(20),
+        itemGap: pxToResponsive(26),
+        top: pxToResponsive(-10),
+        right: pxToResponsive(40),
+        iconStyle: {
+          // color: '#fff',
+          borderColor: '#fff',
+          borderWidth: pxToResponsive(1),
+        },
+        emphasis: {
+          iconStyle: {
+            // color: '#fff',
+            borderColor: '#fff',
+            borderWidth: pxToResponsive(1),
+          },
+        },
+        textStyle: {
+          fontFamily: 'Arimo',
+          fontWeight: 400,
+          fontSize: pxToResponsive(12),
+          color: 'rgba(255,255,255,1)',
+        },
+        feature: {
+          myDownload: {
+            show: true,
+            title: '',
+            icon: 'path:// M160 832h704a32 32 0 1 1 0 64H160a32 32 0 1 1 0-64m384-253.696 236.288-236.352 45.248 45.248L508.8 704 192 387.2l45.248-45.248L480 584.704V128h64z',
+            onclick: handleExport,
+            iconStyle: {
+              color: '#fff',
+            },
+          },
+          // saveAsImage: {
+          //   pixelRatio: 2
+          // }
+        },
+      }
+    : {}
   return {
     title: titleConfig,
     grid,
     legend,
+    toolbox,
     tooltip,
     series,
   }
@@ -409,9 +432,8 @@ const initChart = () => {
   if (chartInstance) {
     chartInstance.dispose()
   }
-  const chartWidth = chartRef.value.clientWidth || 600
-  chartInstance = echarts.init(chartRef.value)
-  chartInstance.setOption(getChartOption({ isFullScreen: false, chartWidth }))
+  chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
+  chartInstance.setOption(getChartOption({ isFullScreen: false }))
 }
 
 // 初始化全屏图表
@@ -420,9 +442,8 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  const chartWidth = fullScreenChartRef.value.clientWidth || 1200
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
-  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true, chartWidth }))
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
+  fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 }
 
 const handleFullScreen = () => {
@@ -451,8 +472,18 @@ const handleExport = () => {
     exportData.push([item.name, item.value, `${percentage}%`])
   })
 
-  const fileName = `doughnut_chart_data_${new Date().toISOString().slice(0, 10)}.csv`
-  downloadCsv(exportData, fileName)
+  // 创建工作簿
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet(exportData)
+
+  // 添加工作表到工作簿
+  XLSX.utils.book_append_sheet(wb, ws, 'doughnut_chart_data')
+
+  // 生成文件名
+  const fileName = `doughnut_chart_data_${new Date().toISOString().slice(0, 10)}.xlsx`
+
+  // 导出文件
+  XLSX.writeFile(wb, fileName)
 }
 
 // 监听侧边栏折叠状态变化
@@ -472,6 +503,7 @@ watch(
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
@@ -479,7 +511,10 @@ const resizeFullScreenChart = () => {
 
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 
@@ -522,11 +557,11 @@ onBeforeUnmount(() => {
     right: 0;
     display: flex;
     align-items: center;
-    gap: 0.1rem;
+    gap: 0.2rem;
 
     .doughnut-chart-toolbox-item {
-      width: 0.3rem;
-      height: 0.3rem;
+      width: 0.14rem;
+      height: 0.14rem;
       cursor: pointer;
     }
   }

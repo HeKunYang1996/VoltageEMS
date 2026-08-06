@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => ({
     // vueDevTools(), // 暂时关闭 Vue DevTools 调试工具
     AutoImport({
       imports: ['vue', 'vue-router', 'pinia'],
-      resolvers: [ElementPlusResolver()],
+      resolvers: [ElementPlusResolver({})],
       dts: true,
     }),
     Components({
@@ -60,7 +60,7 @@ export default defineConfig(({ mode }) => ({
   ],
   server: {
     host: '0.0.0.0', // 允许外部访问
-    port: 5173, // 指定端口号
+    port: 8081, // 指定端口号
     open: true, // 自动打开浏览器
     proxy: {
       '/api': {
@@ -98,6 +98,12 @@ export default defineConfig(({ mode }) => ({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/modApi/, ''),
       },
+      // Forecast 服务代理：转发到 forecastsrv
+      '/forecastApi': {
+        target: 'http://192.168.30.10:36008',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/forecastApi/, ''),
+      },
       // WebSocket 代理：将前端的 /ws 转发到本机 127.0.0.1:6005
       '/ws': {
         target: 'ws://192.168.30.62:6005',
@@ -115,12 +121,6 @@ export default defineConfig(({ mode }) => ({
     },
   },
   css: {
-    preprocessorOptions: {
-      scss: {
-        // 如果需要全局 SCSS 变量，可以在这里添加
-        additionalData: `@use "@/assets/styles/element/theme-vars.scss" as *;`,
-      },
-    },
     postcss: {
       plugins: [
         // 自动添加浏览器前缀

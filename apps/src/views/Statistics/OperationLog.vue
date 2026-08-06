@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class operationLog">
+  <div class="operationLog">
     <!-- 表格区域 -->
     <div class="operationLog__table">
       <el-table :data="tableData" class="operationLog__table-content">
@@ -13,13 +13,15 @@
       </el-table>
 
       <!-- 分页组件 -->
-      <div class="operationLog__pagination">
+      <div id="operation-log-pagination-anchor" class="operationLog__pagination vt-pagination">
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.pageSize"
           :page-sizes="[10, 20, 50, 100]"
           :total="pagination.total"
           layout="total, sizes, prev, pager, next"
+          :teleported="false"
+          append-size-to="#operation-log-pagination-anchor"
           @size-change="handlePageSizeChange"
           @current-change="handlePageChange"
         />
@@ -70,7 +72,7 @@ const handlePageChange = (page: number) => {
 </script>
 
 <style scoped lang="scss">
-.voltage-class.operationLog {
+.operationLog {
   height: 100%;
   width: 100%;
   display: flex;

@@ -1,0 +1,62 @@
+// ============================================
+// Element Plus: Tabs (el-tabs)
+// ============================================
+// --- Base ---
+.el-tabs.el-tabs {
+  --el-tabs-header-height: var(--vt-control-height-lg);
+
+  color: #fff;
+
+  .el-tabs__header {
+    margin: 0 0 0.1rem;
+
+    &.is-top {
+      height: 0.4rem;
+    }
+
+    .el-tabs__nav-wrap {
+      &:after {
+        height: 0.02rem;
+        background-color: #7a8092;
+      }
+
+      .el-tabs__nav-scroll {
+        .el-tabs__nav {
+          height: 0.4rem;
+          line-height: 0.4rem;
+
+          &.is-top {
+            // border: 0.01rem solid #7a8092;
+            border-radius: 0;
+            border-bottom: none;
+          }
+
+          .el-tabs__item {
+            color: #fff;
+            font-size: 0.14rem;
+            height: 0.4rem;
+            line-height: 0.4rem;
+            padding: 0 0.2rem;
+            min-width: 1rem;
+            // border-left: 0.01rem solid #7a8092;
+            // border-bottom: 0.01rem solid transparent;
+
+            // &:first-child {
+            //   border-left: none;
+            // }
+
+            &.is-active {
+              background-color: var(--vt-color-primary);
+              // border-bottom: 0.01rem solid #7a8092;
+              color: #fff;
+            }
+          }
+
+          .el-tabs__active-bar {
+            display: none;
+          }
+        }
+      }
+    }
+  }
+}

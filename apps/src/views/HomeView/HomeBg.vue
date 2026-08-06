@@ -734,7 +734,7 @@ const props = defineProps<{
   font-weight: 700;
   font-size: 18px;
   line-height: 18px;
-  color: #ffffff;
+  color: var(--vt-text-primary);
 }
 
 .no-rem__card-content {
@@ -753,7 +753,7 @@ const props = defineProps<{
 .no-rem__name {
   font-weight: 400;
   font-size: 16px;
-  color: #ffffff;
+  color: var(--vt-text-primary);
   margin-right: 9px;
 }
 
@@ -761,7 +761,7 @@ const props = defineProps<{
   font-weight: 700;
   font-size: 16px;
   text-transform: capitalize;
-  color: #ffffff;
+  color: var(--vt-text-primary);
   vertical-align: bottom;
   margin-right: 4px;
 }

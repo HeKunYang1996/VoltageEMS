@@ -1,300 +1,196 @@
-.voltage-class {
-  .el-table {
+@use './_table-row.scss' as table-row;
+
+// ============================================
+// Element Plus: Table (el-table)
+// ============================================
+
+.el-table.el-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: var(--vt-table-header-bg);
+  --el-table-header-text-color: var(--vt-text-secondary);
+  --el-table-text-color: var(--vt-text-primary);
+  --el-table-row-hover-bg-color: var(--vt-table-row-hover-bg);
+  --el-table-current-row-bg-color: var(--vt-table-row-hover-bg);
+  --el-table-border-color: var(--vt-border-color-soft);
+  --el-table-fixed-box-shadow: 0.03rem 0 0.06rem rgba(0, 0, 0, 0.06);
+  // EP default is --el-index-normal (1). Do NOT use toast/popper z-index here —
+  // fixed columns inherit this and would cover dialogs/overlays.
+  --el-table-index: var(--el-index-normal);
+
+  background-color: transparent;
+
+  // ---------- Inner wrapper ----------
+  .el-table__inner-wrapper {
+    &::before {
+      height: 0.01rem;
+      background-color: var(--vt-bg-hover);
+    }
+
+    .el-table__fixed {
+      background-color: transparent;
+    }
+
+    .el-table__column-filter-trigger,
+    .el-table__column-resize-proxy {
+      border-color: var(--vt-text-disabled);
+    }
+  }
+
+  // ---------- Header ----------
+  .el-table__header-wrapper,
+  .el-table__body-header {
+    th {
+      @include table-row.vt-table-cell-shell;
+      color: rgba(255, 255, 255, 0.6);
+      font-weight: 400;
+
+      &:first-child {
+        border-left: none;
+      }
+
+      &:last-child {
+        border-right: none;
+      }
+
+      &.el-table-fixed-column--right {
+        background-color: var(--vt-table-fixed-bg);
+      }
+
+      .cell {
+        @include table-row.vt-table-cell-inner;
+      }
+    }
+  }
+
+  // ---------- Body ----------
+  .el-table__body-wrapper {
+    .el-scrollbar__bar.is-horizontal {
+      left: 0.02rem;
+      height: 0.06rem;
+    }
+
+    .el-scrollbar__bar.is-vertical {
+      top: 0.02rem;
+      width: 0.06rem;
+    }
+
+    td {
+      @include table-row.vt-table-cell-shell;
+      color: var(--vt-text-primary);
+      border-color: var(--vt-bg-hover);
+
+      &:first-child {
+        border-left: none;
+      }
+
+      &:last-child {
+        border-right: none;
+      }
+
+      &.el-table__cell {
+        background: transparent;
+        border-bottom: 0.01rem solid var(--vt-bg-hover);
+      }
+
+      &.el-table-fixed-column--right {
+        background-color: var(--vt-table-fixed-bg);
+      }
+
+      .cell {
+        @include table-row.vt-table-cell-inner;
+      }
+    }
+  }
+
+  // ---------- Row ----------
+  .el-table__row {
+    transition:
+      background 0.2s,
+      box-shadow 0.2s,
+      color 0.2s;
+
+    &:hover {
+      background: var(--vt-table-row-hover-bg);
+
+      .el-table-fixed-column--right {
+        background: var(--vt-table-row-hover-bg);
+      }
+    }
+  }
+
+  // ---------- Expand ----------
+  .el-table__expand-icon {
+    height: var(--vt-table-cell-inner-height);
+    color: var(--vt-text-primary);
+    font-size: 0.14rem;
+
+    > .el-icon {
+      font-size: 0.14rem;
+    }
+  }
+
+  .el-table__expanded-cell.el-table__expanded-cell {
+    height: auto !important;
+    padding: 0;
     background-color: transparent;
 
-    .el-table__inner-wrapper {
-      &::before {
-        height: 0.01rem;
-        background-color: rgba(255, 255, 255, 0.1);
+    .cell {
+      display: block !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      padding: 0 !important;
+      overflow: visible;
+      white-space: normal !important;
+      line-height: var(--vt-table-cell-line-height);
+    }
+  }
+
+  // ---------- Empty ----------
+  .el-table__empty-block {
+    background-color: transparent;
+
+    .el-table__empty-text {
+      color: var(--vt-text-empty);
+      font-size: 0.14rem;
+    }
+  }
+
+  // ---------- Sort ----------
+  .caret-wrapper {
+    .sort-caret {
+      border-color: var(--vt-text-disabled);
+
+      &.ascending {
+        border-bottom-color: var(--vt-table-sort-color);
       }
 
-      .el-table__header-wrapper,
-      .el-table__body-header {
-        background: rgba(84, 98, 140, 0.2);
-
-        th {
-          background: transparent;
-          color: rgba(255, 255, 255, 0.6);
-          font-weight: 400;
-          font-size: 0.14rem;
-          line-height: 0.22rem;
-
-          &:first-child {
-            border-left: none;
-          }
-
-          &:last-child {
-            border-right: none;
-          }
-
-          &.el-table-fixed-column--right {
-            background-color: #243b65;
-            box-shadow: 0.03rem 0 0.06rem rgba(0, 0, 0, 0.06);
-          }
-
-          .cell {
-            padding: 0 !important;
-            line-height: 0.22rem;
-          }
-        }
-
-        .el-table__cell {
-          padding: 0.09rem 0.2rem;
-          border: none;
-          border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
-        }
-      }
-
-      .el-table__body-wrapper {
-        .el-scrollbar__bar.is-horizontal {
-          left: 0.02rem;
-          height: 0.06rem;
-        }
-
-        .el-scrollbar__bar.is-vertical {
-          top: 0.02rem;
-          width: 0.06rem;
-        }
-
-        td {
-          padding: 0.09rem 0.2rem;
-          color: #fff;
-          font-size: 0.14rem;
-          line-height: 0.4rem;
-          border-color: rgba(255, 255, 255, 0.1);
-
-          &:first-child {
-            border-left: none;
-          }
-
-          &:last-child {
-            border-right: none;
-          }
-
-          &.el-table__cell {
-            background: transparent;
-            border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
-          }
-
-          &.el-table-fixed-column--right {
-            background-color: #243b65;
-            box-shadow: 0.03rem 0 0.06rem rgba(0, 0, 0, 0.06);
-          }
-
-          .cell {
-            display: block !important;
-            height: 0.4rem !important;
-            padding: 0 !important;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            line-height: 0.4rem;
-
-            &.el-tooltip {
-              // padding-right: 0.4rem;
-
-              span {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-            }
-          }
-        }
-
-        .el-table__row {
-          transition:
-            background 0.2s,
-            box-shadow 0.2s,
-            color 0.2s;
-
-          &:hover {
-            background: #283f69;
-
-            .el-table-fixed-column--right {
-              background: #283f69;
-            }
-          }
-
-          .el-table__expand-icon {
-            height: 0.2rem;
-            color: #fff;
-            font-size: 0.14rem;
-
-            & > .el-icon {
-              font-size: 0.14rem;
-            }
-          }
-        }
-      }
-
-      .el-table__empty-block {
-        background-color: transparent;
-
-        .el-table__empty-text {
-          color: #9ca3af;
-          font-size: 0.14rem;
-        }
-      }
-
-      .el-table__fixed {
-        background-color: transparent;
-        box-shadow: 0.02rem 0 0.06rem rgba(0, 0, 0, 0.06);
-      }
-
-      .el-table__column-filter-trigger,
-      .el-table__column-resize-proxy {
-        border-color: #d1d5db;
-      }
-
-      .caret-wrapper {
-        .sort-caret {
-          border-color: #d1d5db;
-
-          &.ascending {
-            border-bottom-color: #3b82f6;
-          }
-
-          &.descending {
-            border-top-color: #3b82f6;
-          }
-        }
-      }
-
-      th,
-      tr,
-      td {
-        background-color: transparent;
+      &.descending {
+        border-top-color: var(--vt-table-sort-color);
       }
     }
   }
 
-  .el-popper {
-    font-size: 0.12rem;
-    line-height: 0.2rem;
-
-    .el-popper__arrow,
-    .el-popper__arrow::before {
-      width: 0.1rem;
-      height: 0.1rem;
+  // ---------- Ellipsis column ----------
+  .table-ellipsis {
+    .cell {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    &.is-dark,
-    &.is-dark > .el-popper__arrow::before {
-      border: 0.01rem solid #303133;
-    }
-  }
-
-  .el-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    height: 0.32rem;
-    margin-top: 0.2rem;
-
-    button {
-      min-width: 0.32rem;
-      height: 0.32rem;
-      padding: 0 0.04rem;
-      font-size: 0.14rem;
-
-      .el-icon {
-        font-size: 0.12rem;
-      }
-
-      &.btn-prev {
-        margin-left: 0.16rem;
-      }
-
-      &.btn-next {
-        margin-right: 0.16rem;
-      }
-
-      &:disabled {
-        background-color: transparent;
-      }
-    }
-
-    .el-pagination__total {
-      margin-right: 0.16rem;
-      color: #fff;
-      font-size: 0.14rem;
-    }
-
-    .el-pagination__sizes {
-      display: flex;
-      margin-left: 0.16rem;
-
-      .el-select {
-        width: 1.28rem;
-      }
-    }
-
-    .el-pager {
-      li {
-        min-width: 0.32rem;
-        height: 0.32rem;
-        margin: 0 0.02rem;
-        padding: 0 0.04rem;
-        color: #fff;
-        font-weight: 500;
-        font-size: 0.14rem;
-        line-height: 0.32rem;
-        background-color: transparent;
-        border-radius: 0;
-
-        &:hover {
-          color: #ff6900;
-          background-color: transparent;
-        }
-
-        &.is-active {
-          color: #ffffff;
-          background-color: rgba(255, 255, 255, 0.1);
-        }
-      }
-    }
-
-    .btn-prev,
-    .btn-next {
-      color: #fff;
-      background-color: transparent;
-      border-radius: 0;
-
-      &:hover {
-        color: #ff6900;
-        // background-color: #f3f4f6;
-      }
-
-      &:disabled {
-        color: #d1d5db;
-        cursor: not-allowed;
-
-        &:hover {
-          background-color: transparent;
-        }
-      }
-    }
-
-    .el-pagination__jump {
-      color: #6b7280;
-      font-size: 0.14rem;
-
-      .el-input__inner {
-        border-color: #d1d5db;
-        border-radius: 0.06rem;
-
-        &:hover {
-          border-color: #9ca3af;
-        }
-
-        // &:focus {
-        //   border-color: #3b82f6;
-        // }
-      }
+    &__text {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   }
 
+  // ---------- Cell actions ----------
   .table-actions {
     display: flex;
     align-items: center;
@@ -309,16 +205,46 @@
       }
 
       &.is-text {
-        color: #3b82f6;
+        color: var(--vt-text-primary);
+        transition: color var(--vt-transition-fast);
 
         &:hover {
-          background-color: #eff6ff;
+          color: var(--vt-color-primary);
+          background-color: transparent;
         }
       }
     }
   }
 
-  .el-table__expanded-cell {
-    background-color: transparent;
+  [class*='__operation-item'] {
+    display: inline-flex;
+    align-items: center;
+    color: var(--vt-text-primary);
+    cursor: pointer;
+    transition: color var(--vt-transition-fast);
+
+    img {
+      width: 0.14rem;
+      height: 0.14rem;
+      margin-right: 0.04rem;
+      object-fit: contain;
+      transition: filter var(--vt-transition-fast);
+    }
+
+    [class*='__operation-text'],
+    > span {
+      color: inherit;
+      font-size: 0.14rem;
+      transition: color var(--vt-transition-fast);
+    }
+
+    &:hover {
+      color: var(--vt-color-primary);
+
+      img {
+        filter: invert(49%) sepia(79%) saturate(2476%) hue-rotate(359deg) brightness(103%)
+          contrast(104%);
+      }
+    }
   }
 }

@@ -1,6 +1,6 @@
-// 告警记录类型定义
+// 鍛婅璁板綍绫诲瀷瀹氫箟
 
-// 规则快照类型
+// 瑙勫垯蹇収绫诲瀷
 export interface RuleSnapshot {
   rule_name: string
   warning_level: number
@@ -9,12 +9,11 @@ export interface RuleSnapshot {
   description: string
 }
 
-// 当前告警数据类型
+// 褰撳墠鍛婅鏁版嵁绫诲瀷
 export interface CurrentAlarmData {
   id: number
   rule_id: number
-  rule_snapshot: string // API 返回 JSON 字符串
-  service_type: string
+  rule_snapshot: RuleSnapshot // 触发时的规则快照（对象）
   channel_id: number
   data_type: string
   point_id: number
@@ -25,14 +24,17 @@ export interface CurrentAlarmData {
   current_value: number | string
   status: 'active' | 'inactive'
   triggered_at: number
+  /** Names and unit are snapshots captured when the alarm was triggered. */
+  device_name: string | null
+  point_name: string | null
+  unit: string | null
 }
 
-// 历史告警数据类型
+// 鍘嗗彶鍛婅鏁版嵁绫诲瀷
 export interface HistoryAlarmData {
   id: number
   rule_id: number
-  rule_snapshot: string // API 返回 JSON 字符串
-  service_type: string
+  rule_snapshot: RuleSnapshot // 触发时的规则快照（对象）
   channel_id: number
   data_type: string
   point_id: number
@@ -46,23 +48,31 @@ export interface HistoryAlarmData {
   triggered_at: number
   recovered_at?: number
   duration?: number
+  /** Names and unit are snapshots captured when the alarm was triggered. */
+  device_name: string | null
+  point_name: string | null
+  unit: string | null
 }
 export interface CurrentAlarmResponse {
   list: CurrentAlarmData[]
   total: number
+  page: number
+  page_size: number
 }
 export interface HistoryAlarmResponse {
   list: HistoryAlarmData[]
   total: number
+  page: number
+  page_size: number
 }
-// 告警级别枚举
+// 鍛婅绾у埆鏋氫妇
 export enum AlarmLevel {
   LEVEL_1 = 1,
   LEVEL_2 = 2,
   LEVEL_3 = 3,
 }
 
-// 操作符枚举
+// 鎿嶄綔绗︽灇涓?
 export enum AlarmOperator {
   GREATER_THAN = '>',
   LESS_THAN = '<',
@@ -72,24 +82,24 @@ export enum AlarmOperator {
   LESS_EQUAL = '<=',
 }
 
-// 事件类型枚举
+// 浜嬩欢绫诲瀷鏋氫妇
 export enum AlarmEventType {
   TRIGGER = 'trigger',
   RECOVERY = 'recovery',
 }
 
-// 告警状态枚举
+// 鍛婅鐘舵€佹灇涓?
 export enum AlarmStatus {
   ACTIVE = 'active',
   INACTIVE = 'inactive',
 }
 
-// 服务类型枚举
+// 鏈嶅姟绫诲瀷鏋氫妇
 export enum ServiceType {
   RULESRV = 'rulesrv',
 }
 
-// 数据类型枚举
+// 鏁版嵁绫诲瀷鏋氫妇
 export enum DataType {
   TEMPERATURE = 'T',
   STATUS = 'S',
@@ -97,7 +107,7 @@ export enum DataType {
   VOLTAGE = 'V',
 }
 
-// 告警查询参数
+// 鍛婅鏌ヨ鍙傛暟
 export interface AlarmQueryParams {
   type: 'current' | 'history'
   warning_level?: AlarmLevel

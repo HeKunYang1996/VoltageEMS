@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class data-update-setting">
+  <div class="data-update-setting">
     <ModuleCard title="MQTT Config">
       <el-form
         ref="formRef"
@@ -50,7 +50,7 @@
         </div>
       </el-form>
       <template #footer>
-        <div class="card__content-footer">
+        <div v-permission="'engineer'" class="card__content-footer">
           <el-button type="primary" :disabled="mqttCardActionsDisabled" @click="openDetail"
             >Detail</el-button
           >
@@ -106,6 +106,7 @@ const formRef = ref<FormInstance>()
 
 export interface FormData {
   alarmsrv_url: string
+  modsrv_url: string
   broker_host: string
   broker_keepalive_secs: number
   broker_port: number
@@ -245,6 +246,7 @@ const executeReconnectFlow = async () => {
 }
 const formData = ref<FormData>({
   alarmsrv_url: 'http://localhost:6007',
+  modsrv_url: 'http://localhost:6002',
   broker_host: '127.0.0.1',
   broker_keepalive_secs: 120,
   broker_port: 1883,
@@ -264,6 +266,7 @@ const formData = ref<FormData>({
 const buildMqttConfigPayload = (raw: FormData): FormData => {
   return {
     alarmsrv_url: raw.alarmsrv_url,
+    modsrv_url: raw.modsrv_url,
     broker_host: raw.broker_host,
     broker_keepalive_secs: raw.broker_keepalive_secs,
     broker_port: raw.broker_port,
@@ -455,7 +458,7 @@ const handleUpdate = async () => {
         flex: 1;
         font-size: 0.16rem;
         font-weight: 600;
-        color: #ffffff;
+        color: var(--vt-text-primary);
       }
     }
 

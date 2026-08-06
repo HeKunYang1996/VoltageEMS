@@ -65,6 +65,9 @@
           <el-form-item label="AlarmSrv URL:" prop="alarmsrv_url">
             <el-input v-model="formData.alarmsrv_url" placeholder="Enter alarmsrv url" />
           </el-form-item>
+          <el-form-item label="ModSrv URL:" prop="modsrv_url">
+            <el-input v-model="formData.modsrv_url" placeholder="Enter modsrv url" />
+          </el-form-item>
         </div>
 
         <!-- 3. Reconnect & reporting -->
@@ -175,6 +178,7 @@ import TlsCertificateDialog from './TlsCertificateDialog.vue'
 
 const formData = ref<FormData>({
   alarmsrv_url: 'http://localhost:6007',
+  modsrv_url: 'http://localhost:6002',
   broker_host: '127.0.0.1',
   broker_keepalive_secs: 120,
   broker_port: 1883,
@@ -208,6 +212,7 @@ const rules = ref<FormRules<FormData>>({
   ],
   broker_host: [{ required: true, message: 'Please enter host address', trigger: 'blur' }],
   alarmsrv_url: [{ required: true, message: 'Please enter alarmsrv url', trigger: 'blur' }],
+  modsrv_url: [{ required: true, message: 'Please enter modsrv url', trigger: 'blur' }],
   broker_keepalive_secs: [
     { required: true, message: 'Please enter keepalive seconds', trigger: 'blur' },
   ],
@@ -320,6 +325,7 @@ const submitDialog = async () => {
     // 仅透传 MQTT 配置字段，避免提交历史证书相关字段。
     const params: FormData = {
       alarmsrv_url: raw.alarmsrv_url,
+      modsrv_url: raw.modsrv_url,
       broker_host: raw.broker_host,
       broker_keepalive_secs: raw.broker_keepalive_secs,
       broker_port: raw.broker_port,
@@ -356,69 +362,68 @@ defineExpose({ open })
 </script>
 
 <style scoped lang="scss">
-.voltage-class {
-  .data-upload-dialog {
-    max-height: 6rem;
-    overflow-y: auto;
-  }
-  .config-title {
-    font-size: 0.16rem;
-    color: #fff;
-    margin-bottom: 0.16rem;
-    font-weight: 700;
-    padding-bottom: 0.1rem;
-    border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
+.data-upload-dialog {
+  max-height: 6rem;
+  overflow-y: auto;
+}
+.config-title {
+  font-size: 0.16rem;
+  color: var(--vt-text-primary);
+  margin-bottom: 0.16rem;
+  font-weight: 700;
+  padding-bottom: 0.1rem;
+  border-bottom: 0.01rem solid rgba(255, 255, 255, 0.1);
 
-    &:not(:first-child) {
-      margin-top: 0.22rem;
-    }
-  }
-  .config-collapse {
-    border: none;
-    display: flex;
-    flex-wrap: wrap;
-    :deep(.el-form-item) {
-      position: relative;
-      margin-right: 0;
-      margin-bottom: 0.2rem;
-    }
-  }
-
-  :deep(.data-upload-dialog__full-row) {
-    width: 100%;
-  }
-
-  :deep(.data-upload-dialog__full-field) {
-    width: 100%;
-  }
-
-  .upload-hint {
-    position: absolute;
-    top: 0.27rem;
-    left: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.08rem;
-    font-size: 0.12rem;
-    color: #fff;
-    // margin-top: 0.06rem;
-
-    .upload-hint__progress {
-      color: #ff6900;
-    }
-  }
-
-  .dialog-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-  }
-
-  .dialog-footer__right {
-    display: flex;
-    gap: 0.1rem;
-    margin-left: auto;
+  &:not(:first-child) {
+    margin-top: 0.22rem;
   }
 }
+.config-collapse {
+  border: none;
+  display: flex;
+  flex-wrap: wrap;
+  :deep(.el-form-item) {
+    position: relative;
+    margin-right: 0;
+    margin-bottom: 0.2rem;
+  }
+}
+
+:deep(.data-upload-dialog__full-row) {
+  width: 100%;
+}
+
+:deep(.data-upload-dialog__full-field) {
+  width: 100%;
+}
+
+.upload-hint {
+  position: absolute;
+  top: 0.27rem;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.08rem;
+  font-size: 0.12rem;
+  color: var(--vt-text-primary);
+  // margin-top: 0.06rem;
+
+  .upload-hint__progress {
+    color: #ff6900;
+  }
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.dialog-footer__right {
+  display: flex;
+  gap: 0.1rem;
+  margin-left: auto;
+}
+
 </style>

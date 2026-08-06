@@ -27,7 +27,7 @@ export type ServerMessageType =
   | 'alarm_num'
 
 // 数据类型枚举
-export type DataType = 'T' | 'S' | 'C' | 'A' // T=遥测, S=遥信, C=遥控, A=遥调
+export type DataType = 'T' | 'S' | 'C' | 'A' | 'M' // T=遥测, S=遥信, C=遥控, A=遥调, M=测量
 
 // 告警级别枚举
 export type AlarmLevel = 0 | 1 | 2 | 3 // 0=低, 1=中, 2=高, 3=紧急
@@ -122,8 +122,14 @@ export interface AlarmMessage extends WebSocketMessage {
   type: 'alarm'
   data: {
     alarm_id: string
-    channel_id: number
+    /** The alarm push contract keeps the channel id in `device` as a string. */
+    device: string
+    device_name: string | null
     point_id: number
+    point_name: string | null
+    /** Kept for consumers of older alarm push payloads. */
+    channel_id?: number
+    unit?: string | null
     status: AlarmStatus
     level: AlarmLevel
     value: number

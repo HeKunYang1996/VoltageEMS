@@ -3,9 +3,11 @@
     v-model="dialogVisible"
     :title="null"
     :width="width"
+    :class="dialogClass"
     :modal="true"
     :close-on-click-modal="false"
-    :append-to-body="appendToBody"
+    :append-to-body="appendToBody ?? false"
+    :modal-append-to-body="modalAppendToBody ?? false"
     :before-close="beforeClose"
     @close="handleClose"
   >
@@ -36,7 +38,9 @@ const props = defineProps<{
   title: string
   width: number | string
   appendToBody?: boolean
+  modalAppendToBody?: boolean
   beforeClose?: (done: () => void) => void
+  dialogClass?: string
 }>()
 
 const emit = defineEmits<{

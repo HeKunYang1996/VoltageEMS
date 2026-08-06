@@ -1,194 +1,206 @@
-@use './theme-vars.scss' as *;
+// ============================================
+// Element Plus: Input / InputNumber / Textarea
+// Overrides: wrapper, inner, prefix/suffix, sizes
+// ============================================
+// ---- Input (base) ----
+.el-input.el-input,
+.el-input-number.el-input-number.is-without-controls .el-input,
+.el-textarea.el-textarea {
+  --el-input-bg-color: var(--vt-bg-input);
+  --el-input-border-color: var(--vt-border-color);
+  --el-input-hover-border-color: var(--vt-border-color);
+  --el-input-focus-border-color: var(--vt-border-color);
+  --el-input-text-color: var(--vt-text-primary);
+  --el-input-placeholder-color: var(--vt-text-placeholder);
+  --el-input-icon-color: var(--vt-text-secondary);
+  --el-input-transparent-bg-color: transparent;
 
-.voltage-class {
-  .el-input,
-  .el-input-number {
-    width: min(100%, var(--vt-field-width));
-    &.is-without-controls {
-      .el-input__wrapper {
-        padding: 0;
-      }
+  width: 100%;
+  min-height: var(--vt-control-height);
+
+  // -- Size variants --
+  &.el-input--small {
+    width: 100%;
+
+    .el-input__wrapper {
+      min-height: var(--vt-control-height-sm);
+      padding: 0 var(--vt-space-1) !important;
+    }
+
+    .el-input__inner {
+      font-size: var(--vt-font-size-sm);
     }
   }
 
-  .el-input {
-    min-height: $button-height-base;
-
-    &.is-disabled {
-      .el-input__wrapper {
-        box-shadow: none;
-      }
+  &.el-input--large {
+    .el-input__wrapper {
+      min-height: var(--vt-control-height-lg);
+      padding: 0 var(--vt-space-4) !important;
     }
 
-    .el-input__prefix,
-    .el-input__suffix {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 0.16rem;
-      height: 0.16rem;
-      margin: 0 $spacing-xs;
-      color: $text-color-secondary;
-      font-size: $font-size-base;
+    .el-input__inner {
+      font-size: var(--vt-font-size-lg);
+    }
+  }
 
-      .el-input__prefix-inner,
-      .el-input__suffix-inner {
+  // -- State: disabled --
+  &.is-disabled .el-input__wrapper {
+    box-shadow: none;
+  }
+
+  // ---- Elements ----
+  .el-input__prefix,
+  .el-input__suffix {
+
+    .el-input__prefix-inner,
+    .el-input__suffix-inner {
+
+      .el-input__icon {
         width: 100%;
         height: 100%;
-        line-height: 0.16rem;
-        color: $text-color-primary;
-
-        .el-input__icon {
-          width: 100%;
-          height: 100%;
-          margin: 0;
-          font-size: 0.16rem;
-        }
+        margin: 0;
+        font-size: 0.16rem;
       }
     }
 
-    .el-input__clear,
-    .el-input__password {
-      color: $text-color-secondary;
-      font-size: 0.16rem;
-      transition: color $transition-fast;
-
-      &:hover {
-        color: $text-color-regular;
-      }
+    .el-input__prefix-inner> :last-child {
+      margin-right: 0.08rem;
     }
 
-    .el-input__count {
-      margin-left: $spacing-xs;
-      color: $text-color-secondary;
-      font-size: $font-size-small;
-    }
-
-    &.el-input--small {
-      width: 100%;
-
-      .el-input__wrapper {
-        min-height: $button-height-small;
-        padding: 0 $spacing-xs !important;
-      }
-
-      .el-input__inner {
-        font-size: $font-size-small;
-      }
-    }
-
-    &.el-input--large {
-      .el-input__wrapper {
-        min-height: $button-height-large;
-        padding: 0 $spacing-md !important;
-      }
-
-      .el-input__inner {
-        font-size: $font-size-large;
-      }
+    .el-input__suffix-inner> :last-child {
+      margin-left: 0.08rem;
     }
   }
 
+  .el-input__clear,
+  .el-input__password {
+    color: var(--vt-text-secondary);
+    font-size: 0.16rem;
+    transition: color var(--vt-transition-fast);
+
+    &:hover {
+      color: var(--vt-text-regular);
+    }
+  }
+
+  .el-input__count {
+    margin-left: var(--vt-space-1);
+    color: var(--vt-text-secondary);
+    font-size: var(--vt-font-size-sm);
+  }
+
+  // ---- Input__wrapper (shared element, inside `.el-input`) ----
   .el-input__wrapper {
-    min-height: $button-height-base;
-    padding: 0 !important;
     display: flex;
     align-items: center;
     position: relative;
-    background-color: $bg-color-input;
-    border: 0.01rem solid $border-color-base;
-    border-radius: $border-radius-base;
+    background-color: var(--vt-bg-input);
+    border: 0.01rem solid var(--vt-border-color);
+    border-radius: var(--vt-radius-none);
+    // EP Input also uses inset box-shadow as border; clear it so only our border shows.
     box-shadow: none;
+    // line-height: 0.32rem;
     transition:
-      border-color $transition-fast,
-      box-shadow $transition-fast,
-      background-color $transition-fast;
+      border-color var(--vt-transition-fast),
+      box-shadow var(--vt-transition-fast),
+      background-color var(--vt-transition-fast);
+    padding: 0.01rem 0.11rem;
 
-    &:hover {
-      border-color: $border-color-base;
-      box-shadow: none;
-    }
-
-    &.is-focus {
-      border-color: $border-color-base;
+    &:hover,
+    &.is-focus,
+    &.is-focused {
+      border-color: var(--vt-border-color);
       box-shadow: none;
     }
 
     &.is-disabled {
       background-color: rgba(255, 255, 255, 0.04);
       border-color: rgba(148, 166, 197, 0.16);
+      box-shadow: none;
     }
   }
 
+  // ---- Input__inner + range-input (shared element) ----
+  .el-input__inner,
   .el-range-input,
-  .el-input__inner {
+  .el-textarea__inner {
     width: 100%;
     height: 100%;
-    padding: 0 0.12rem !important;
-    display: flex;
-    align-items: center;
-    border: none;
-    outline: none;
-    background: transparent;
-    color: $text-color-primary;
-    font-size: $font-size-base;
-    border-radius: $border-radius-base;
 
     &::placeholder {
-      color: $text-color-placeholder;
+      color: var(--vt-text-placeholder);
     }
 
     &:disabled {
-      color: $text-color-disabled;
+      color: var(--vt-text-disabled);
       cursor: not-allowed;
     }
 
     &:read-only {
-      color: $text-color-secondary;
+      color: var(--vt-text-secondary);
     }
   }
 
-  .el-textarea {
-    .el-textarea__inner {
-      min-height: 0.8rem;
-      padding: $spacing-sm;
-      border: 0.01rem solid $border-color-base;
-      border-radius: $border-radius-base;
-      background-color: $bg-color-input;
-      color: $text-color-primary;
-      font-size: $font-size-base;
-      line-height: $line-height-relaxed;
-      resize: none;
-      box-shadow: none;
-      transition:
-        border-color $transition-fast,
-        box-shadow $transition-fast;
-
-      &:hover {
-        border-color: $border-color-base;
-        box-shadow: none;
-      }
-
-      &:focus {
-        border-color: $border-color-base;
-        box-shadow: none;
-      }
-
-      &::placeholder {
-        color: $text-color-placeholder;
-      }
-
-      &:disabled {
-        color: $text-color-disabled;
-        cursor: not-allowed;
-      }
-    }
-
-    .el-input__count {
-      margin-left: $spacing-xs;
-      color: $text-color-secondary;
-      font-size: $font-size-small;
-      background-color: $bg-color-input;
-    }
+  .el-textarea__inner {
+    min-height: 0.32rem !important;
   }
+
+  // ---- Textarea (separate block) ----
+  // .el-textarea {
+  //   --el-input-bg-color: var(--vt-bg-input);
+  //   --el-input-border-color: var(--vt-border-color);
+  //   --el-input-hover-border-color: var(--vt-border-color);
+  //   --el-input-focus-border-color: var(--vt-border-color);
+  //   --el-input-text-color: var(--vt-text-primary);
+  //   --el-input-placeholder-color: var(--vt-text-placeholder);
+  //   --el-input-icon-color: var(--vt-text-secondary);
+  //   --el-input-transparent-bg-color: transparent;
+
+  //   .el-textarea__inner {
+  //     min-height: 0.8rem;
+  //     padding: var(--vt-space-2);
+  //     border: 0.01rem solid var(--vt-border-color);
+  //     border-radius: var(--vt-radius-none);
+  //     background-color: var(--vt-bg-input);
+  //     color: var(--vt-text-primary);
+  //     font-size: var(--vt-font-size-base);
+  //     line-height: var(--vt-line-height-relaxed);
+  //     resize: none;
+  //     box-shadow: none;
+  //     transition:
+  //       border-color var(--vt-transition-fast),
+  //       box-shadow var(--vt-transition-fast);
+
+  //     &:hover {
+  //       border-color: var(--vt-border-color);
+  //       box-shadow: none;
+  //     }
+
+  //     &:focus {
+  //       border-color: var(--vt-border-color);
+  //       box-shadow: none;
+  //     }
+
+  //     &::placeholder {
+  //       color: var(--vt-text-placeholder);
+  //     }
+
+  //     &:disabled {
+  //       color: var(--vt-text-disabled);
+  //       cursor: not-allowed;
+  //     }
+  //   }
+
+  //   .el-input__count {
+  //     margin-left: var(--vt-space-1);
+  //     color: var(--vt-text-secondary);
+  //     font-size: var(--vt-font-size-sm);
+  //     background-color: var(--vt-bg-input);
+  //   }
+  // }
+}
+
+// ---- InputNumber (shared input styling) ----
+.el-input-number.el-input-number {
+  width: 100%;
 }

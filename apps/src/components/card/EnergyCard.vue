@@ -68,12 +68,12 @@ const props = defineProps<{
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      color: rgba(255, 255, 255, 0.6);
+      color: var(--vt-text-secondary);
 
       .card__right-top {
         .card__right-title {
-          font-weight: 400;
-          font-size: 0.16rem;
+          font-weight: var(--vt-font-weight-normal);
+          font-size: var(--vt-font-size-md);
           line-height: 0.22rem;
         }
       }
@@ -83,15 +83,15 @@ const props = defineProps<{
         height: 0.32rem;
 
         .card__right-value {
-          font-weight: 700;
-          font-size: 0.3rem;
+          font-weight: var(--vt-font-weight-bold);
+          font-size: var(--vt-font-size-2xl);
           line-height: 0.32rem;
-          color: #ffffff;
+          color: var(--vt-text-primary);
 
           .card__right-unit {
-            font-weight: 700;
-            font-size: 0.14rem;
-            color: rgba(255, 255, 255, 0.6);
+            font-weight: var(--vt-font-weight-bold);
+            font-size: var(--vt-font-size-base);
+            color: var(--vt-text-secondary);
           }
         }
       }

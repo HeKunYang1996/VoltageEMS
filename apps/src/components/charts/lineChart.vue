@@ -40,12 +40,12 @@ import {
   DataZoomComponent,
   ToolboxComponent,
 } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { SVGRenderer } from 'echarts/renderers'
 import { useGlobalStore } from '@/stores/global'
-import { pxToResponsive } from '@/utils/responsive'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { ZoomIn, Download } from '@element-plus/icons-vue'
-import { downloadCsv } from '@/utils/csv'
+import * as XLSX from 'xlsx'
+import { pxToResponsive } from '@/utils/responsive'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -72,7 +72,7 @@ echarts.use([
   TooltipComponent,
   GridComponent,
   LegendComponent,
-  CanvasRenderer,
+  SVGRenderer,
   DataZoomComponent,
   ToolboxComponent,
 ])
@@ -93,7 +93,6 @@ export interface YAxisOption {
   yUnit?: string
 }
 
-// Grid配置接口
 export interface GridConfig {
   left?: number
   right?: number
@@ -115,11 +114,10 @@ const props = withDefaults(
     showFullScreen?: boolean
     showDownload?: boolean
     title?: string
-    // 是否展示折线下方的区域
-    showArea?: boolean
+    /** 进入视口后再初始化 ECharts，用于多图页面降低卡顿 */
+    lazy?: boolean
   }>(),
   {
-    // 默认值
     gridConfig: () => ({
       left: 0,
       right: 0,
@@ -135,7 +133,7 @@ const props = withDefaults(
     showToolbox: true,
     showFullScreen: true,
     showDownload: true,
-    showArea: false,
+    lazy: false,
   },
 )
 
@@ -204,7 +202,6 @@ function customTooltipFormatter(
   return html
 }
 
-// Grid配置转换函数
 function getGridConfig(isFullScreen: boolean) {
   return isFullScreen
     ? {
@@ -217,24 +214,16 @@ function getGridConfig(isFullScreen: boolean) {
         left: pxToResponsive(props.gridConfig.left || 0),
         right: pxToResponsive(props.gridConfig.right || 0),
         top: pxToResponsive(props.gridConfig.top || 45),
-        bottom: pxToResponsive(props.gridConfig.bottom || 15),
+        bottom: pxToResponsive(props.gridConfig.bottom || 10),
       }
 }
 
-// 统一生成option的方法
+// 统一生成option的方法（使用 ECharts 原生百分比/固定 px）
 function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // 配置参数
-  const xUnit = props.xAxiosOption.xUnit || ''
-  const yUnit = props.yAxiosOption.yUnit || ''
+  const xUnit = props.xAxiosOption.xUnit ?? ''
+  const yUnit = props.yAxiosOption.yUnit ?? ''
 
-  // 背景数据 - 取每个索引位置上的最大值
-  const totalData = props.xAxiosOption.xAxiosData.map((_, index: number) => {
-    // 获取所有系列在当前位置的值，取最大值
-    const valuesAtIndex = props.series.map((s) => s.data[index] || 0)
-    return Math.max(...valuesAtIndex)
-  })
-
-  // Tooltip样式参数
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -400,32 +389,12 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
             color: '#fff',
             type: 'dashed',
             opacity: 0.2,
-            width: pxToResponsive(1),
           },
         },
       }
 
   // series
   const seriesData = [
-    {
-      name: 'background',
-      type: 'bar',
-      barWidth: '70%',
-      barGap: '-100%',
-      itemStyle: {
-        color: 'rgba(255,255,255,0)',
-      },
-      data: totalData,
-      showBackground: true,
-      backgroundStyle: {
-        color: 'rgba(252, 252, 253, 0.04)',
-      },
-      silent: true,
-      emphasis: { disabled: true },
-      tooltip: { show: false },
-      label: { show: false },
-      z: 0,
-    },
     ...props.series.map((s: SeriesData) => ({
       name: s.name,
       type: 'line',
@@ -433,7 +402,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       smooth: true,
       symbol: 'circle',
       symbolSize: isFullScreen ? pxToResponsive(8) : pxToResponsive(0),
-      areaStyle: props.showArea ? {} : undefined,
+      areaStyle: {},
       lineStyle: {
         color: s.color,
         width: isFullScreen ? pxToResponsive(6) : pxToResponsive(4),
@@ -441,7 +410,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       itemStyle: {
         color: s.color,
         borderColor: s.color,
-        borderWidth: isFullScreen ? 3 : 2,
+        borderWidth: isFullScreen ? pxToResponsive(3) : pxToResponsive(2),
       },
       emphasis: {
         focus: 'series',
@@ -521,26 +490,24 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   ]
   const toolbox = isFullScreen
     ? {
-        itemSize: pxToResponsive(20),
-        itemGap: pxToResponsive(26),
-        top: pxToResponsive(-10),
-        right: pxToResponsive(40),
+        itemSize: 20,
+        itemGap: 26,
+        top: -10,
+        right: 40,
         iconStyle: {
-          // color: '#fff',
           borderColor: '#fff',
-          borderWidth: pxToResponsive(1),
+          borderWidth: 1,
         },
         emphasis: {
           iconStyle: {
-            // color: '#fff',
             borderColor: '#fff',
-            borderWidth: pxToResponsive(1),
+            borderWidth: 1,
           },
         },
         textStyle: {
           fontFamily: 'Arimo',
           fontWeight: 400,
-          fontSize: pxToResponsive(12),
+          fontSize: 12,
           color: 'rgba(255,255,255,1)',
         },
         feature: {
@@ -571,14 +538,26 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
 // 初始化echarts
 const initChart = () => {
   if (!chartRef.value) return
-  if (chartInstance) {
-    chartInstance.dispose()
+  if (!chartInstance) {
+    chartInstance = echarts.init(chartRef.value, undefined, { renderer: 'svg' })
   }
-  chartInstance = echarts.init(chartRef.value, {
-    renderer: 'canvas',
-    devicePixelRatio: window.devicePixelRatio,
-  })
-  chartInstance.setOption(getChartOption({ isFullScreen: false }))
+  chartInstance.setOption(getChartOption({ isFullScreen: false }), { notMerge: true })
+}
+
+let lazyObserver: IntersectionObserver | null = null
+const setupLazyObserver = () => {
+  if (!props.lazy || !chartRef.value || lazyObserver) return
+  lazyObserver = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0]
+      if (!entry?.isIntersecting) return
+      initChart()
+      lazyObserver?.disconnect()
+      lazyObserver = null
+    },
+    { rootMargin: '80px' },
+  )
+  lazyObserver.observe(chartRef.value)
 }
 
 // 初始化全屏图表
@@ -587,7 +566,7 @@ const initFullScreenChart = () => {
   if (fullScreenChartInstance) {
     fullScreenChartInstance.dispose()
   }
-  fullScreenChartInstance = echarts.init(fullScreenChartRef.value)
+  fullScreenChartInstance = echarts.init(fullScreenChartRef.value, undefined, { renderer: 'svg' })
   fullScreenChartInstance.setOption(getChartOption({ isFullScreen: true }))
 }
 
@@ -623,8 +602,18 @@ const handleExport = () => {
     exportData.push(row)
   })
 
-  const fileName = `line_chart_data_${new Date().toISOString().slice(0, 10)}.csv`
-  downloadCsv(exportData, fileName)
+  // 创建工作簿
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet(exportData)
+
+  // 添加工作表到工作簿
+  XLSX.utils.book_append_sheet(wb, ws, 'line_chart_data')
+
+  // 生成文件名
+  const fileName = `line_chart_data_${new Date().toISOString().slice(0, 10)}.xlsx`
+
+  // 导出文件
+  XLSX.writeFile(wb, fileName)
 }
 
 // 监听侧边栏折叠状态变化
@@ -644,6 +633,7 @@ watch(
 const resizeFullScreenChart = () => {
   if (fullScreenChartInstance && fullScreenDialogRef.value.dialogVisible) {
     setTimeout(() => {
+      fullScreenChartInstance?.setOption(getChartOption({ isFullScreen: true }), true)
       fullScreenChartInstance?.resize()
     }, 300)
   }
@@ -651,25 +641,35 @@ const resizeFullScreenChart = () => {
 
 const resizeChart = () => {
   setTimeout(() => {
-    chartInstance?.resize()
+    if (chartInstance) {
+      chartInstance.setOption(getChartOption({ isFullScreen: false }), true)
+      chartInstance.resize()
+    }
   }, 300)
 }
 
 watch(
   () => [props.xAxiosOption.xAxiosData, props.series],
   () => {
+    if (props.lazy && !chartInstance) return
     initChart()
   },
   { deep: true },
 )
 
 onMounted(() => {
-  initChart()
+  if (props.lazy) {
+    setupLazyObserver()
+  } else {
+    initChart()
+  }
   window.addEventListener('resize', resizeChart)
   window.addEventListener('resize', resizeFullScreenChart)
 })
 
 onBeforeUnmount(() => {
+  lazyObserver?.disconnect()
+  lazyObserver = null
   window.removeEventListener('resize', resizeChart)
   window.removeEventListener('resize', resizeFullScreenChart)
   chartInstance?.dispose()

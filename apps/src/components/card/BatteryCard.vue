@@ -53,7 +53,7 @@ const propNumber = computed(() => {
       font-weight: 700;
       font-style: bold;
       font-size: 0.32rem;
-      color: #fff;
+      color: var(--vt-text-primary);
     }
   }
   .battery-card__value {
@@ -64,7 +64,7 @@ const propNumber = computed(() => {
     line-height: 100%;
     letter-spacing: 0%;
     text-transform: capitalize;
-    color: #fff;
+    color: var(--vt-text-primary);
     .battery-card__value-unit {
       font-family: Arimo;
       font-weight: 700;

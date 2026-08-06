@@ -1,159 +1,175 @@
-@use './theme-vars.scss' as *;
+// ============================================
+// Element Plus: Switch (el-switch)
+// ============================================
 
-.voltage-class {
-  .el-switch {
-    display: inline-flex;
-    align-items: center;
-    position: relative;
-    height: 0.32rem;
-    color: $text-color-primary;
-    font-size: $font-size-base;
-    line-height: 0.32rem;
-    vertical-align: middle;
-    user-select: none;
-    cursor: pointer;
-    outline: none;
+// --- Base ---
+.el-switch.el-switch {
+  --el-switch-on-color: var(--vt-color-primary);
+  --el-switch-off-color: var(--vt-bg-muted);
+  --el-switch-border-color: var(--vt-border-color);
 
-    .el-switch__core {
-      position: relative;
-      display: flex;
-      box-sizing: border-box;
-      width: 0.4rem;
-      min-width: 0.4rem;
-      height: 0.2rem;
-      background: rgba(209, 209, 214, 0.2);
-      border: none;
-      border-radius: $border-radius-round;
-      cursor: pointer;
-      transition: all $transition-base;
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  height: 0.32rem;
+  color: var(--vt-text-primary);
+  font-size: var(--vt-font-size-base);
+  line-height: 0.32rem;
+  vertical-align: middle;
+  user-select: none;
+  cursor: pointer;
+  outline: none;
+}
 
-      .el-switch__action {
-        position: absolute;
-        top: 50%;
-        width: 0.16rem;
-        height: 0.16rem;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: $text-color-regular;
-        background: #ffffff;
-        border-radius: $border-radius-circle;
-        box-shadow: 0 0.01rem 0.03rem rgba(0, 0, 0, 0.3);
-        transform: translateY(-50%);
-        transition: all $transition-base;
-      }
-    }
+// --- Core ---
+.el-switch__core {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  width: 0.4rem;
+  min-width: 0.4rem;
+  height: 0.2rem;
+  background: rgba(209, 209, 214, 0.2);
+  border: none;
+  border-radius: var(--vt-radius-round);
+  cursor: pointer;
+  transition: all var(--vt-transition-base);
+}
 
-    .el-switch__label {
-      font-weight: $font-weight-medium;
-      transition: color $transition-base;
+// --- Action ---
+.el-switch__action {
+  position: absolute;
+  top: 50%;
+  width: 0.16rem;
+  height: 0.16rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vt-text-regular);
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0.01rem 0.03rem rgba(0, 0, 0, 0.3);
+  transform: translateY(-50%);
+  transition: all var(--vt-transition-base);
+}
 
-      &.is-active {
-        color: $primary-color;
-      }
-    }
+// --- Label ---
+.el-switch__label {
+  font-weight: var(--vt-font-weight-medium);
+  transition: color var(--vt-transition-base);
 
-    .el-switch__label--left {
-      margin-right: $spacing-sm;
-    }
+  &.is-active {
+    color: var(--vt-color-primary);
+  }
+}
 
-    .el-switch__label--right {
-      margin-left: $spacing-sm;
-    }
+.el-switch__label--left {
+  margin-right: var(--vt-space-2);
+}
 
-    .el-switch__inner {
-      display: inline-block;
-      width: max-content;
-      color: $text-color-primary;
-      font-size: $font-size-extra-small;
-      font-weight: $font-weight-medium;
-      transition: opacity $transition-base;
-    }
+.el-switch__label--right {
+  margin-left: var(--vt-space-2);
+}
 
-    &.is-checked {
-      .el-switch__core {
-        background: $primary-color;
+// --- Inner ---
+.el-switch__inner {
+  display: inline-block;
+  width: max-content;
+  color: var(--vt-text-primary);
+  font-size: var(--vt-font-size-xs);
+  font-weight: var(--vt-font-weight-medium);
+  transition: opacity var(--vt-transition-base);
+}
 
-        .el-switch__action {
-          left: calc(100% - 0.17rem);
-          color: $primary-color;
-        }
-      }
+// --- Checked ---
+.el-switch.is-checked {
+  .el-switch__core {
+    background: var(--vt-color-primary);
 
-      .el-switch__label--left {
-        color: $text-color-secondary;
-      }
-
-      .el-switch__label--right {
-        color: $primary-color;
-      }
-    }
-
-    &:hover:not(.is-disabled) {
-      .el-switch__core::after {
-        content: '';
-        position: absolute;
-        inset: -0.04rem;
-        z-index: -1;
-        background: rgba($primary-color, 0.1);
-        border-radius: $border-radius-round;
-      }
-    }
-
-    &:focus-visible .el-switch__core {
-      outline: 0.02rem solid rgba($primary-color, 0.2);
-      outline-offset: 0.01rem;
-    }
-
-    &.is-disabled {
-      opacity: 1;
-      cursor: not-allowed;
-
-      .el-switch__core {
-        background: #3a4f71;
-        cursor: not-allowed;
-
-        .el-switch__action {
-          background: #ffffff;
-          box-shadow: none;
-        }
-      }
-
-      .el-switch__label {
-        color: $text-color-disabled;
-        cursor: not-allowed;
-      }
-
-      &.is-checked .el-switch__core {
-        background: rgba($primary-color, 0.7);
-      }
-    }
-
-    &.is-loading .el-switch__action .el-icon {
-      animation: switch-loading 1s linear infinite;
-    }
-
-    &.el-switch--success.is-checked {
-      .el-switch__core {
-        background: $success-color;
-
-        .el-switch__action {
-          color: $success-color;
-        }
-      }
+    .el-switch__action {
+      left: calc(100% - 0.17rem);
+      color: var(--vt-color-primary);
     }
   }
 
-  .el-switch-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: $spacing-md;
+  .el-switch__label--left {
+    color: var(--vt-text-secondary);
+  }
 
-    .el-switch {
-      margin: 0;
+  .el-switch__label--right {
+    color: var(--vt-color-primary);
+  }
+}
+
+// --- Hover (non-disabled) ---
+.el-switch:hover:not(.is-disabled) {
+  .el-switch__core::after {
+    content: '';
+    position: absolute;
+    inset: -0.04rem;
+    z-index: -1;
+    background: color-mix(in srgb, var(--vt-color-primary) 10%, transparent);
+    border-radius: var(--vt-radius-round);
+  }
+}
+
+// --- Focus-visible ---
+.el-switch:focus-visible .el-switch__core {
+  outline: 0.02rem solid color-mix(in srgb, var(--vt-color-primary) 20%, transparent);
+  outline-offset: 0.01rem;
+}
+
+// --- Disabled ---
+.el-switch.is-disabled {
+  opacity: 1;
+  cursor: not-allowed;
+
+  .el-switch__core {
+    background: #3a4f71;
+    cursor: not-allowed;
+
+    .el-switch__action {
+      background: #ffffff;
+      box-shadow: none;
+    }
+  }
+
+  .el-switch__label {
+    color: var(--vt-text-disabled);
+    cursor: not-allowed;
+  }
+
+  &.is-checked .el-switch__core {
+    background: color-mix(in srgb, var(--vt-color-primary) 70%, transparent);
+  }
+}
+
+// --- Loading ---
+.el-switch.is-loading .el-switch__action .el-icon {
+  animation: switch-loading 1s linear infinite;
+}
+
+// --- Color variant: success ---
+.el-switch.el-switch--success.is-checked {
+  .el-switch__core {
+    background: var(--vt-color-success);
+
+    .el-switch__action {
+      color: var(--vt-color-success);
     }
   }
 }
+
+.el-switch-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vt-space-4);
+
+  .el-switch {
+    margin: 0;
+  }
+}
+
 
 @keyframes switch-loading {
   0% {

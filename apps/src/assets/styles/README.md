@@ -25,6 +25,11 @@ This project now uses a layered style system. Keep new styles inside the correct
 - Keep overlay, popper, and dialog positioning close to library defaults unless there is a verified layout bug.
 - Page-specific patches belong in the page component, not in global element skin files.
 
+## Reuse Guide
+
+- Structural reuse guide: `STYLE_GUIDE.md`
+- Shared page-shell utilities: `patterns.css`
+
 ## Import order
 
 The only global entry is `src/assets/main.css` and it must stay ordered as:

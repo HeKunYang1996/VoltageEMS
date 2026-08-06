@@ -29,10 +29,14 @@ describe('Dynamic Routes', () => {
     expect(alarmRoute?.children).toBeDefined()
   })
 
-  it('should contain control route', () => {
+  it('should contain control route with history records child', () => {
     const controlRoute = dynamicRoutes.find((route) => route.path === '/control')
     expect(controlRoute).toBeDefined()
     expect(controlRoute?.meta?.title).toBe('Control')
+    expect(controlRoute?.meta?.isSubMenu).toBe(true)
+    expect(controlRoute?.redirect).toBe('/control/historyRecords')
+    expect(controlRoute?.children?.some((child) => child.name === 'controlHistoryRecords')).toBe(true)
+    expect(controlRoute?.children?.find((child) => child.name === 'controlHistoryRecords')?.meta?.title).toBe('History Records')
   })
 
   it('should contain statistics route', () => {

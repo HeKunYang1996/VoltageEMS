@@ -7,7 +7,7 @@
 #
 # 模式（三选一）：
 #   默认                    本地运行（当前平台，--load）
-#   --export                构建 ARM64 镜像并导出为 .tar 文件（可 scp 到 ARM64 服务器）
+#   --export                构建单架构镜像并导出为 .tar 文件（默认 ARM64，可切到 AMD64）
 #   --push --registry <R>   构建 amd64+arm64 并推送到镜像仓库
 #
 # 选项：
@@ -21,6 +21,7 @@
 # 示例：
 #   ./scripts/docker-deploy.sh                              # 本地 amd64 运行
 #   ./scripts/docker-deploy.sh --export                     # 导出 arm64 tar
+#   ./scripts/docker-deploy.sh --export --platform linux/amd64             # 导出 amd64 tar
 #   ./scripts/docker-deploy.sh --export --remote-host root@192.168.30.21  # 导出并部署到远程
 #   ./scripts/docker-deploy.sh --push --registry docker.io/myuser         # 多架构推送
 # ============================================================
@@ -61,14 +62,25 @@ if [[ -z "$PLATFORM" ]]; then
     esac
 fi
 
+case "$PLATFORM" in
+    linux/amd64) PLATFORM_ARCH="amd64" ;;
+    linux/arm64) PLATFORM_ARCH="arm64" ;;
+    *) PLATFORM_ARCH="" ;;
+esac
+
+EXPORT_TAR=""
+REMOTE_TAR=""
+if [[ "$MODE" == "export" && -n "$PLATFORM_ARCH" ]]; then
+    EXPORT_TAR="$(pwd)/${IMAGE_NAME}-${PLATFORM_ARCH}-${TAG}.tar"
+    REMOTE_TAR="/tmp/${IMAGE_NAME}-${PLATFORM_ARCH}-${TAG}.tar"
+fi
+
 # ── 镜像全名 ──────────────────────────────────────────────────────────────────
 if [[ -n "$REGISTRY" ]]; then
     FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${TAG}"
 else
     FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 fi
-
-EXPORT_TAR="$(pwd)/${IMAGE_NAME}-arm64-${TAG}.tar"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPS_DIR="$(dirname "$SCRIPT_DIR")"
@@ -81,6 +93,14 @@ step()  { echo -e "\n${YELLOW}[$1] $2${NC}"; }
 ok()    { echo -e "  ${GREEN}✓ $1${NC}"; }
 info()  { echo -e "  ${GRAY}· $1${NC}"; }
 fail()  { echo -e "${RED}[错误] $1${NC}"; exit 1; }
+
+if [[ "$MODE" == "export" && "$PLATFORM" == *,* ]]; then
+    fail "export 模式只支持单个平台，请使用 --platform linux/amd64 或 linux/arm64"
+fi
+
+if [[ "$MODE" == "export" && -z "$PLATFORM_ARCH" ]]; then
+    fail "不支持的 export 平台: ${PLATFORM}"
+fi
 
 echo ""
 echo -e "${CYAN}================================================${NC}"
@@ -198,23 +218,23 @@ case "$MODE" in
         ok "镜像已导出: ${EXPORT_TAR}"
         if [[ -n "$REMOTE_HOST" ]]; then
             info "正在上传到 ${REMOTE_HOST}..."
-            scp "$EXPORT_TAR" "${REMOTE_HOST}:/tmp/${IMAGE_NAME}-arm64.tar"
+            scp "$EXPORT_TAR" "${REMOTE_HOST}:${REMOTE_TAR}"
             ok "上传完成"
             info "在远程主机上加载并运行..."
-            ssh "$REMOTE_HOST" bash -s -- "$IMAGE_NAME" "$TAG" "$HOST_PORT" <<'REMOTE_SCRIPT'
-IMAGE=$1; TAG=$2; PORT=$3; FULL="${IMAGE}:${TAG}"
+            ssh "$REMOTE_HOST" bash -s -- "$IMAGE_NAME" "$TAG" "$HOST_PORT" "$REMOTE_TAR" <<'REMOTE_SCRIPT'
+IMAGE=$1; TAG=$2; PORT=$3; TAR_PATH=$4; FULL="${IMAGE}:${TAG}"
 docker stop "$IMAGE" 2>/dev/null || true
 docker rm   "$IMAGE" 2>/dev/null || true
-docker load -i "/tmp/${IMAGE}-arm64.tar"
+docker load -i "$TAR_PATH"
 docker run -d --name "$IMAGE" --restart unless-stopped -p "${PORT}:8080" "$FULL"
 echo "Remote container started: $IMAGE"
 REMOTE_SCRIPT
             ok "远程部署完成"
         else
             echo ""
-            echo -e "${GRAY}将镜像部署到 ARM64 服务器：${NC}"
-            echo -e "${GRAY}  scp ${EXPORT_TAR} root@<ARM64_HOST>:/tmp/${NC}"
-            echo -e "${GRAY}  ssh root@<ARM64_HOST> 'docker load -i /tmp/${IMAGE_NAME}-arm64-${TAG}.tar && docker run -d --name ${CONTAINER_NAME} -p ${HOST_PORT}:8080 ${FULL_IMAGE}'${NC}"
+            echo -e "${GRAY}将镜像部署到 ${PLATFORM_ARCH^^} 服务器：${NC}"
+            echo -e "${GRAY}  scp ${EXPORT_TAR} root@<${PLATFORM_ARCH^^}_HOST>:/tmp/${NC}"
+            echo -e "${GRAY}  ssh root@<${PLATFORM_ARCH^^}_HOST> 'docker load -i ${REMOTE_TAR} && docker run -d --name ${CONTAINER_NAME} -p ${HOST_PORT}:8080 ${FULL_IMAGE}'${NC}"
         fi
         ;;
     push)

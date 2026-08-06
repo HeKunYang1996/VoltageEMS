@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class home">
+  <div class="home">
     <!-- <EnergyBgCopy></EnergyBgCopy> -->
     <div class="home-left">
       <div class="home-left-top">
@@ -146,6 +146,10 @@ import { formatNumber } from '@/utils/common'
 import ModuleCard from '@/components/card/ModuleCard.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
 import LineChart from '@/components/charts/lineChart.vue'
+import { batchQueryHistory } from '@/api/Statistic/overview'
+import dayjs from 'dayjs'
+import { getRecentHoursRange } from '@/utils/date'
+import type { BatchQueryResponse } from '@/types/Statistics/OverView'
 
 import alterL1 from '@/assets/icons/home-alter-L1.svg'
 import alterL2 from '@/assets/icons/home-alter-L2.svg'
@@ -391,62 +395,79 @@ const alterInfoList = reactive([
   },
 ])
 
-const exampleXAxisData = [
-  '0:00',
-  '2:00',
-  '4:00',
-  '6:00',
-  '8:00',
-  '10:00',
-  '12:00',
-  '14:00',
-  '16:00',
-  '18:00',
-  '20:00',
-  '22:00',
-]
+// ─── 图表数据（Power Curve + Energy Chart）────────────────────
+const chartXAxisData = ref<string[]>([])
 
-// 新增lineChartSeries变量，专门用于LineChart
-const lineChartSeries = [
-  {
-    name: 'PV',
-    data: [10, 35, 20, 80, 60, 180, 120, 300, 180, 250, 90, 40],
-    color: 'rgba(105, 203, 255, 1)',
-  },
-  {
-    name: 'ESS',
-    data: [500, 420, 480, 350, 370, 320, 400, 220, 300, 120, 200, 60],
-    color: 'rgba(29, 134, 255, 1)',
-  },
-]
+const lineChartSeries = ref([
+  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+])
 
-// exampleSeries 仍然保留给 StackedBarChart 使用
-const exampleSeries = [
-  {
-    name: 'Diesel',
-    data: [120, 135, 140, 160, 180, 200, 210, 190, 170, 160, 150, 140],
-    color: 'rgb(3, 93, 239)',
-  },
-  {
-    name: 'ESS',
-    data: [80, 90, 100, 110, 120, 130, 140, 135, 130, 125, 120, 115],
-    color: 'rgb(29, 134, 255)',
-  },
-  {
-    name: 'PV',
-    data: [0, 10, 30, 60, 100, 130, 150, 140, 120, 80, 30, 5],
-    color: 'rgb(105, 203, 255)',
-  },
-]
-const xAxiosOption = {
-  xAxiosData: exampleXAxisData,
+const exampleSeries = ref([
+  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+])
+
+const xAxiosOption = computed(() => ({ xAxiosData: chartXAxisData.value }))
+const yAxiosOption = { yUnit: 'kWh' }
+const lineChartYAxiosOption = { yUnit: 'kW' }
+
+const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
+const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3))
+
+const fetchHomeChartData = async () => {
+  const range = getRecentHoursRange(6)
+  try {
+    const res = await batchQueryHistory({
+      start_time: range.start!,
+      end_time: range.end!,
+      limit_per_series: 500,
+      series: [
+        { redis_key: 'inst:4:M', point_id: '7' },  // Power PV
+        { redis_key: 'inst:2:M', point_id: '1' },  // Power DG
+        { redis_key: 'inst:1:M', point_id: '5' },  // Power ESS
+        { redis_key: 'inst:4:M', point_id: '15' }, // Energy PV
+        { redis_key: 'inst:2:M', point_id: '2' },  // Energy DG
+        { redis_key: 'inst:1:M', point_id: '9' },  // Energy ESS
+      ],
+    })
+
+    const responses: BatchQueryResponse[] = res.data?.series ?? []
+    const find = (rk: string, pid: string) =>
+      responses.find((r) => r.redis_key === rk && r.point_id === pid)
+
+    const allTs = new Set<string>()
+    responses.forEach((r) => (r.data ?? []).forEach((p) => allTs.add(p.timestamp)))
+    const sorted = [...allTs].sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+    chartXAxisData.value = sorted.map(fmtLabel)
+
+    const makeVals = (s: BatchQueryResponse | undefined) => {
+      if (!s) return sorted.map(() => 0)
+      const map = new Map((s.data ?? []).map((p) => [p.timestamp, p.value]))
+      return sorted.map((ts) => fmtVal(map.get(ts)))
+    }
+
+    lineChartSeries.value = [
+      { name: 'PV', data: makeVals(find('inst:4:M', '7')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find('inst:2:M', '1')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find('inst:1:M', '5')), color: 'rgba(29, 134, 255, 1)' },
+    ]
+
+    exampleSeries.value = [
+      { name: 'PV', data: makeVals(find('inst:4:M', '15')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find('inst:2:M', '2')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find('inst:1:M', '9')), color: 'rgba(29, 134, 255, 1)' },
+    ]
+  } catch (error) {
+    console.error('Failed to fetch home chart data:', error)
+  }
 }
-const yAxiosOption = {
-  yUnit: 'kWh',
-}
-const lineChartYAxiosOption = {
-  yUnit: 'kW',
-}
+
+onMounted(() => {
+  fetchHomeChartData()
+})
 
 // Carousel引用
 const carouselRef = ref()
@@ -565,7 +586,7 @@ const handleNext = () => {
           height: 33.33%;
           padding-top: 0.12rem;
           padding-bottom: 0.13rem;
-          border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
 
           &:last-child {
             border-bottom: none;
@@ -596,7 +617,7 @@ const handleNext = () => {
             width: 100%;
             padding: 0.15rem 0;
             margin-bottom: 0.2rem;
-            border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+            border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
             display: flex;
             justify-content: space-between;
 
@@ -619,7 +640,7 @@ const handleNext = () => {
               .deviceValue-item-value {
                 font-size: 0.22rem;
                 font-weight: 700;
-                color: #fff;
+                color: var(--vt-text-primary);
                 line-height: 0.26rem;
               }
 
@@ -685,7 +706,7 @@ const handleNext = () => {
 
         .home-altersItem {
           min-height: 0.9rem;
-          border-bottom: 0.01rem dashed rgba(255, 255, 255, 0.2);
+          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
           display: flex;
           align-items: center;
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class loginPage">
+  <div class="loginPage">
     <header class="loginPage__header">
       <div class="loginPage__head-title">
         <div class="loginPage__head-text">Login page</div>
@@ -45,6 +45,7 @@ import { useUserStore } from '@/stores/user'
 import { useGlobalStore } from '@/stores/global'
 import type { LoginParams } from '@/types/user'
 import { useRouter } from 'vue-router'
+import { assertValidUserRole } from '@/utils/roleGuard'
 // import wsManager from '@/utils/websocket'
 
 const router = useRouter()
@@ -76,6 +77,10 @@ const handleLogin = async (formEl: FormInstance | undefined) => {
         if (res.success) {
           const userInfo = await userStore.getUserInfo()
           if (userInfo.success) {
+            if (!assertValidUserRole(userStore.userInfo)) {
+              await userStore.clearUserData()
+              return
+            }
             // wsManager.connect()
             const redirect = router.currentRoute.value.query.redirect as string
             if (redirect) {
@@ -97,7 +102,7 @@ const handleLogin = async (formEl: FormInstance | undefined) => {
 </script>
 
 <style lang="scss" scoped>
-.voltage-class.loginPage {
+.loginPage {
   width: 100%;
   height: 100%;
   background: #02081a;
@@ -147,7 +152,7 @@ const handleLogin = async (formEl: FormInstance | undefined) => {
         font-weight: 600;
         font-size: 0.3rem;
         line-height: 1.5em;
-        color: #ffffff;
+        color: var(--vt-text-primary);
       }
     }
 

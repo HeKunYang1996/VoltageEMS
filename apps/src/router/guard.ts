@@ -4,6 +4,7 @@ import { useUserStore } from '@/stores/user'
 import { useGlobalStore } from '@/stores/global'
 import { ensureRoutesInjected } from './injector'
 import { cancelAllPendingRequests } from '@/utils/request'
+import { assertValidUserRole } from '@/utils/roleGuard'
 
 const WHITE_LIST = ['/login']
 
@@ -37,6 +38,11 @@ router.beforeEach(async (to, from, next) => {
         user.clearUserData()
         return next({ path: '/login' })
       }
+    }
+
+    if (!assertValidUserRole(user.userInfo)) {
+      user.clearUserData()
+      return next({ path: '/login' })
     }
 
     // 路由尚未注入：注入后重定向，骨架屏继续覆盖，afterEach 处理关闭

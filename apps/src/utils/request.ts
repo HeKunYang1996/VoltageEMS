@@ -106,11 +106,7 @@ const service = axios.create({
  */
 const requestInterceptor = (config: any) => {
   // 添加时间戳防止缓存 (GET请求) - 在生成 key 之前添加，但 normalizeForKey 会过滤掉 _t
-  if (
-    config.method?.toLowerCase() === 'get' &&
-    config.url !== '/modApi/api/instances/search' &&
-    config.url !== '/comApi/api/channels/search'
-  ) {
+  if (config.method?.toLowerCase() === 'get') {
     config.params = {
       ...config.params,
       _t: Date.now(),
@@ -252,8 +248,9 @@ const createResponseInterceptor = (serviceInstance: any, logPrefix: string = '')
           window.location.href = '/login'
           break
         case 403:
-          errorMessage = 'No permission to access this resource'
-          break
+          errorMessage = 'Insufficient permissions. Please contact your administrator.'
+          ElMessage.warning(errorMessage)
+          return Promise.reject(new Error(errorMessage))
         case 404:
           errorMessage = 'Requested resource not found'
           break
@@ -306,6 +303,13 @@ const createResponseInterceptor = (serviceInstance: any, logPrefix: string = '')
 
     const originalRequest = error.config
     const requestConfig = originalRequest as any
+
+    if (error.response?.status === 403) {
+      if (requestConfig?.showErrorMessage !== false) {
+        ElMessage.warning('Insufficient permissions. Please contact your administrator.')
+      }
+      return Promise.reject(error)
+    }
 
     // 如果是刷新token请求返回401，直接跳转登录页，不再尝试刷新
     if (error.response?.status === 401 && requestConfig?._isRefreshTokenRequest) {

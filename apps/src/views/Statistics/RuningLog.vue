@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class running-log">
+  <div class="running-log">
     <div class="running-log__content">
       <!-- 表格工具�?-->
       <div class="running-log__toolbar">
@@ -122,7 +122,7 @@ const runningLog = ref([
 </script>
 
 <style scoped lang="scss">
-.voltage-class.running-log {
+.running-log {
   height: 100%;
   width: 100%;
   .running-log__content {
@@ -170,7 +170,7 @@ const runningLog = ref([
         font-size: 0.18rem;
         line-height: 0.315rem;
         letter-spacing: 8%;
-        color: #fff;
+        color: var(--vt-text-primary);
       }
     }
   }

@@ -1,0 +1,67 @@
+@mixin vt-el-select-trigger {
+  .el-select__wrapper {
+    min-height: var(--vt-control-height);
+    padding: 0 0.12rem;
+    line-height: var(--vt-control-height);
+    font-size: var(--vt-font-size-base);
+    background-color: var(--vt-bg-input);
+    // EP Select draws its "border" with inset box-shadow; match Input by using a
+    // real border and clearing that shadow (including hover / focus states).
+    border: 0.01rem solid var(--vt-border-color);
+    border-radius: var(--vt-radius-none);
+    box-shadow: none;
+    transition:
+      border-color var(--vt-transition-fast),
+      box-shadow var(--vt-transition-fast),
+      background-color var(--vt-transition-fast);
+
+    &:hover,
+    &.is-hovering,
+    &.is-focused,
+    &.is-focus {
+      border-color: var(--vt-border-color);
+      box-shadow: none;
+    }
+
+    .el-select__input {
+      height: var(--vt-control-height);
+    }
+
+    // .el-select__selected-item,
+    // .el-select__placeholder {
+    //   // color: var(--vt-text-primary);
+    //   font-size: var(--vt-font-size-base);
+    //   &.is-placeholder {
+    //     // color: var(--vt-text-placeholder);
+    //   }
+    // }
+  }
+
+  .el-select__suffix {
+    gap: 0.06rem;
+
+    .el-icon {
+      width: 0.14rem;
+      height: 0.14rem;
+      font-size: 0.14rem;
+    }
+  }
+
+  .el-select__close {
+    margin-left: var(--vt-space-1);
+    color: var(--vt-text-secondary);
+    transition: color var(--vt-transition-fast);
+
+    &:hover {
+      color: var(--vt-text-regular);
+    }
+  }
+
+  &.el-select--filterable,
+  &.el-select--remote {
+    .el-input__inner,
+    .el-input__wrapper {
+      cursor: text;
+    }
+  }
+}

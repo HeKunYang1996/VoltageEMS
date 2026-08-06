@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class battery-overview">
+  <div class="battery-overview">
     <div class="battery-overview__left">
       <ModuleCard title="Voltage">
         <div class="battery-overview__contain">
@@ -244,7 +244,7 @@ const contentItemData2 = [
 </script>
 
 <style scoped lang="scss">
-.voltage-class.battery-overview {
+.battery-overview {
   height: 100%;
   width: 100%;
   display: flex;
@@ -279,7 +279,7 @@ const contentItemData2 = [
             font-weight: 700;
             font-size: 0.3rem;
             line-height: 0.3rem;
-            color: #fff;
+            color: var(--vt-text-primary);
             margin: 0 0.1rem;
           }
 
@@ -328,7 +328,7 @@ const contentItemData2 = [
             width: 100%;
             font-size: 0.3rem;
             line-height: 0.3rem;
-            color: #fff;
+            color: var(--vt-text-primary);
             text-align: right;
 
             .item-unit {

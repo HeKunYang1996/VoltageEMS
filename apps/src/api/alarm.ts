@@ -1,9 +1,9 @@
 import { Request } from '@/utils/request'
 import type { CurrentAlarmResponse, HistoryAlarmResponse } from '@/types/alarm'
-import type { RuleDetailResponse, RuleFormModel } from '@/types/ruleManagement'
+import type { RuleInfo, RuleFormModel, UpdateAlarmRulePayload } from '@/types/ruleManagement'
 import type { ApiResponse } from '@/types/user'
 
-export const getRuleDetail = (id: string | number): Promise<ApiResponse<RuleDetailResponse>> => {
+export const getRuleDetail = (id: string | number): Promise<ApiResponse<RuleInfo>> => {
   return Request.get(`/alarmApi/rules/${id}`)
 }
 
@@ -11,7 +11,7 @@ export const createRule = (data: RuleFormModel) => {
   return Request.post('/alarmApi/rules', data)
 }
 
-export const updateRule = (id: string, data: any) => {
+export const updateRule = (id: string | number, data: UpdateAlarmRulePayload) => {
   return Request.put(`/alarmApi/rules/${id}`, data)
 }
 

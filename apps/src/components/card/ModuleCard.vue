@@ -33,18 +33,11 @@ const props = defineProps({
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: rgba(84, 98, 140, 0.2);
+  background: var(--vt-bg-glass);
   padding: 0.2rem;
   border: 0.01rem solid;
-  border-image: linear-gradient(
-      117.31deg,
-      rgba(148, 166, 197, 0.3) 2.77%,
-      rgba(148, 166, 197, 0) 32.18%,
-      rgba(148, 166, 197, 0.103266) 72.63%,
-      rgba(148, 166, 197, 0.3) 99.05%
-    )
-    1;
-  backdrop-filter: blur(0.1rem);
+  border-image: var(--vt-border-gradient) 1;
+  backdrop-filter: var(--vt-backdrop-blur);
   display: flex;
   flex-direction: column;
 
@@ -63,12 +56,11 @@ const props = defineProps({
 
     .card__header-title {
       margin-left: 0.03rem;
-      font-family: Arimo;
-      font-weight: 700;
-      font-style: Bold;
-      font-size: 0.18rem;
+      font-family: var(--vt-font-family-base);
+      font-weight: var(--vt-font-weight-bold);
+      font-size: var(--vt-font-size-lg);
       line-height: 1em;
-      color: #ffffff;
+      color: var(--vt-text-primary);
     }
   }
 

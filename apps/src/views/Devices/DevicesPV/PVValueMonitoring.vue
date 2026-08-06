@@ -1,5 +1,5 @@
 <template>
-  <div class="voltage-class pv__content">
+  <div class="pv__content">
     <div class="devices-pv__tables">
       <LoadingBg :loading="globalStore.loading">
         <DeviceMonitoringTable :leftTableData="leftTableData" :rightTableData="rightTableData" />
@@ -9,102 +9,81 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import LoadingBg from '@/components/common/LoadingBg.vue'
 import DeviceMonitoringTable from '@/components/device/DeviceMonitoringTable.vue'
 import { useGlobalStore } from '@/stores/global'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import type { LeftTableItem, RightTableItem } from '@/types/deviceMonitoring'
 import { getPointsTables } from '@/api/channelsManagement'
 import type { PointInfoResponse } from '@/types/channelConfiguration'
-import useWebSocket from '@/composables/useWebSocket'
+import useTopologySubscribe from '@/composables/useTopologySubscribe'
 
 const globalStore = useGlobalStore()
+const topoStore = useDeviceTopologyStore()
 
-const leftTableData = ref<LeftTableItem[]>([])
-const rightTableData = ref<RightTableItem[]>([])
-
-// 订阅 WebSocket - ValueMonitoring 使用 comsrv 源
-useWebSocket(
-  {
-    source: 'comsrv',
-    channels: [3],
-    dataTypes: ['T', 'S'],
-    interval: 1000,
-  },
-  {
-    onBatchDataUpdate: (data: any) => {
-      // 处理通道3的T类型数据（左侧表格）
-      const channel3TUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 3 && item.data_type === 'T',
-      )
-      if (channel3TUpdate) {
-        const values = channel3TUpdate.values || {}
-        const timestamps = channel3TUpdate.ts || {}
-        leftTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.value = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
-
-      // 处理通道3的S类型数据（右侧表格）
-      const channel3SUpdate = data.updates?.find(
-        (item: any) => item.channel_id === 3 && item.data_type === 'S',
-      )
-      if (channel3SUpdate) {
-        const values = channel3SUpdate.values || {}
-        const timestamps = channel3SUpdate.ts || {}
-        rightTableData.value.forEach((item) => {
-          const pointValue = values[String(item.pointId)]
-          const pointTimestamp = timestamps[String(item.pointId)]
-          if (pointValue !== undefined && pointValue !== null) {
-            item.status = pointValue
-          }
-          if (pointTimestamp !== undefined && pointTimestamp !== null) {
-            item.updateTime = pointTimestamp
-          }
-        })
-      }
-    },
-  },
+// 无回退值：'PV DCDC' / 'PVInverter' 均可能是产品名，按优先级取
+const pvChId = computed<number | undefined>(
+  () => topoStore.getChannelIds('PV DCDC')[0] ?? topoStore.getChannelIds('PVInverter')[0],
 )
 
-// 初始化数据：通过 API 获取点位数据
-onMounted(async () => {
+const leftTableData  = ref<LeftTableItem[]>([])
+const rightTableData = ref<RightTableItem[]>([])
+
+async function loadPointTable(chId: number) {
   try {
-    // PV 暂时使用通道 3（与 DieselGenerator 相同）
-    const res = await getPointsTables(3)
+    const res = await getPointsTables(chId)
     if (res?.success && res.data) {
       const data = res.data as PointInfoResponse
-      leftTableData.value =
-        data.telemetry?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          unit: p.unit || '',
-          value: null,
-          updateTime: null,
-        })) || []
-      rightTableData.value =
-        data.signal?.map((p) => ({
-          pointId: p.point_id,
-          name: p.signal_name || '',
-          status: null,
-          updateTime: null,
-        })) || []
+      leftTableData.value = data.telemetry?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', unit: p.unit || '', value: null, updateTime: null,
+      })) || []
+      rightTableData.value = data.signal?.map((p) => ({
+        pointId: p.point_id, name: p.signal_name || '', status: null, updateTime: null,
+      })) || []
     }
   } catch (err) {
-    console.error('加载设备点位数据失败:', err)
+    console.error('[PVValueMonitoring] 加载点位表失败:', err)
   }
+}
+
+watch(pvChId, (id) => { if (id !== undefined) loadPointTable(id) }, { immediate: true })
+
+const makeHandlers = () => ({
+  onBatchDataUpdate: (data: any) => {
+    const chId = pvChId.value
+    const tUpdate = data.updates?.find((i: any) => i.channel_id === chId && i.data_type === 'T')
+    if (tUpdate) {
+      const { values = {}, ts = {} } = tUpdate
+      leftTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.value = v
+        if (t != null) item.updateTime = t
+      })
+    }
+    const sUpdate = data.updates?.find((i: any) => i.channel_id === chId && i.data_type === 'S')
+    if (sUpdate) {
+      const { values = {}, ts = {} } = sUpdate
+      rightTableData.value.forEach((item) => {
+        const v = values[String(item.pointId)]
+        const t = ts[String(item.pointId)]
+        if (v != null) item.status = v
+        if (t != null) item.updateTime = t
+      })
+    }
+  },
 })
+
+useTopologySubscribe(
+  () => pvChId.value !== undefined ? [pvChId.value] : [],
+  { source: 'comsrv', dataTypes: ['T', 'S'], interval: 1000 },
+  makeHandlers(),
+)
 </script>
 
 <style scoped lang="scss">
-.voltage-class.pv__content {
+.pv__content {
   width: 100%;
   height: calc(100% - 0.4rem);
 
