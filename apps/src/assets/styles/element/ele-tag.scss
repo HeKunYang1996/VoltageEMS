@@ -1,10 +1,14 @@
 // ============================================
 // Element Plus: Tag (el-tag)
 // ============================================
-.el-tag {
+.el-tag.el-tag {
+  --el-tag-bg-color: var(--vt-bg-input);
+  --el-tag-border-color: var(--vt-border-color);
+  --el-tag-text-color: var(--vt-text-primary);
+  --el-tag-font-size: var(--vt-font-size-sm);
+
   border-width: 0.01rem;
   padding: 0 0.09rem;
   height: 0.24rem;
   font-size: 0.12rem;
 }
-

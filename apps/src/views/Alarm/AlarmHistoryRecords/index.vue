@@ -51,21 +51,21 @@
             type="warning"
             :icon="reloadIcon"
             text="Reload"
-            custom-class="alarm-records__export-btn"
+            custom-class="alarm-records__btn"
             @click="reloadFilters"
           />
           <IconButton
             type="primary"
             :icon="searchIcon"
             text="Search"
-            custom-class="alarm-records__export-btn"
+            custom-class="alarm-records__btn"
             @click="fetchTableData(true)"
           />
           <IconButton
             type="primary"
             :icon="alarmExportIcon"
             text="Export"
-            custom-class="alarm-records__export-btn"
+            custom-class="alarm-records__btn"
             @click="exportData(`Alarm_History_${Date.now().toString()}.csv`)"
           />
         </div>
@@ -77,16 +77,31 @@
           <el-table-column
             prop="rule_name"
             label="Name"
-            min-width="1.2rem"
+            :min-width="160"
             class-name="table-ellipsis"
           />
           <el-table-column
             prop="channel_id"
             label="Channel ID"
-            min-width="1.2rem"
+            :min-width="140"
             class-name="table-ellipsis"
           />
-          <el-table-column prop="warning_level" label="Level" min-width="1rem">
+          <el-table-column
+            prop="device_name"
+            label="Device Name"
+            :min-width="180"
+            class-name="table-ellipsis"
+          >
+            <template #default="{ row }">{{ row.device_name || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="point_id" label="Point ID" :min-width="120" class-name="table-ellipsis" />
+          <el-table-column prop="point_name" label="Point Name" :min-width="160" class-name="table-ellipsis">
+            <template #default="{ row }">{{ row.point_name || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="unit" label="Unit" :min-width="100" class-name="table-ellipsis">
+            <template #default="{ row }">{{ row.unit || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="warning_level" label="Level" :width="160">
             <template #default="scope">
               <span
                 class="alarm-records__table-level-text"
@@ -99,7 +114,7 @@
           <el-table-column
             prop="triggered_at"
             label="Start Time"
-            min-width="1.6rem"
+            :min-width="180"
             class-name="table-ellipsis"
           >
             <template #default="{ row }">
@@ -109,7 +124,7 @@
           <el-table-column
             prop="recovered_at"
             label="End Time"
-            min-width="1.6rem"
+            :min-width="180"
             class-name="table-ellipsis"
           >
             <template #default="{ row }">
@@ -314,18 +329,12 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
     .alarm-records__toolbar-right {
       display: flex;
       align-items: center;
-      gap: 0.1rem;
+      gap: 0.16rem;
 
-      .alarm-records__export-btn {
+      .alarm-records__btn {
         display: flex;
         align-items: center;
         gap: 0.1rem;
-
-        .alarm-records__export-icon {
-          width: 0.16rem;
-          height: 0.16rem;
-          margin-right: 0.08rem;
-        }
       }
     }
   }
@@ -352,6 +361,7 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 
   :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
+    margin-right: 0.2rem;
   }
 
   .alarm-level--1 {

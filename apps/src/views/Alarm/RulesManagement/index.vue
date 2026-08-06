@@ -44,12 +44,12 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="monitor_data" label="Monitor Data" class-name="table-ellipsis" min-width="100">
+          <el-table-column prop="monitor_data" label="Monitor Data"  show-overflow-tooltip min-width="100">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{ formatMonitorData(row) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="condition" label="Condition" show-overflow-tooltip class-name="table-ellipsis"
+          <el-table-column prop="condition" label="Condition" show-overflow-tooltip
             min-width="80">
             <template #default="{ row }">
               <span class="table-ellipsis__text vt-ellipsis">{{ formatCondition(row) }}</span>
@@ -174,7 +174,9 @@ const formatMonitorData = (row: RuleInfo) => {
   if (!row) return '-'
   const dataTypeLabel =
     row.data_type === 'M' ? 'Measurement' : row.data_type === 'A' ? 'Action' : row.data_type
-  return [row.service_type || 'inst', row.channel_id, dataTypeLabel, row.point_id]
+  const device = row.device_name || row.channel_id
+  const point = row.point_name || row.point_id
+  return [row.service_type || 'inst', device, dataTypeLabel, point, row.unit]
     .filter((v) => v !== null && v !== undefined && v !== '')
     .join(' / ')
 }

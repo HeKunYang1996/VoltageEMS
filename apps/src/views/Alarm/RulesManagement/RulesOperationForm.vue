@@ -313,8 +313,8 @@ async function open(rulesId?: string, openMode: 'create' | 'edit' = 'create') {
 
     if (rulesId) {
       const res = await getRuleDetail(rules_id.value)
-      if (res.success && res.data.list?.length) {
-        const rule = res.data.list[0]
+      if (res.success && res.data) {
+        const rule = res.data
         form.value.rule_name = rule.rule_name
         form.value.service_type = SERVICE_TYPE
         form.value.channel_id = rule.channel_id

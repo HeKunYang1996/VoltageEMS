@@ -6,7 +6,18 @@
 // ==============================
 // el-menu
 // ==============================
-.el-menu {
+.el-menu.el-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--vt-text-primary);
+  --el-menu-hover-bg-color: transparent;
+  --el-menu-hover-text-color: var(--vt-text-primary);
+  --el-menu-active-color: var(--vt-text-primary);
+  --el-menu-item-height: 0.42rem;
+  --el-menu-item-font-size: var(--vt-font-size-base);
+  --el-menu-base-level-padding: var(--vt-space-5);
+  --el-menu-icon-width: 0.24rem;
+  --el-menu-border-color: transparent;
+
   color: var(--vt-text-primary);
   font-family: var(--vt-font-family-base);
   background: transparent;
@@ -19,7 +30,7 @@
   }
 
   // ---- Collapse mode ----
-  &--collapse {
+  &.el-menu--collapse {
     width: 0.44rem;
 
     .el-menu-item,
@@ -44,7 +55,7 @@
   }
 
   // ---- Inline sub-menu ----
-  &--inline {
+  &.el-menu--inline {
     background: transparent;
 
     .el-menu-item {
@@ -160,4 +171,3 @@
     transform: rotate(45deg);
   }
 }
-

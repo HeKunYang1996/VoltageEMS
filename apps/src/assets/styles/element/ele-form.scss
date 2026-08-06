@@ -6,7 +6,9 @@
 // ==============================
 // el-form
 // ==============================
-.el-form {
+.el-form.el-form {
+  --el-form-label-font-size: var(--vt-font-size-base);
+
 
   // ---- Form item ----
   .el-form-item {

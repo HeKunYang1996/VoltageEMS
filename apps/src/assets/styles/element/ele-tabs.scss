@@ -2,7 +2,9 @@
 // Element Plus: Tabs (el-tabs)
 // ============================================
 // --- Base ---
-.el-tabs {
+.el-tabs.el-tabs {
+  --el-tabs-header-height: var(--vt-control-height-lg);
+
   color: #fff;
 
   .el-tabs__header {

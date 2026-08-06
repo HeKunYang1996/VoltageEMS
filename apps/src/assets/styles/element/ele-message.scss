@@ -13,7 +13,14 @@
     justify-content: center;
   }
 
-  .el-message-box {
+  .el-message-box.el-message-box {
+    --el-messagebox-bg-color: var(--vt-message-box-bg);
+    --el-messagebox-title-color: var(--vt-text-primary);
+    --el-messagebox-width: 4.5rem;
+    --el-messagebox-font-size: var(--vt-font-size-base);
+    --el-messagebox-font-line-height: var(--vt-line-height-relaxed);
+    --el-messagebox-padding-primary: var(--vt-space-3);
+
     width: 4.5rem;
     padding: 0.12rem;
     background-color: var(--vt-message-box-bg);
@@ -71,7 +78,13 @@
 // ============================================
 
 // --- Message base ---
-.el-message {
+.el-message.el-message {
+  --el-message-bg-color: rgba(33, 44, 73, 0.96);
+  --el-message-border-color: var(--vt-border-color);
+  --el-message-close-size: var(--vt-font-size-md);
+  --el-message-close-icon-color: var(--vt-text-secondary);
+  --el-message-close-hover-color: var(--vt-text-primary);
+
   top: 1rem;
   gap: 0.08rem;
   padding: 0.11rem 0.15rem;

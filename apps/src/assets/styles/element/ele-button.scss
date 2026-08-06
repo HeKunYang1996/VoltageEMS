@@ -6,6 +6,20 @@
 // el-button
 // ==============================
 .el-button.el-button {
+  --el-button-font-weight: var(--vt-font-weight-normal);
+  --el-button-border-color: transparent;
+  --el-button-bg-color: var(--vt-bg-hover);
+  --el-button-text-color: var(--vt-text-primary);
+  --el-button-disabled-text-color: var(--vt-text-disabled);
+  --el-button-disabled-bg-color: var(--vt-bg-muted);
+  --el-button-disabled-border-color: transparent;
+  --el-button-hover-text-color: var(--vt-text-primary);
+  --el-button-hover-bg-color: var(--vt-color-hover);
+  --el-button-hover-border-color: transparent;
+  --el-button-active-text-color: var(--vt-text-primary);
+  --el-button-active-bg-color: rgba(255, 255, 255, 0.12);
+  --el-button-active-border-color: transparent;
+
   // ---- Base ----
   min-height: var(--vt-control-height);
   padding: var(--vt-button-padding);
@@ -170,7 +184,7 @@
 // ==============================
 // el-button-group
 // ==============================
-.el-button-group {
+.el-button-group.el-button-group {
   display: inline-flex;
 
   .el-button {
@@ -191,4 +205,3 @@
     font-size: var(--vt-font-size-base);
   }
 }
-

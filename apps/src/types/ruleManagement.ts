@@ -31,6 +31,10 @@ export interface RuleInfo {
   notification?: string[]
   enabled: boolean
   description?: string
+  /** Resolved from the current device/point configuration by alarm service. */
+  device_name: string | null
+  point_name: string | null
+  unit: string | null
   created_at: number
   updated_at?: number
 }
@@ -44,10 +48,8 @@ export interface RuleResponse {
   total: number
 }
 
-export interface RuleDetailResponse {
-  list: RuleInfo[]
-  total: number
-}
+/** GET /alarmApi/rules/{id} returns a single RuleInfo, unlike the list endpoint. */
+export type RuleDetailResponse = RuleInfo
 
 /** PUT /alarmApi/rules/{id} — all fields optional. */
 export interface UpdateAlarmRulePayload {

@@ -13,7 +13,7 @@ export interface RuleSnapshot {
 export interface CurrentAlarmData {
   id: number
   rule_id: number
-  rule_snapshot: string // API 杩斿洖 JSON 瀛楃涓?  service_type: string
+  rule_snapshot: RuleSnapshot // 触发时的规则快照（对象）
   channel_id: number
   data_type: string
   point_id: number
@@ -24,13 +24,17 @@ export interface CurrentAlarmData {
   current_value: number | string
   status: 'active' | 'inactive'
   triggered_at: number
+  /** Names and unit are snapshots captured when the alarm was triggered. */
+  device_name: string | null
+  point_name: string | null
+  unit: string | null
 }
 
 // 鍘嗗彶鍛婅鏁版嵁绫诲瀷
 export interface HistoryAlarmData {
   id: number
   rule_id: number
-  rule_snapshot: string // API 杩斿洖 JSON 瀛楃涓?  service_type: string
+  rule_snapshot: RuleSnapshot // 触发时的规则快照（对象）
   channel_id: number
   data_type: string
   point_id: number
@@ -44,14 +48,22 @@ export interface HistoryAlarmData {
   triggered_at: number
   recovered_at?: number
   duration?: number
+  /** Names and unit are snapshots captured when the alarm was triggered. */
+  device_name: string | null
+  point_name: string | null
+  unit: string | null
 }
 export interface CurrentAlarmResponse {
   list: CurrentAlarmData[]
   total: number
+  page: number
+  page_size: number
 }
 export interface HistoryAlarmResponse {
   list: HistoryAlarmData[]
   total: number
+  page: number
+  page_size: number
 }
 // 鍛婅绾у埆鏋氫妇
 export enum AlarmLevel {

@@ -4,7 +4,17 @@
 @use './_select-trigger.scss' as select-trigger;
 
 // --- Base ---
-.el-pagination {
+.el-pagination.el-pagination {
+  --el-pagination-font-size: var(--vt-font-size-base);
+  --el-pagination-bg-color: transparent;
+  --el-pagination-text-color: var(--vt-text-primary);
+  --el-pagination-button-color: var(--vt-text-primary);
+  --el-pagination-button-bg-color: transparent;
+  --el-pagination-button-disabled-color: var(--vt-text-disabled);
+  --el-pagination-button-disabled-bg-color: transparent;
+  --el-pagination-hover-color: var(--vt-color-primary);
+  --el-pagination-font-size-small: var(--vt-font-size-sm);
+
   display: flex;
   align-items: center;
   justify-content: flex-end;

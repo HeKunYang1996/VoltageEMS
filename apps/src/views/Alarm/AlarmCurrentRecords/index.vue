@@ -7,7 +7,7 @@
           <el-form :model="filters" :inline="true" class="test-form alarm-records__toolbar-form vt-toolbar-form">
             <el-form-item label="Alarm Level:">
               <el-select v-model="filters.warning_level" clearable placeholder="Please select level"
-                :append-to="toolbarLeftRef">
+                :append-to="toolbarLeftRef" style="width: 2.4rem">
                 <el-option label="Critical Alarm" :value="1" />
                 <el-option label="Warning Alarm" :value="2" />
                 <el-option label="Info Alarm" :value="3" />
@@ -17,9 +17,9 @@
         </div>
 
         <div class="alarm-records__toolbar-right vt-toolbar__right">
-          <IconButton type="warning" :icon="reloadIcon" text="Reload" custom-class="alarm-records__export-btn"
+          <IconButton type="warning" :icon="reloadIcon" text="Reload" custom-class="alarm-records__btn"
             @click="reloadFilters" />
-          <IconButton type="primary" :icon="searchIcon" text="Search" custom-class="alarm-records__export-btn"
+          <IconButton type="primary" :icon="searchIcon" text="Search" custom-class="alarm-records__btn"
             @click="fetchTableData(true)" />
         </div>
       </div>
@@ -27,20 +27,29 @@
       <!-- table -->
       <div class="alarm-records__table vt-table-shell">
         <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
-          <el-table-column prop="rule_name" label="Name" min-width="1.2rem" class-name="table-ellipsis" />
-          <el-table-column prop="channel_id" label="Channel ID" min-width="1.2rem" class-name="table-ellipsis" />
-          <el-table-column prop="warning_level" label="Level" min-width="1rem">
-            <template #default="scope">
-              <span class="alarm-records__table-level-text" :class="`alarm-level--${scope.row.warning_level}`">
-                {{ levelTextList[scope.row.warning_level as 1 | 2 | 3] || '-' }}
+          <el-table-column prop="rule_name" label="Rule Name" :min-width="160" show-overflow-tooltip />
+          <el-table-column prop="warning_level" label="Alarm Level" :width="160">
+            <template #default="{ row }">
+              <span class="alarm-records__table-level-text" :class="`alarm-level--${row.warning_level}`">
+                {{ levelTextList[row.warning_level as 1 | 2 | 3] || '-' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="triggered_at" label="Start Time" min-width="1.2rem" class-name="table-ellipsis">
+          <el-table-column label="Device Name" :min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.device_name || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="Point Name" :min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.point_name || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="Trigger Value" :min-width="140">
+            <template #default="{ row }">{{ formatValue(row.current_value, row.unit) }}</template>
+          </el-table-column>
+          <el-table-column label="Condition" :min-width="140">
+            <template #default="{ row }">{{ formatCondition(row) }}</template>
+          </el-table-column>
+          <el-table-column label="Triggered Time" :min-width="180">
             <template #default="{ row }">
-              <span class="table-ellipsis__text vt-ellipsis">{{
-                formatDateTime(row.triggered_at)
-                }}</span>
+              <span>{{ formatDateTime(row.triggered_at) }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -73,6 +82,24 @@ const toolbarLeftRef = ref<HTMLElement | null>(null)
 const tableConfig: TableConfig = {
   listUrl: '/alarmApi/alerts',
   defaultPageSize: 20,
+}
+
+// format trigger value with unit
+const formatValue = (value: number | string | null | undefined, unit?: string | null): string => {
+  if (value === null || value === undefined || value === '') return '-'
+  const v = typeof value === 'number' ? value : Number(value)
+  const num = Number.isFinite(v) ? v : value
+  return unit ? `${num} ${unit}` : String(num)
+}
+
+// format condition with unit
+const formatCondition = (row: CurrentAlarmData): string => {
+  const op = row.operator
+  const threshold = row.threshold_value
+  if (!op || threshold === null || threshold === undefined) return '-'
+  const t = typeof threshold === 'number' ? threshold : Number(threshold)
+  const val = Number.isFinite(t) ? t : threshold
+  return row.unit ? `${op} ${val} ${row.unit}` : `${op} ${val}`
 }
 
 // use useTableData composable
@@ -117,17 +144,14 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
     }
 
     .alarm-records__toolbar-right {
-      gap: 0.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.16rem;
 
-      .alarm-records__export-btn {
+      .alarm-records__btn {
         display: flex;
         align-items: center;
         gap: 0.1rem;
-
-        .alarm-records__export-icon {
-          width: 0.16rem;
-          height: 0.16rem;
-        }
       }
     }
   }
@@ -144,6 +168,19 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 
   :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
+    margin-right: 0.2rem;
+  }
+
+  .alarm-level--1 {
+    color: var(--vt-color-level-critical);
+  }
+
+  .alarm-level--2 {
+    color: var(--vt-color-level-warning);
+  }
+
+  .alarm-level--3 {
+    color: var(--vt-color-level-info);
   }
 }
 </style>

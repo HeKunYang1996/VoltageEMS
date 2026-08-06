@@ -3,7 +3,13 @@
 // ============================================
 
 // --- Base ---
-.el-radio {
+.el-radio.el-radio {
+  --el-radio-font-size: var(--vt-font-size-base);
+  --el-radio-text-color: var(--vt-text-primary);
+  --el-radio-input-border-color: var(--vt-border-color);
+  --el-radio-input-bg-color: transparent;
+  --el-radio-input-border-color-hover: var(--vt-color-primary);
+
   display: inline-flex;
   align-items: center;
   height: 0.32rem;
@@ -245,4 +251,3 @@
     }
   }
 }
-

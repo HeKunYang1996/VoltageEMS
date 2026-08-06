@@ -46,6 +46,17 @@
 
 // ---------- Popper (teleported) ----------
 .el-picker__popper.el-popper.is-light {
+  --el-datepicker-border-color: var(--vt-border-color);
+  --el-datepicker-inner-border-color: var(--vt-border-color-soft);
+  --el-datepicker-inrange-bg-color: var(--vt-bg-elevated);
+  --el-datepicker-inrange-hover-bg-color: var(--vt-bg-hover);
+  --el-datepicker-active-color: var(--vt-color-primary);
+  --el-datepicker-hover-text-color: var(--vt-color-primary);
+  --el-datepicker-text-color: var(--vt-text-primary);
+  --el-datepicker-off-text-color: var(--vt-text-disabled);
+  --el-datepicker-header-text-color: var(--vt-text-primary);
+  --el-datepicker-icon-color: var(--vt-text-secondary);
+
   @include popper.vt-popper-glass;
   border-radius: 0;
   background-color: var(--vt-picker-popper-bg);

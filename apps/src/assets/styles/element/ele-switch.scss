@@ -3,7 +3,11 @@
 // ============================================
 
 // --- Base ---
-.el-switch {
+.el-switch.el-switch {
+  --el-switch-on-color: var(--vt-color-primary);
+  --el-switch-off-color: var(--vt-bg-muted);
+  --el-switch-border-color: var(--vt-border-color);
+
   display: inline-flex;
   align-items: center;
   position: relative;

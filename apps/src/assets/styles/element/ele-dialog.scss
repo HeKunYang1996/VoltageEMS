@@ -24,7 +24,7 @@
     --el-dialog-font-line-height: var(--vt-line-height-relaxed);
     --el-dialog-padding-primary: var(--vt-space-5);
 
-    
+
     display: flex;
     flex-direction: column;
     padding: 0.2rem;
@@ -36,135 +36,155 @@
     border: 0.01rem solid;
     border-image: var(--vt-border-gradient-popper);
     overflow: hidden;
+
+    // ---- State: fullscreen ----
+    &.is-fullscreen {
+      width: 100vw;
+      height: 100vh;
+      max-width: 100vw;
+      max-height: 100vh;
+      margin: 0;
+      padding: 0;
+      border-radius: 0;
+      box-shadow: 0 0.04rem 0.1rem rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(0.2rem);
+      background: var(--vt-bg-page);
+      border: 0.01rem solid;
+      border-image: var(--vt-border-gradient-popper);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+
+      .el-dialog__header {
+        margin: 0;
+        padding: 0.2rem 0.24rem;
+        color: var(--vt-text-primary);
+        font-size: 0.24rem;
+      }
+
+      .el-dialog__close {
+        color: var(--vt-text-primary);
+      }
+
+      .el-dialog__body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        padding: 0.2rem 0.2rem 0;
+
+        .el-dialog--form & {
+          padding: 0.24rem 0.24rem 0.12rem;
+        }
+
+        &::-webkit-scrollbar {
+          width: 0.06rem;
+        }
+
+        &::-webkit-scrollbar-track {
+          background: var(--vt-scrollbar-track-light);
+          border-radius: 0.03rem;
+        }
+
+        &::-webkit-scrollbar-thumb {
+          background: var(--vt-scrollbar-thumb-light);
+          border-radius: 0.03rem;
+
+          &:hover {
+            background: var(--vt-scrollbar-thumb-light-hover);
+          }
+        }
+      }
+    }
+
+    .el-dialog__header {
+      padding: 0.2rem 0.24rem;
+      background: transparent;
+      border-bottom: none;
+      position: relative;
+
+      .el-dialog__title {
+        margin: 0;
+        color: var(--vt-text-primary);
+        font-size: 0.18rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .el-dialog__headerbtn {
+        top: 0.05rem;
+        right: 0.15rem;
+        width: 0.48rem;
+        height: 0.48rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+
+        .el-dialog__close {
+          color: var(--vt-text-primary);
+          font-size: 0.16rem;
+          font-weight: bold;
+        }
+      }
+
+    }
+
+    .el-dialog__body {
+      flex: 1;
+      min-height: 0;
+      padding: 0 0.2rem;
+      background: transparent;
+
+      .el-dialog--form & {
+        padding: 0.24rem 0.24rem 0.12rem;
+      }
+
+      // .el-table {
+
+      //   th.el-table-fixed-column--right,
+      //   td.el-table-fixed-column--right {
+      //     background-color: var(--vt-dialog-fixed-bg);
+      //   }
+
+      //   .el-table__row:hover {
+      //     background: var(--vt-dialog-row-hover-bg);
+
+      //     .el-table-fixed-column--right {
+      //       background: var(--vt-dialog-row-hover-bg);
+      //     }
+      //   }
+      // }
+
+      &::-webkit-scrollbar {
+        width: 0.06rem;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: var(--vt-scrollbar-track-light);
+        border-radius: 0.03rem;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: var(--vt-scrollbar-thumb-light);
+        border-radius: 0.03rem;
+
+        &:hover {
+          background: var(--vt-scrollbar-thumb-light-hover);
+        }
+      }
+    }
+
+    .el-dialog__footer {
+      margin: 0 0.2rem;
+      padding: 0.4rem 0 0.2rem;
+      background: transparent;
+      border-top: 0.01rem solid var(--vt-border-color-soft);
+      display: flex;
+      justify-content: flex-end;
+    }
   }
+
+
 }
 
 // ---- Dialog elements ----
-.el-dialog__header {
-  padding: 0.2rem 0.24rem;
-  background: transparent;
-  border-bottom: none;
-  position: relative;
-}
-
-.el-dialog__title {
-  margin: 0;
-  color: var(--vt-text-primary);
-  font-size: 0.18rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.el-dialog__headerbtn {
-  top: 0.05rem;
-  right: 0.15rem;
-  width: 0.48rem;
-  height: 0.48rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-}
-
-.el-dialog__close {
-  color: var(--vt-text-primary);
-  font-size: 0.16rem;
-  font-weight: bold;
-}
-
-.el-dialog__body {
-  flex: 1;
-  min-height: 0;
-  padding: 0 0.2rem;
-  background: transparent;
-
-  .el-dialog--form & {
-    padding: 0.24rem 0.24rem 0.12rem;
-  }
-
-  .el-table {
-    th.el-table-fixed-column--right,
-    td.el-table-fixed-column--right {
-      background-color: var(--vt-dialog-fixed-bg);
-    }
-
-    .el-table__row:hover {
-      background: var(--vt-dialog-row-hover-bg);
-      .el-table-fixed-column--right {
-        background: var(--vt-dialog-row-hover-bg);
-      }
-    }
-  }
-
-  &::-webkit-scrollbar { width: 0.06rem; }
-  &::-webkit-scrollbar-track {
-    background: var(--vt-scrollbar-track-light);
-    border-radius: 0.03rem;
-  }
-  &::-webkit-scrollbar-thumb {
-    background: var(--vt-scrollbar-thumb-light);
-    border-radius: 0.03rem;
-    &:hover { background: var(--vt-scrollbar-thumb-light-hover); }
-  }
-}
-
-.el-dialog__footer {
-  margin: 0 0.2rem;
-  padding: 0.4rem 0 0.2rem;
-  background: transparent;
-  border-top: 0.01rem solid var(--vt-border-color-soft);
-  display: flex;
-  justify-content: flex-end;
-}
-
-// ---- State: fullscreen ----
-.el-dialog.is-fullscreen {
-  width: 100vw;
-  height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
-  margin: 0;
-  padding: 0;
-  border-radius: 0;
-  box-shadow: 0 0.04rem 0.1rem rgba(0, 0, 0, 0.25);
-  backdrop-filter: blur(0.2rem);
-  background: var(--vt-bg-page);
-  border: 0.01rem solid;
-  border-image: var(--vt-border-gradient-popper);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-
-  .el-dialog__header {
-    margin: 0;
-    padding: 0.2rem 0.24rem;
-    color: var(--vt-text-primary);
-    font-size: 0.24rem;
-  }
-
-  .el-dialog__close {
-    color: var(--vt-text-primary);
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: auto;
-    padding: 0.2rem 0.2rem 0;
-
-    .el-dialog--form & {
-      padding: 0.24rem 0.24rem 0.12rem;
-    }
-
-    &::-webkit-scrollbar { width: 0.06rem; }
-    &::-webkit-scrollbar-track {
-      background: var(--vt-scrollbar-track-light);
-      border-radius: 0.03rem;
-    }
-    &::-webkit-scrollbar-thumb {
-      background: var(--vt-scrollbar-thumb-light);
-      border-radius: 0.03rem;
-      &:hover { background: var(--vt-scrollbar-thumb-light-hover); }
-    }
-  }
-}

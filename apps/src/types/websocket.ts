@@ -122,8 +122,14 @@ export interface AlarmMessage extends WebSocketMessage {
   type: 'alarm'
   data: {
     alarm_id: string
-    channel_id: number
+    /** The alarm push contract keeps the channel id in `device` as a string. */
+    device: string
+    device_name: string | null
     point_id: number
+    point_name: string | null
+    /** Kept for consumers of older alarm push payloads. */
+    channel_id?: number
+    unit?: string | null
     status: AlarmStatus
     level: AlarmLevel
     value: number
