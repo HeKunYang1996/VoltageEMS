@@ -40,6 +40,7 @@ chrono = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
+common = { path = "../common" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 criterion = { workspace = true }
 
