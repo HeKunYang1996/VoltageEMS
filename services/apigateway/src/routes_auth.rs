@@ -61,11 +61,25 @@ fn require_admin(
     headers: &HeaderMap,
 ) -> Result<crate::auth::Claims, (StatusCode, Json<Value>)> {
     let claims = require_auth(state, headers)?;
-    let role = claims.role.as_deref().unwrap_or("");
-    if role != "Admin" {
+    if claims.role.as_deref() != Some("Admin") {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({"success": false, "message": "Admin privileges required"})),
+        ));
+    }
+    Ok(claims)
+}
+
+fn require_engineer(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Claims, (StatusCode, Json<Value>)> {
+    let claims = require_auth(state, headers)?;
+    let role = claims.role.as_deref().unwrap_or("");
+    if role != "Admin" && role != "Engineer" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"success": false, "message": "Engineer or Admin privileges required"})),
         ));
     }
     Ok(claims)
@@ -506,17 +520,21 @@ pub async fn get_roles(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
 // ── GET /api/v1/auth/users ────────────────────────────────────────────────────
 
-/// List all users (admin view).
+/// List all users (admin only).
 ///
 /// Returns each user's basic info, role, last login timestamp, and activation
 /// status. **Password hashes are stripped** from the response. Used for the
-/// admin user-management UI. Note: the current implementation permits any
-/// authenticated user to call this endpoint (restricting to Admin is a known
-/// TODO).
+/// admin user-management UI. Requires Admin role.
 #[utoipa::path(get, path = "/api/v1/auth/users", tag = "Auth",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "User list (admin view)")))]
-pub async fn get_all_users(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    responses((status = 200, description = "User list (admin view)"), (status = 403, description = "Admin required")))]
+pub async fn get_all_users(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_admin(&state, &headers) {
+        return e.into_response();
+    }
     match db::get_all_users_with_roles(&state.db).await {
         Ok(users) => {
             // Strip password hashes
@@ -880,6 +898,51 @@ pub async fn validate_token(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     match require_auth(&state, &headers) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err((status, _)) => status.into_response(),
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/auth/validate/engineer", tag = "Auth",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Token valid and role is Engineer or Admin"),
+        (status = 401, description = "Missing or invalid token"),
+        (status = 403, description = "Viewer role — insufficient privileges")
+    ))]
+/// nginx `auth_request` guard — Engineer or Admin role required.
+///
+/// Returns 200 if the token is valid and the role is Admin or Engineer.
+/// Returns 401 for missing/invalid tokens, 403 for Viewer accounts.
+/// nginx uses this for write operations on backend services (POST/PUT/DELETE
+/// on /modApi/, /comApi/, etc.) so those services need no role-awareness.
+pub async fn validate_engineer_token(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    match require_engineer(&state, &headers) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err((status, _)) => status.into_response(),
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/auth/validate/admin", tag = "Auth",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Token valid and role is Admin"),
+        (status = 401, description = "Missing or invalid token"),
+        (status = 403, description = "Non-admin role — insufficient privileges")
+    ))]
+/// nginx `auth_request` guard — Admin role only.
+///
+/// Returns 200 only for Admin tokens. 401 for invalid tokens, 403 for all
+/// non-admin roles. Used by nginx for system-level routes that should be
+/// locked down to administrators.
+pub async fn validate_admin_token(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    match require_admin(&state, &headers) {
         Ok(_) => StatusCode::OK.into_response(),
         Err((status, _)) => status.into_response(),
     }

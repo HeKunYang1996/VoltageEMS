@@ -4,4 +4,4 @@
 mod discovery;
 
 #[cfg(feature = "modbus")]
-pub use discovery::{CANDIDATE_BASES, connect_modbus, discover_models};
+pub use discovery::{CANDIDATE_BASES, connect_modbus, discover_models, read_sf_registers};

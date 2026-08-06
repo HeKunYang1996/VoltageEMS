@@ -24,8 +24,8 @@ use tracing::{error, info, warn};
 use voltage_rtdb::Rtdb;
 
 use crate::models::{
-    CommandReply, InstSyncItem, InstSyncReply, ReadReply, ReadReplyProperty, ReadRequest,
-    StatusPayload, WriteReply, WriteRequest,
+    CommandReply, InstSyncItem, InstSyncProperty, InstSyncReply, ReadReply, ReadReplyProperty,
+    ReadRequest, StatusPayload, WriteReply, WriteRequest,
 };
 use crate::state::AppState;
 
@@ -501,7 +501,7 @@ async fn handle_inst_sync(state: Arc<AppState>, payload: Bytes) {
 /// HTTP-triggered calls.
 pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyhow::Result<()> {
     let modsrv_url = state.config.read().await.modsrv_url.clone();
-    let url = format!("{}/api/instances?page_size=100", modsrv_url);
+    let url = format!("{}/api/instances/properties", modsrv_url);
 
     let list = match state.http_client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
@@ -519,10 +519,29 @@ pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyho
                         let instance_id = item.get("instance_id")?.as_i64()?;
                         let instance_name = item.get("instance_name")?.as_str()?.to_string();
                         let product_name = item.get("product_name")?.as_str()?.to_string();
+                        let property = item
+                            .get("property")
+                            .and_then(|p| p.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|entry| {
+                                        Some(InstSyncProperty {
+                                            id: entry.get("id")?.as_str()?.to_string(),
+                                            value: entry
+                                                .get("value")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         Some(InstSyncItem {
                             instance_id,
                             instance_name,
                             product_name,
+                            property,
                         })
                     })
                     .collect::<Vec<_>>()

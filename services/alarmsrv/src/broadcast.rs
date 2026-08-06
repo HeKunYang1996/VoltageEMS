@@ -23,7 +23,18 @@ impl Broadcaster {
         }
     }
 
-    pub async fn send_alarm_triggered(&self, alert_id: i64, rule: &AlertRule, current_value: f64) {
+    /// `device_name`/`point_name` are resolved by the caller (see
+    /// `device_names::resolve_for_rule`) and added alongside the existing
+    /// `device` field (which stays the raw channel/instance id, unchanged,
+    /// so existing consumers keyed off it don't break).
+    pub async fn send_alarm_triggered(
+        &self,
+        alert_id: i64,
+        rule: &AlertRule,
+        current_value: f64,
+        device_name: Option<&str>,
+        point_name: Option<&str>,
+    ) {
         let ts = Utc::now().timestamp();
         let payload = serde_json::json!({
             "type": "alarm",
@@ -34,9 +45,11 @@ impl Broadcaster {
                 "service_type": rule.service_type,
                 "source": rule.service_type,
                 "device": rule.channel_id.to_string(),
+                "device_name": device_name,
                 "channel_id": rule.channel_id,
                 "data_type": rule.data_type,
                 "point_id": rule.point_id,
+                "point_name": point_name,
                 "status": 1,
                 "level": rule.warning_level,
                 "value": current_value,
@@ -55,6 +68,8 @@ impl Broadcaster {
         rule: &AlertRule,
         recovery_value: Option<f64>,
         reason: &str,
+        device_name: Option<&str>,
+        point_name: Option<&str>,
     ) {
         let ts = Utc::now().timestamp();
         let (message, value) = match recovery_value {
@@ -77,9 +92,11 @@ impl Broadcaster {
                 "service_type": rule.service_type,
                 "source": rule.service_type,
                 "device": rule.channel_id.to_string(),
+                "device_name": device_name,
                 "channel_id": rule.channel_id,
                 "data_type": rule.data_type,
                 "point_id": rule.point_id,
+                "point_name": point_name,
                 "status": 0,
                 "level": rule.warning_level,
                 "value": value,
@@ -160,9 +177,11 @@ impl Broadcaster {
                         "service_type": rule.service_type,
                         "source": rule.service_type,
                         "device": rule.channel_id.to_string(),
+                        "device_name": alert.device_name,
                         "channel_id": rule.channel_id,
                         "data_type": rule.data_type,
                         "point_id": rule.point_id,
+                        "point_name": alert.point_name,
                         "status": 1,
                         "level": rule.warning_level,
                         "value": alert.current_value,

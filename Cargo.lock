@@ -47,6 +47,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-swagger-ui",
+ "voltage-model",
  "voltage-rtdb",
  "workspace-hack",
 ]

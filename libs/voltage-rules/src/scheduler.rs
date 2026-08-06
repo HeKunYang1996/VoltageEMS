@@ -15,6 +15,7 @@ use crate::logger::RuleLoggerManager;
 use crate::repository;
 use crate::types::Rule;
 use bytes::Bytes;
+use chrono::Utc;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -206,6 +207,58 @@ struct ScheduledRule {
     /// OnChange-specific state (last seen values + last trigger time).
     /// Default for Interval rules; populated only for OnChange rules.
     onchange_state: OnChangeState,
+    /// Fingerprint of the last execution result written to `rule_history`.
+    /// Used to suppress consecutive identical records (e.g. a persistent
+    /// channel-offline failure that retries every 100 ms). A new record is
+    /// written only when the outcome changes OR the repeat timer fires.
+    last_history_fingerprint: Option<String>,
+    /// Wall-clock instant of the last `rule_history` write for this rule.
+    /// Even when the fingerprint is unchanged, a record is written at most
+    /// once per `HISTORY_REPEAT_INTERVAL` to surface "still failing" state.
+    last_history_written: Option<Instant>,
+}
+
+/// Minimum interval between duplicate history writes for the same outcome.
+///
+/// When a rule keeps firing with an identical result (e.g. repeated failure
+/// because a channel is offline), a new `rule_history` row is written at most
+/// once every `HISTORY_REPEAT_INTERVAL` so the table is not flooded while
+/// still showing a periodic "still failing" sentinel.
+const HISTORY_REPEAT_INTERVAL: Duration = Duration::from_secs(3600);
+
+/// Compute a compact fingerprint that uniquely identifies an execution outcome.
+///
+/// Two executions with the same success flag, same error message, and the same
+/// set of action results (target/point/success) produce the same fingerprint
+/// and are considered duplicates for history-dedup purposes.
+fn execution_fingerprint(result: &RuleExecutionResult) -> String {
+    let mut actions: Vec<String> = result
+        .actions_executed
+        .iter()
+        .map(|a| format!("{}-{}-{}", a.target_id, a.point_id, a.success))
+        .collect();
+    actions.sort_unstable();
+    format!(
+        "{}|{}|{}",
+        result.success,
+        result.error.as_deref().unwrap_or(""),
+        actions.join(",")
+    )
+}
+
+/// Return true when an execution result is worth persisting to `rule_history`.
+///
+/// Only records executions that are meaningful to operations staff:
+/// - At least one action was executed (rule actually controlled a device)
+/// - A real engine error occurred (channel offline, expression error,
+///   missing data, ...)
+///
+/// Filtered out (not worth recording): a quiet tick where no branch's
+/// conditions matched and nothing else went wrong — the executor no longer
+/// treats "no branch matched" as an error (see `executor::RuleExecutor::
+/// execute`), so this is just `actions_executed.is_empty() && error.is_none()`.
+fn should_persist_history(result: &RuleExecutionResult) -> bool {
+    !result.actions_executed.is_empty() || result.error.is_some()
 }
 
 // Allow PointWatchDispatcher::rebuild_from_rules to iterate scheduled rules
@@ -442,6 +495,8 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                     last_execution: None,
                     last_cooldown_start: None,
                     onchange_state: OnChangeState::default(),
+                    last_history_fingerprint: None,
+                    last_history_written: None,
                 }
             })
             .collect();
@@ -693,6 +748,9 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
             /// Used to advance OnChange last_value against what executor
             /// actually saw, not the Redis snapshot from phase 0.
             executor_point_values: Arc<HashMap<String, f64>>,
+            /// Execution result forwarded to Phase 3 for fingerprint-based
+            /// history dedup. None when the executor itself returned an Err.
+            exec_result: Option<RuleExecutionResult>,
         }
         let mut updates: Vec<TimestampUpdate> = Vec::with_capacity(execution_results.len());
 
@@ -708,6 +766,8 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                     // Write rule execution result to Redis for WebSocket monitoring
                     self.write_rule_exec_to_redis(outcome.rule_id, &outcome.rule_name, &result)
                         .await;
+                    // History write is deferred to Phase 3 where the fingerprint
+                    // can be checked under the write lock.
 
                     let start_cooldown = result.success && !result.actions_executed.is_empty();
 
@@ -728,6 +788,7 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                         start_cooldown,
                         is_onchange: outcome.is_onchange,
                         executor_point_values,
+                        exec_result: Some(result),
                     });
                 },
                 Err(e) => {
@@ -739,12 +800,18 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                         start_cooldown: false,
                         is_onchange: outcome.is_onchange,
                         executor_point_values: Arc::new(HashMap::new()),
+                        exec_result: None,
                     });
                 },
             }
         }
 
-        // Phase 3: Write lock to update timestamps + onchange state (fast)
+        // Phase 3: Write lock to update timestamps + onchange state + history fingerprint (fast)
+        //
+        // History writes are collected here (under lock) and executed after the
+        // lock is released so the write lock is held for pure in-memory work only.
+        let mut history_to_write: Vec<(i64, RuleExecutionResult)> = Vec::new();
+
         if !updates.is_empty() {
             let mut rules = self.rules.write().await;
             for update in updates {
@@ -788,9 +855,33 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                         }
                         scheduled.onchange_state.last_trigger = Some(now);
                     }
+
+                    // Fingerprint-based history dedup: only record when the
+                    // outcome changes or the repeat timer fires.
+                    if let Some(result) = update.exec_result
+                        && should_persist_history(&result)
+                    {
+                        let fp = execution_fingerprint(&result);
+                        let needs_write = scheduled.last_history_fingerprint.as_deref()
+                            != Some(&fp)
+                            || scheduled
+                                .last_history_written
+                                .map(|t| t.elapsed() >= HISTORY_REPEAT_INTERVAL)
+                                .unwrap_or(true);
+                        if needs_write {
+                            scheduled.last_history_fingerprint = Some(fp);
+                            scheduled.last_history_written = Some(now);
+                            history_to_write.push((update.rule_id, result));
+                        }
+                    }
                 }
             }
         } // Write lock released here (~100μs)
+
+        // Execute history writes after the write lock is released
+        for (rule_id, result) in history_to_write {
+            self.write_rule_history_to_db(rule_id, &result).await;
+        }
 
         Ok(())
     }
@@ -946,6 +1037,85 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
         debug!("Written rule execution result to Redis: {}", rule_id);
     }
 
+    /// Persist rule execution result to `rule_history` table in SQLite.
+    ///
+    /// Callers are responsible for pre-filtering via `should_persist_history()`
+    /// and fingerprint dedup — this function writes unconditionally.
+    ///
+    /// Auto-prunes each rule's history to the latest 500 rows in a background
+    /// task so the table never grows unbounded.
+    async fn write_rule_history_to_db(&self, rule_id: i64, result: &RuleExecutionResult) {
+        let triggered_at = Utc::now().timestamp_millis();
+
+        // Build human-readable display layer (best-effort, never blocks the write)
+        let display = crate::display::build_execution_display(&self.pool, rule_id, result).await;
+
+        let exec_json = serde_json::to_string(&serde_json::json!({
+            "success": result.success,
+            "execution_path": &result.execution_path,
+            "variable_values": *result.variable_values,
+            "actions_executed": &result.actions_executed,
+            "matched_condition": &result.matched_condition,
+            "display": display,
+        }))
+        .ok();
+
+        // The executor's `error` field only covers flow-level interruption
+        // (missing variable, bad formula, no matching branch, ...) — a
+        // rule whose condition matched and whose action write failed (SHM
+        // writer down, RTDB commit failed, target validation rejected the
+        // write) still reports `success = true` with the failure visible
+        // only in `actions_executed[].success`. Callers of this API that
+        // only check the top-level `error` field would silently miss those.
+        // Surface an aggregate error here (persisted column only — the
+        // in-memory `result.error` is left untouched so logger.rs / cooldown
+        // logic downstream keep their existing flow-error-only semantics).
+        let error = result.error.clone().or_else(|| {
+            let failed = result
+                .actions_executed
+                .iter()
+                .filter(|a| !a.success)
+                .count();
+            (failed > 0).then(|| {
+                format!(
+                    "{} of {} action(s) failed to write",
+                    failed,
+                    result.actions_executed.len()
+                )
+            })
+        });
+
+        if let Err(e) = sqlx::query(
+            "INSERT INTO rule_history (rule_id, triggered_at, execution_result, error) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(rule_id)
+        .bind(triggered_at)
+        .bind(exec_json.as_deref())
+        .bind(error.as_deref())
+        .execute(&self.pool)
+        .await
+        {
+            warn!("rule_history write {}: {}", rule_id, e);
+            return;
+        }
+
+        // Prune old records in background (keep latest 500 per rule)
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "DELETE FROM rule_history \
+                 WHERE rule_id = ? \
+                   AND id NOT IN (SELECT id FROM rule_history WHERE rule_id = ? \
+                                  ORDER BY id DESC LIMIT 500)",
+            )
+            .bind(rule_id)
+            .bind(rule_id)
+            .execute(&pool)
+            .await;
+        });
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // PointWatch fast-path execution
     // ──────────────────────────────────────────────────────────────────────
@@ -1035,14 +1205,16 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
         .collect()
         .await;
 
-        // Update onchange_state under write lock
+        // Update onchange_state + fingerprint check under write lock (fast in-memory only).
+        // I/O (Redis + history DB) is collected here and executed after the lock is released.
+        let mut redis_to_write: Vec<(i64, String, RuleExecutionResult)> = Vec::new();
+        let mut history_to_write: Vec<(i64, RuleExecutionResult)> = Vec::new();
+
         if !results.is_empty() {
             let mut rules_w = self.rules.write().await;
             for (idx, rule_id, rule_name, result) in results {
                 match result {
                     Ok(exec_result) => {
-                        self.write_rule_exec_to_redis(rule_id, &rule_name, &exec_result)
-                            .await;
                         if let Some(scheduled) = rules_w.get_mut(idx)
                             && scheduled.rule.id == rule_id
                         {
@@ -1059,7 +1231,24 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                                 }
                                 scheduled.onchange_state.last_trigger = Some(now);
                             }
+
+                            // Fingerprint-based history dedup
+                            if should_persist_history(&exec_result) {
+                                let fp = execution_fingerprint(&exec_result);
+                                let needs_write = scheduled.last_history_fingerprint.as_deref()
+                                    != Some(&fp)
+                                    || scheduled
+                                        .last_history_written
+                                        .map(|t| t.elapsed() >= HISTORY_REPEAT_INTERVAL)
+                                        .unwrap_or(true);
+                                if needs_write {
+                                    scheduled.last_history_fingerprint = Some(fp);
+                                    scheduled.last_history_written = Some(now);
+                                    history_to_write.push((rule_id, exec_result.clone()));
+                                }
+                            }
                         }
+                        redis_to_write.push((rule_id, rule_name, exec_result));
                     },
                     Err(e) => {
                         error!("Watch-triggered rule {} err: {}", rule_id, e);
@@ -1071,6 +1260,15 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
                     },
                 }
             }
+        } // Write lock released
+
+        // I/O outside lock
+        for (rule_id, rule_name, result) in redis_to_write {
+            self.write_rule_exec_to_redis(rule_id, &rule_name, &result)
+                .await;
+        }
+        for (rule_id, result) in history_to_write {
+            self.write_rule_history_to_db(rule_id, &result).await;
         }
 
         Ok(())
@@ -1138,6 +1336,8 @@ mod tests {
             last_execution: None,
             last_cooldown_start: None,
             onchange_state: OnChangeState::default(),
+            last_history_fingerprint: None,
+            last_history_written: None,
         };
 
         // Verify trigger config
@@ -1161,6 +1361,8 @@ mod tests {
             last_execution: None,
             last_cooldown_start: None,
             onchange_state: OnChangeState::default(),
+            last_history_fingerprint: None,
+            last_history_written: None,
         };
 
         let scheduled2 = ScheduledRule {
@@ -1169,6 +1371,8 @@ mod tests {
             last_execution: None,
             last_cooldown_start: None,
             onchange_state: OnChangeState::default(),
+            last_history_fingerprint: None,
+            last_history_written: None,
         };
 
         // Verify they are independent

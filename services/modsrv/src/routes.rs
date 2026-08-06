@@ -15,7 +15,7 @@ use utoipa::OpenApi;
 use crate::app_state::AppState;
 
 // Import handlers from api module
-use crate::api::cloud_sync::export_instances;
+use crate::api::cloud_sync::{export_instances, list_instances_properties};
 use crate::api::health_handlers::health_check;
 use crate::api::product_handlers::{get_product_points, list_products};
 
@@ -48,6 +48,10 @@ use crate::api::single_point_handlers::{
 };
 
 use crate::api::property_handlers::{delete_property, upsert_property};
+
+use crate::api::topology_handlers::{
+    get_channel_bindings, get_instance_channel_summary, get_station_topology, put_station_topology,
+};
 
 use common::admin_api::{get_log_level, list_log_files, set_log_level, view_log_file};
 
@@ -94,8 +98,14 @@ use common::admin_api::{get_log_level, list_log_files, set_log_level, view_log_f
         crate::api::global_routing_handlers::delete_channel_routing_handler,
         crate::api::product_handlers::list_products,
         crate::api::product_handlers::get_product_points,
+        // Station topology endpoints
+        crate::api::topology_handlers::get_station_topology,
+        crate::api::topology_handlers::put_station_topology,
+        crate::api::topology_handlers::get_channel_bindings,
+        crate::api::topology_handlers::get_instance_channel_summary,
         // Cloud sync endpoints
         crate::api::cloud_sync::export_instances,
+        crate::api::cloud_sync::list_instances_properties,
         // Admin endpoints
         common::admin_api::set_log_level,
         common::admin_api::get_log_level
@@ -122,13 +132,16 @@ use common::admin_api::{get_log_level, list_log_files, set_log_level, view_log_f
             crate::config::PropertyTemplate,
             // Admin schemas
             common::admin_api::SetLogLevelRequest,
-            common::admin_api::LogLevelResponse
+            common::admin_api::LogLevelResponse,
+            // Topology schemas
+            crate::api::topology_handlers::SaveTopologyRequest
         )
     ),
     tags(
         (name = "modsrv", description = "Model Service API"),
         (name = "products", description = "Product template management (read-only)"),
-        (name = "admin", description = "Administration and service management")
+        (name = "admin", description = "Administration and service management"),
+        (name = "topology", description = "Station visual topology and channel bindings")
     )
 )]
 pub struct ModsrvApiDoc;
@@ -213,11 +226,27 @@ pub fn create_routes(state: Arc<AppState>) -> Router {
         .route("/api/routing/instances/{id}", axum::routing::delete(global_delete_instance_routing))
         .route("/api/routing/channels/{channel_id}", axum::routing::delete(delete_channel_routing_handler))
 
+        // Station topology endpoints (PCManagement visual modeling + channel-bindings)
+        .route(
+            "/api/station/topology",
+            get(get_station_topology).put(put_station_topology),
+        )
+        .route(
+            "/api/station/topology/channel-bindings",
+            get(get_channel_bindings),
+        )
+        // Instance channel summary (PCManagement helper — auto-fill channelIds)
+        .route(
+            "/api/instances/{id}/channel-summary",
+            get(get_instance_channel_summary),
+        )
+
         // Product management endpoints (read-only)
         .route("/api/products", get(list_products))
         .route("/api/products/{product_name}/points", get(get_product_points))
         // Cloud sync endpoints
         .route("/api/instances/export", get(export_instances))
+        .route("/api/instances/properties", get(list_instances_properties))
         // Admin endpoints (log level + file access)
         .route(
             "/api/admin/logs/level",

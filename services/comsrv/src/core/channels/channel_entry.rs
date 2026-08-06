@@ -493,7 +493,7 @@ impl<R: Rtdb + 'static> ChannelEntry<R> {
 
 /// Parse reconnection policy from channel parameters.
 ///
-/// Supports: reconnect_max_attempts, reconnect_initial_delay_ms,
+/// Supports: reconnect_max_attempts, reconnect_initial_delay_ms (or retry_interval_ms),
 ///           reconnect_max_delay_ms, reconnect_backoff_multiplier
 fn parse_reconnect_policy(
     params: &std::collections::HashMap<String, serde_json::Value>,
@@ -507,6 +507,7 @@ fn parse_reconnect_policy(
     let initial_delay_ms = params
         .get("reconnect_initial_delay_ms")
         .and_then(|v| v.as_u64())
+        .or_else(|| params.get("retry_interval_ms").and_then(|v| v.as_u64()))
         .unwrap_or(1000);
 
     let max_delay_ms = params
@@ -569,5 +570,32 @@ mod tests {
     fn freshness_windows_scale_for_slow_polling() {
         assert_eq!(data_freshness_timeout_ms(120_000), 360_000);
         assert_eq!(first_poll_grace_ms(120_000), 240_000);
+    }
+
+    #[test]
+    fn retry_interval_is_reconnect_initial_delay_alias() {
+        let params = std::collections::HashMap::from([(
+            "retry_interval_ms".to_string(),
+            serde_json::json!(2000),
+        )]);
+
+        let policy = parse_reconnect_policy(&params);
+
+        assert_eq!(policy.initial_delay, std::time::Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn reconnect_initial_delay_takes_precedence_over_retry_interval() {
+        let params = std::collections::HashMap::from([
+            (
+                "reconnect_initial_delay_ms".to_string(),
+                serde_json::json!(500),
+            ),
+            ("retry_interval_ms".to_string(), serde_json::json!(2000)),
+        ]);
+
+        let policy = parse_reconnect_policy(&params);
+
+        assert_eq!(policy.initial_delay, std::time::Duration::from_millis(500));
     }
 }

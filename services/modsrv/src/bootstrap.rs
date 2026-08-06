@@ -237,6 +237,22 @@ where
     .execute(sqlite_pool)
     .await?;
 
+    // Station visual modeling topology (one row per station, upsert semantics)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS station_topology (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            station_id   TEXT NOT NULL UNIQUE DEFAULT 'station',
+            station_name TEXT NOT NULL DEFAULT 'Edge Station',
+            description  TEXT,
+            gateway_id   TEXT,
+            flow_json    TEXT NOT NULL,
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(sqlite_pool)
+    .await?;
+
     if products_dir.is_some() {
         info!(
             "{} products loaded (with external overrides)",

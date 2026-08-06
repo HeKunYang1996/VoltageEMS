@@ -774,7 +774,45 @@ impl ModbusChannel {
 
     #[cfg(feature = "modbus")]
     fn create_rtu_client(&self) -> Result<ModbusClientWrapper> {
-        match RtuTransport::new(&self.config.rtu_device, self.config.baud_rate) {
+        use tokio_serial::{DataBits, Parity, StopBits};
+
+        let data_bits = match self.config.data_bits {
+            7 => DataBits::Seven,
+            8 => DataBits::Eight,
+            value => {
+                return Err(GatewayError::Config(format!(
+                    "Invalid Modbus RTU data_bits: {value}; expected 7 or 8"
+                )));
+            },
+        };
+        let stop_bits = match self.config.stop_bits {
+            1 => StopBits::One,
+            2 => StopBits::Two,
+            value => {
+                return Err(GatewayError::Config(format!(
+                    "Invalid Modbus RTU stop_bits: {value}; expected 1 or 2"
+                )));
+            },
+        };
+        let parity = match self.config.parity.to_ascii_lowercase().as_str() {
+            "none" => Parity::None,
+            "even" => Parity::Even,
+            "odd" => Parity::Odd,
+            value => {
+                return Err(GatewayError::Config(format!(
+                    "Invalid Modbus RTU parity: {value}; expected none, even, or odd"
+                )));
+            },
+        };
+
+        match RtuTransport::new_with_config(
+            &self.config.rtu_device,
+            self.config.baud_rate,
+            data_bits,
+            stop_bits,
+            parity,
+            self.config.io_timeout,
+        ) {
             Ok(mut transport) => {
                 let callback = create_packet_callback(
                     self.log_context.clone(),
@@ -1116,11 +1154,17 @@ mod tests {
     #[cfg(feature = "modbus")]
     #[test]
     fn test_rtu_config() {
-        let config = ModbusChannelConfig::rtu("/dev/ttyUSB0", 9600);
+        let config = ModbusChannelConfig::rtu("/dev/ttyUSB0", 9600)
+            .with_serial_format(8, 2, "even")
+            .with_io_timeout(Duration::from_millis(2500));
 
         assert_eq!(config.connection_mode, ConnectionMode::Rtu);
         assert_eq!(config.rtu_device, "/dev/ttyUSB0");
         assert_eq!(config.baud_rate, 9600);
+        assert_eq!(config.data_bits, 8);
+        assert_eq!(config.stop_bits, 2);
+        assert_eq!(config.parity, "even");
+        assert_eq!(config.io_timeout, Duration::from_millis(2500));
 
         let channel = ModbusChannel::new(config, 1, "test_rtu".to_string());
         assert_eq!(ProtocolCapabilities::name(&channel), "Modbus RTU");

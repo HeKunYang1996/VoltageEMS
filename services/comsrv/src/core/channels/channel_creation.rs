@@ -22,7 +22,9 @@ use voltage_rtdb::Rtdb;
 #[cfg(feature = "modbus")]
 use crate::core::channels::converters::convert_to_modbus_point_configs;
 #[cfg(feature = "modbus")]
-use crate::core::channels::factory::{create_modbus_channel, create_modbus_rtu_channel};
+use crate::core::channels::factory::{
+    RtuSerialFormat, create_modbus_channel, create_modbus_rtu_channel,
+};
 
 #[cfg(all(target_os = "linux", feature = "gpio"))]
 use crate::core::channels::factory::create_gpio_channel;
@@ -448,14 +450,38 @@ impl<R: Rtdb + 'static> ChannelManager<R> {
                 );
                 9600
             });
+        let data_bits = params
+            .get("data_bits")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u8)
+            .unwrap_or(8);
+        let stop_bits = params
+            .get("stop_bits")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u8)
+            .unwrap_or(1);
+        let parity = params
+            .get("parity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none");
 
         let io_timeout_ms = params.get("read_timeout_ms").and_then(|v| v.as_u64());
         if let Some(timeout) = io_timeout_ms {
             debug!("Ch{} using read_timeout_ms: {}ms", channel_id, timeout);
         }
 
-        let mut protocol =
-            create_modbus_rtu_channel(channel_id, device, baud_rate, point_configs, io_timeout_ms);
+        let mut protocol = create_modbus_rtu_channel(
+            channel_id,
+            device,
+            baud_rate,
+            RtuSerialFormat {
+                data_bits,
+                stop_bits,
+                parity,
+            },
+            point_configs,
+            io_timeout_ms,
+        );
 
         let log_handler = Self::configure_channel_logging(
             &mut protocol,

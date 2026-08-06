@@ -1,5 +1,7 @@
 //! Expand SunSpec model JSON into Modbus point definitions.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::sunspec::types::{SunSpecGroup, SunSpecModel, SunSpecPoint};
@@ -33,6 +35,9 @@ pub struct ExpandConfig {
     pub slave_id: u8,
     pub function_code: u8,
     pub filter: ExpandFilter,
+    /// Scale-factor values read from the device: SF point name → int16 value.
+    /// When present, `scale = 10^sf_value` is applied to each point referencing that SF.
+    pub sf_values: HashMap<String, i16>,
 }
 
 /// One expanded point ready for SQLite insertion.
@@ -46,6 +51,38 @@ pub struct ExpandedPoint {
     pub scale: f64,
     pub offset: f64,
     pub protocol_mappings: String,
+}
+
+/// Collect all `sunssf` points in a model with their computed register addresses.
+///
+/// Returns `(name, register_address)` pairs in model-walk order.
+/// Used to identify which registers to read from the device before expansion.
+pub fn collect_sf_points(model: &SunSpecModel, start_register: u16) -> Vec<(String, u16)> {
+    let mut out = Vec::new();
+    let mut offset = 0u16;
+    walk_sf_group(&model.group, start_register, &mut offset, &mut out);
+    out
+}
+
+fn walk_sf_group(
+    group: &SunSpecGroup,
+    start_register: u16,
+    offset: &mut u16,
+    out: &mut Vec<(String, u16)>,
+) {
+    let repeat = group.count.as_fixed().unwrap_or(1);
+    for _ in 0..repeat {
+        for point in &group.points {
+            let register = start_register.saturating_add(*offset);
+            *offset = offset.saturating_add(point.size);
+            if point.point_type == "sunssf" {
+                out.push((point.name.clone(), register));
+            }
+        }
+        for nested in &group.groups {
+            walk_sf_group(nested, start_register, offset, out);
+        }
+    }
 }
 
 /// Expand a SunSpec model JSON into Modbus telemetry points.
@@ -121,6 +158,13 @@ fn emit_point(
         .or_else(|| point.label.clone())
         .unwrap_or_else(|| point.name.clone());
 
+    let scale = point
+        .sf
+        .as_deref()
+        .and_then(|sf_name| config.sf_values.get(sf_name))
+        .map(|&sf_val| 10f64.powi(sf_val as i32))
+        .unwrap_or(1.0);
+
     let mapping = serde_json::json!({
         "slave_id": config.slave_id,
         "function_code": config.function_code,
@@ -135,7 +179,7 @@ fn emit_point(
         data_type: data_type.to_string(),
         unit: point.units.clone().unwrap_or_default(),
         description,
-        scale: 1.0,
+        scale,
         offset: 0.0,
         protocol_mappings: mapping.to_string(),
     });
@@ -202,6 +246,7 @@ mod tests {
             slave_id: 1,
             function_code: 3,
             filter: ExpandFilter::default(),
+            sf_values: HashMap::new(),
         };
 
         let points = expand_model(&model, &config);
@@ -229,9 +274,44 @@ mod tests {
                 include_scale_factors: true,
                 ..Default::default()
             },
+            sf_values: HashMap::new(),
         };
 
         let points = expand_model(&model, &config);
         assert!(points.iter().any(|p| p.signal_name.ends_with("_A_SF")));
+    }
+
+    #[test]
+    fn sf_values_applied_to_scale() {
+        let model = load_model(103).unwrap();
+        let sf_points = collect_sf_points(&model, 40_002);
+        assert!(!sf_points.is_empty(), "Model 103 should have SF points");
+
+        // Simulate device returning A_SF = -2 (raw value = 0.01 multiplier)
+        let mut sf_values = HashMap::new();
+        for (name, _reg) in &sf_points {
+            sf_values.insert(name.clone(), -2i16);
+        }
+
+        let config = ExpandConfig {
+            model_id: 103,
+            start_register: 40_002,
+            slave_id: 1,
+            function_code: 3,
+            filter: ExpandFilter::default(),
+            sf_values,
+        };
+
+        let points = expand_model(&model, &config);
+        let a = points
+            .iter()
+            .find(|p| p.signal_name.ends_with("_A"))
+            .expect("A point");
+        let expected = 10f64.powi(-2);
+        assert!(
+            (a.scale - expected).abs() < 1e-10,
+            "Expected scale {expected} for SF=-2, got {}",
+            a.scale
+        );
     }
 }

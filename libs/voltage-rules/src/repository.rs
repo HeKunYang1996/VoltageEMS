@@ -32,30 +32,61 @@ pub async fn list_rules_paginated(
     pool: &SqlitePool,
     page: usize,
     page_size: usize,
+    name_filter: Option<&str>,
 ) -> Result<(Vec<Value>, usize)> {
     // Clamp inputs to reasonable bounds
     let page = page.max(1);
     let page_size = page_size.clamp(1, 100);
     let offset = (page - 1) * page_size;
 
-    // Total count
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rules")
-        .fetch_one(pool)
+    // Build LIKE pattern when a name filter is provided
+    let like_pattern = name_filter
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| format!("%{}%", s));
+
+    let (total, rows) = if let Some(ref pattern) = like_pattern {
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM rules WHERE name LIKE ? ESCAPE '\\'")
+                .bind(pattern)
+                .fetch_one(pool)
+                .await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, description, nodes_json, flow_json, format, enabled, priority, cooldown_ms, trigger_config
+            FROM rules
+            WHERE name LIKE ? ESCAPE '\'
+            ORDER BY priority DESC, id ASC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(pattern)
+        .bind(page_size as i64)
+        .bind(offset as i64)
+        .fetch_all(pool)
         .await?;
 
-    // Paged rows
-    let rows = sqlx::query(
-        r#"
-        SELECT id, name, description, nodes_json, flow_json, format, enabled, priority, cooldown_ms, trigger_config
-        FROM rules
-        ORDER BY priority DESC, id ASC
-        LIMIT ? OFFSET ?
-        "#,
-    )
-    .bind(page_size as i64)
-    .bind(offset as i64)
-    .fetch_all(pool)
-    .await?;
+        (total, rows)
+    } else {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rules")
+            .fetch_one(pool)
+            .await?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, description, nodes_json, flow_json, format, enabled, priority, cooldown_ms, trigger_config
+            FROM rules
+            ORDER BY priority DESC, id ASC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(page_size as i64)
+        .bind(offset as i64)
+        .fetch_all(pool)
+        .await?;
+
+        (total, rows)
+    };
 
     let mut rules = Vec::with_capacity(rows.len());
     for row in rows {
@@ -217,8 +248,18 @@ pub async fn upsert_rule(pool: &SqlitePool, rule_id: i64, rule: &Value) -> Resul
     Ok(())
 }
 
-/// Delete a rule
+/// Delete a rule and its associated execution history.
+///
+/// History is deleted first so the operation succeeds regardless of whether
+/// the `rule_history` table was created with `ON DELETE CASCADE` (migration v6)
+/// or the simpler FK from `bootstrap.rs` (no cascade).
 pub async fn delete_rule(pool: &SqlitePool, id: i64) -> Result<()> {
+    // Delete history first to avoid FK constraint violation on schemas without CASCADE
+    sqlx::query("DELETE FROM rule_history WHERE rule_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
     let result = sqlx::query("DELETE FROM rules WHERE id = ?")
         .bind(id)
         .execute(pool)

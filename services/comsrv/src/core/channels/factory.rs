@@ -26,6 +26,13 @@ use crate::protocols::adapters::voltage_485::{
     PollTarget, Voltage485Channel, Voltage485ChannelConfig, Voltage485PointMapping,
 };
 
+#[cfg(feature = "modbus")]
+pub struct RtuSerialFormat<'a> {
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: &'a str,
+}
+
 // ============================================================================
 // Virtual Channel Factory
 // ============================================================================
@@ -101,6 +108,7 @@ pub fn create_modbus_channel(
 /// * `channel_id` - Unique channel identifier (used for logging)
 /// * `device` - Serial device path (e.g., "/dev/ttyUSB0" on Linux)
 /// * `baud_rate` - Serial baud rate (e.g., 9600, 19200, 115200)
+/// * `serial_format` - Data bits, stop bits, and parity
 /// * `point_configs` - Point configurations with Modbus addresses
 /// * `io_timeout_ms` - Optional I/O timeout in milliseconds (default: 3000ms)
 #[cfg(feature = "modbus")]
@@ -108,12 +116,18 @@ pub fn create_modbus_rtu_channel(
     channel_id: u32,
     device: &str,
     baud_rate: u32,
+    serial_format: RtuSerialFormat<'_>,
     point_configs: Vec<PointConfig>,
     io_timeout_ms: Option<u64>,
 ) -> Box<dyn ChannelRuntime> {
     use std::time::Duration;
 
     let mut config = ModbusChannelConfig::rtu(device, baud_rate)
+        .with_serial_format(
+            serial_format.data_bits,
+            serial_format.stop_bits,
+            serial_format.parity,
+        )
         .with_points(point_configs)
         .with_reconnect(ReconnectConfig::default());
 

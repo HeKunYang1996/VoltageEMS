@@ -95,12 +95,21 @@ pub struct WriteReply {
 
 // ── inst-sync ─────────────────────────────────────────────────────────────────
 
+/// One property entry in an `inst-sync-reply` item.
+#[derive(Serialize)]
+pub struct InstSyncProperty {
+    pub id: String,
+    pub value: String,
+}
+
 /// One device entry in an `inst-sync-reply` message.
 #[derive(Serialize)]
 pub struct InstSyncItem {
     pub instance_id: i64,
     pub instance_name: String,
     pub product_name: String,
+    /// All properties defined in the product template; value is `""` when not set.
+    pub property: Vec<InstSyncProperty>,
 }
 
 /// Reply payload for `inst-sync-reply/{productSN}/{deviceSN}`.

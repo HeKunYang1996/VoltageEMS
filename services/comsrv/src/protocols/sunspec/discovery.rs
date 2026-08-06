@@ -1,5 +1,6 @@
 //! SunSpec model discovery over Modbus.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use voltage_modbus::{ModbusRtuClient, ModbusTcpClient, RtuTransport, TcpTransport};
@@ -75,12 +76,38 @@ pub async fn discover_models(
     let mut reg = base.saturating_add(2);
 
     loop {
-        let model_id = read_register(client, slave_id, function_code, reg).await?;
+        // Read model_id + length in one request to reduce round-trips and to avoid
+        // devices that reject single-register reads.  If the device returns Exception
+        // 0x02 here the chain simply ended beyond the device's valid address space —
+        // treat it the same as encountering the 0xFFFF end marker.
+        let pair = match function_code {
+            3 => client.read_03(slave_id, reg, 2).await,
+            4 => client.read_04(slave_id, reg, 2).await,
+            _ => unreachable!("function_code already validated"),
+        };
+
+        let pair = match pair {
+            Ok(v) if v.len() >= 2 => v,
+            // Exception 0x02 = Illegal Data Address: the chain ran past the valid
+            // register space.  Stop here; whatever models we accumulated are valid.
+            Err(e)
+                if e.to_string().contains("0x02")
+                    || e.to_string().contains("Illegal Data Address") =>
+            {
+                tracing::debug!("SunSpec chain end (device boundary) at reg {reg}: {e}");
+                break;
+            },
+            Err(e) => return Err(e.to_string()),
+            Ok(_) => return Err(format!("Short response reading model header at reg {reg}")),
+        };
+
+        let model_id = pair[0];
+        let length = pair[1];
+
         if model_id == MODEL_END_ID {
             break;
         }
 
-        let length = read_register(client, slave_id, function_code, reg + 1).await?;
         models.push(DiscoveredModel {
             model_id,
             length,
@@ -100,6 +127,35 @@ pub async fn discover_models(
     }
 
     Ok((base, models))
+}
+
+/// Read scale-factor register values from the device.
+///
+/// `sf_points` is a list of `(sf_name, register_address)` collected from the model JSON.
+/// Returns a map of SF name → int16 value. Registers that fail to read are silently skipped
+/// (the expand layer will fall back to `scale = 1.0` for those points).
+pub async fn read_sf_registers(
+    client: &mut ModbusClientWrapper,
+    slave_id: u8,
+    function_code: u8,
+    sf_points: &[(String, u16)],
+) -> HashMap<String, i16> {
+    let mut map = HashMap::with_capacity(sf_points.len());
+    for (name, register) in sf_points {
+        match read_register(client, slave_id, function_code, *register).await {
+            Ok(raw) => {
+                map.insert(name.clone(), raw as i16);
+            },
+            Err(e) => {
+                tracing::warn!(
+                    sf = %name,
+                    reg = register,
+                    "Failed to read SF register: {e}"
+                );
+            },
+        }
+    }
+    map
 }
 
 async fn detect_base(
@@ -127,11 +183,20 @@ async fn verify_suns(
     function_code: u8,
     base: u16,
 ) -> Result<(), String> {
-    let hi = read_register(client, slave_id, function_code, base).await?;
-    let lo = read_register(client, slave_id, function_code, base + 1).await?;
-    if hi == SUNS_MAGIC_HI && lo == SUNS_MAGIC_LO {
+    // Read both SunS magic registers in one request to avoid devices that reject
+    // single-register reads (count=1) at address 0.
+    let values = match function_code {
+        3 => client.read_03(slave_id, base, 2).await,
+        4 => client.read_04(slave_id, base, 2).await,
+        _ => return Err("Unsupported function code for SunS verify".to_string()),
+    }
+    .map_err(|e| e.to_string())?;
+
+    if values.len() >= 2 && values[0] == SUNS_MAGIC_HI && values[1] == SUNS_MAGIC_LO {
         Ok(())
     } else {
+        let hi = values.first().copied().unwrap_or(0);
+        let lo = values.get(1).copied().unwrap_or(0);
         Err(format!(
             "Invalid SunS at {base}: got {hi:#06x}/{lo:#06x}, expected {SUNS_MAGIC_HI:#06x}/{SUNS_MAGIC_LO:#06x}"
         ))

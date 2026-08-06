@@ -40,6 +40,7 @@ mod state;
 mod ws;
 
 use crate::config::GatewayConfig;
+use crate::middleware_auth::{require_admin_role, require_engineer};
 use crate::state::AppState;
 use crate::ws::WsHub;
 
@@ -67,6 +68,8 @@ use crate::ws::WsHub;
         routes_auth::admin_delete_user,
         routes_auth::get_auth_stats,
         routes_auth::cleanup_tokens,
+        routes_auth::validate_engineer_token,
+        routes_auth::validate_admin_token,
         routes_broadcast::broadcast_message,
         routes_broadcast::broadcast_status,
         routes_homepage::list_points,
@@ -169,22 +172,60 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/users/{id}", delete(routes_auth::admin_delete_user))
         .route("/stats", get(routes_auth::get_auth_stats))
         .route("/cleanup-tokens", post(routes_auth::cleanup_tokens))
-        .route("/validate", get(routes_auth::validate_token));
+        // nginx auth_request endpoints — one per permission level
+        .route("/validate", get(routes_auth::validate_token))
+        .route("/validate/engineer", get(routes_auth::validate_engineer_token))
+        .route("/validate/admin", get(routes_auth::validate_admin_token));
+
+    // ── Homepage routes ───────────────────────────────────────────────────────
+    // GET (list/get) → Viewer+ (outer require_jwt covers this)
+    // PUT (update)   → Engineer+
+    // POST (reset)   → Admin (destructive: replaces all points)
+    let homepage_viewer = Router::new()
+        .route("/", get(routes_homepage::list_points))
+        .route("/{id}", get(routes_homepage::get_point));
+
+    let homepage_engineer = Router::new()
+        .route("/{id}", put(routes_homepage::update_point))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_engineer,
+        ));
+
+    let homepage_admin = Router::new()
+        .route("/reset", post(routes_homepage::reset_points))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_admin_role,
+        ));
 
     let homepage_routes = Router::new()
-        .route("/", get(routes_homepage::list_points))
-        .route("/reset", post(routes_homepage::reset_points))
-        .route("/{id}", get(routes_homepage::get_point))
-        .route("/{id}", put(routes_homepage::update_point));
+        .merge(homepage_viewer)
+        .merge(homepage_engineer)
+        .merge(homepage_admin);
 
-    let network_routes = Router::new()
-        .route("/", get(routes_network::get_network_config))
+    // ── Network routes ────────────────────────────────────────────────────────
+    // GET → Viewer+; PUT/POST (modify system network) → Engineer+
+    let network_viewer = Router::new().route("/", get(routes_network::get_network_config));
+
+    let network_admin = Router::new()
         .route("/", put(routes_network::update_network_config))
-        .route("/apply", post(routes_network::apply_network_config));
+        .route("/apply", post(routes_network::apply_network_config))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_engineer,
+        ));
 
-    let config_routes = Router::new()
+    let network_routes = Router::new().merge(network_viewer).merge(network_admin);
+
+    // ── Config routes ─────────────────────────────────────────────────────────
+    // GET (check/export/status) → Viewer+; all write ops → Engineer+
+    let config_viewer = Router::new()
         .route("/check", get(routes_config::check_config))
         .route("/export", get(routes_config::export_config))
+        .route("/upgrade/status", get(routes_config::upgrade_status));
+
+    let config_admin = Router::new()
         .route(
             "/import",
             post(routes_config::import_config).layer(DefaultBodyLimit::max(64 * 1024 * 1024)), // 64 MB for config ZIP
@@ -195,18 +236,17 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(routes_config::start_upgrade).layer(DefaultBodyLimit::max(1024 * 1024 * 1024)), // 1024 MB for firmware
         )
         .route("/upgrade/abort", post(routes_config::abort_upgrade))
-        .route("/upgrade/status", get(routes_config::upgrade_status));
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_engineer,
+        ));
 
-    // Routes that require auth. Layered ONCE on the merged router so
-    // adding a new sub-router (e.g. /reports) cannot accidentally skip
-    // the JWT check the way per-route layering did before this fix.
-    // Includes anything that mutates state, exposes admin operations,
-    // or pushes data to other clients (broadcast). /auth is the only
-    // public surface (register/login/refresh) and is mounted below
-    // without the layer.
+    let config_routes = Router::new().merge(config_viewer).merge(config_admin);
+
+    // Outer require_jwt gate: every protected route must at minimum be
+    // authenticated. Role-specific sub-routers above add a second layer
+    // (Engineer / Admin) on top of this baseline check.
     let protected_v1 = Router::new()
-        .route("/broadcast", post(routes_broadcast::broadcast_message))
-        .route("/broadcast/status", get(routes_broadcast::broadcast_status))
         .nest("/homepage", homepage_routes)
         .nest("/network", network_routes)
         .nest("/config", config_routes)
@@ -215,7 +255,18 @@ fn build_router(state: Arc<AppState>) -> Router {
             middleware_auth::require_jwt,
         ));
 
-    let api_v1 = Router::new().merge(protected_v1).nest("/auth", auth_routes);
+    // /broadcast is called by internal microservices (alarmsrv) with no JWT.
+    // Guard it with loopback-only access instead — all services share host
+    // networking so 127.0.0.1 is a sufficient internal boundary.
+    let internal_v1 = Router::new()
+        .route("/broadcast", post(routes_broadcast::broadcast_message))
+        .route("/broadcast/status", get(routes_broadcast::broadcast_status))
+        .layer(axum::middleware::from_fn(middleware_auth::require_loopback));
+
+    let api_v1 = Router::new()
+        .merge(protected_v1)
+        .merge(internal_v1)
+        .nest("/auth", auth_routes);
 
     // /api/admin/* — runtime log control. Must require auth: leaving these
     // open lets an attacker quietly escalate log verbosity or read log
@@ -372,13 +423,16 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Listening on {}", bind_addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            common::shutdown::wait_for_shutdown().await;
-            info!("Shutdown signal received");
-            shutdown.cancel();
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        common::shutdown::wait_for_shutdown().await;
+        info!("Shutdown signal received");
+        shutdown.cancel();
+    })
+    .await?;
 
     common::logging::shutdown_logging_tasks().await;
     info!("apigateway stopped");

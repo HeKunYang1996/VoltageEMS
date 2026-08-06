@@ -31,6 +31,8 @@ pub mod types;
 // It depends on voltage-rtdb-shm's ShmNotifier which requires POSIX UDS.
 // Windows builds only need the parser for `monarch sync` (remote management CLI).
 #[cfg(unix)]
+mod display;
+#[cfg(unix)]
 mod executor;
 #[cfg(unix)]
 pub mod logger;

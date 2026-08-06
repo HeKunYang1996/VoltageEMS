@@ -26,6 +26,7 @@ pub mod api {
     pub mod routing_management_handlers;
     pub mod routing_query_handlers;
     pub mod single_point_handlers;
+    pub mod topology_handlers;
 
     // Re-export dto/routes for convenience
     pub use crate::routes;

@@ -3,6 +3,7 @@ use serde_json::json;
 use voltage_rtdb::{Bytes, MemoryRtdb};
 
 use crate::parser::extract_rule_flow;
+use crate::types::RuleFlow;
 
 /// Helper: create executor with fresh MemoryRtdb
 fn new_executor() -> (Arc<MemoryRtdb>, RuleExecutor<MemoryRtdb>) {
@@ -226,9 +227,9 @@ async fn test_evaluate_rule_switch() {
     wires.insert("out002".to_string(), vec!["node-high".to_string()]);
 
     // X1=10 > 5, should match out002
-    let (next, port, condition) =
+    let (targets, port, condition) =
         executor.evaluate_rule_switch_with_details(&rules, &wires, &values);
-    assert_eq!(next, Some("node-high"));
+    assert_eq!(targets, vec!["node-high"]);
     assert_eq!(port, Some("out002".to_string()));
     assert_eq!(condition, Some("X1>5".to_string()));
 }
@@ -295,13 +296,107 @@ async fn test_soc_strategy_high_battery() {
 
 #[tokio::test]
 async fn test_soc_strategy_no_match() {
-    // SOC = 25.0 → no match (5 < 25 < 49)
+    // SOC = 25.0 → no branch condition is satisfied (5 < 25 < 49). This is
+    // normal flow control (the path just ends at the Switch node), not an
+    // execution error: success stays true, error stays None, and no
+    // action is executed.
     let (_rtdb, executor, rule) = setup_soc_test("25.0").await;
     let result = executor.execute(&rule).await.unwrap();
 
-    assert!(!result.success);
-    assert!(result.error.is_some());
-    assert!(result.error.unwrap().contains("No matching switch rule"));
+    assert!(result.success, "no branch matching is not a failure");
+    assert!(result.error.is_none());
+    assert!(result.actions_executed.is_empty());
+    let switch_detail = result.node_details.get("switch1").unwrap();
+    assert!(
+        switch_detail.terminal,
+        "switch node should be marked as ending its branch"
+    );
+    assert!(switch_detail.matched_port.is_none());
+}
+
+/// Reproduces a real production rule: a single wire fans out to two
+/// downstream ChangeValue cards. Both must execute — previously only the
+/// first (`wires.default[0]`) ever ran, silently dropping the second.
+#[tokio::test]
+async fn test_fan_out_wire_executes_all_downstream_branches() {
+    let (_rtdb, executor) = new_executor();
+
+    let mut nodes = HashMap::new();
+    nodes.insert(
+        "start".to_string(),
+        RuleNode::Start {
+            wires: RuleWires {
+                default: vec!["cv1".to_string(), "cv2".to_string()],
+            },
+        },
+    );
+    nodes.insert(
+        "cv1".to_string(),
+        RuleNode::ChangeValue {
+            variables: vec![RuleVariable {
+                name: "Y1".to_string(),
+                instance: Some(1),
+                point_type: Some("action".to_string()),
+                point: Some(1),
+                formula: vec![],
+            }],
+            rule: vec![RuleValueAssignment {
+                variables: "Y1".to_string(),
+                value: json!(111),
+            }],
+            wires: RuleWires {
+                default: vec!["end".to_string()],
+            },
+        },
+    );
+    nodes.insert(
+        "cv2".to_string(),
+        RuleNode::ChangeValue {
+            variables: vec![RuleVariable {
+                name: "Y2".to_string(),
+                instance: Some(1),
+                point_type: Some("action".to_string()),
+                point: Some(2),
+                formula: vec![],
+            }],
+            rule: vec![RuleValueAssignment {
+                variables: "Y2".to_string(),
+                value: json!(222),
+            }],
+            wires: RuleWires {
+                default: vec!["end".to_string()],
+            },
+        },
+    );
+    nodes.insert("end".to_string(), RuleNode::End);
+
+    let rule = Rule {
+        id: 1,
+        name: "fan-out".to_string(),
+        description: None,
+        enabled: true,
+        priority: 0,
+        cooldown_ms: 0,
+        trigger_config: None,
+        flow: RuleFlow {
+            start_node: "start".to_string(),
+            nodes,
+        },
+    };
+
+    let result = executor.execute(&rule).await.unwrap();
+
+    assert!(result.success);
+    assert!(result.execution_path.contains(&"cv1".to_string()));
+    assert!(result.execution_path.contains(&"cv2".to_string()));
+    assert_eq!(
+        result.actions_executed.len(),
+        2,
+        "both fan-out branches must execute, not just the first wire target"
+    );
+    let values: Vec<f64> = result.actions_executed.iter().map(|a| a.value).collect();
+    assert!(values.contains(&111.0));
+    assert!(values.contains(&222.0));
 }
 
 // =========================================================================

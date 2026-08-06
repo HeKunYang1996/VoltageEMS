@@ -86,8 +86,13 @@ use voltage_rtdb::Rtdb;
                     "parameters": {
                         "device": "/dev/ttyUSB0",
                         "baud_rate": 9600,
+                        "data_bits": 8,
+                        "stop_bits": 1,
+                        "parity": "none",
                         "connect_timeout_ms": 5000,
-                        "io_timeout_ms": 3000,
+                        "read_timeout_ms": 3000,
+                        "retry_interval_ms": 2000,
+                        "poll_interval_ms": 1000,
                         "max_batch_size": 64
                     }
                 })

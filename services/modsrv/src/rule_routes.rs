@@ -60,6 +60,7 @@ pub fn create_rule_routes<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stat
         .route("/api/rules/{id}/disable", post(disable_rule::<R, S>))
         .route("/api/rules/{id}/execute", post(execute_rule_now::<R, S>))
         .route("/api/rules/{id}/variables", get(get_rule_variables::<R, S>))
+        .route("/api/rules/history", get(get_rule_history::<R, S>))
         // Scheduler control
         .route("/api/scheduler/status", get(scheduler_status::<R, S>))
         .route("/api/scheduler/reload", post(scheduler_reload::<R, S>))
@@ -75,7 +76,7 @@ pub fn create_rule_routes<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stat
 #[cfg(feature = "swagger-ui")]
 #[derive(OpenApi)]
 #[openapi(
-    paths(list_rules, create_rule, get_rule, update_rule, delete_rule, enable_rule, disable_rule, execute_rule_now, scheduler_status, scheduler_reload),
+    paths(list_rules, create_rule, get_rule, update_rule, delete_rule, enable_rule, disable_rule, execute_rule_now, get_rule_variables, get_rule_history, scheduler_status, scheduler_reload),
     components(
         schemas(
             CreateRuleRequest,
@@ -250,7 +251,7 @@ pub struct PeriodDeltaConfigSchema {
 // Handlers
 // ============================================================================
 
-/// Rule list query parameters (pagination)
+/// Rule list query parameters (pagination + optional name filter)
 #[derive(Debug, serde::Deserialize)]
 #[cfg_attr(feature = "swagger-ui", derive(utoipa::ToSchema))]
 pub struct RuleListQuery {
@@ -260,6 +261,8 @@ pub struct RuleListQuery {
     /// Items per page
     #[serde(default = "default_page_size")]
     pub page_size: usize,
+    /// Fuzzy name filter (case-insensitive LIKE match)
+    pub name: Option<String>,
 }
 
 fn default_page() -> usize {
@@ -270,6 +273,25 @@ fn default_page_size() -> usize {
     20
 }
 
+/// Query parameters for rule execution history (pagination + optional filters)
+#[derive(Debug, serde::Deserialize)]
+#[cfg_attr(feature = "swagger-ui", derive(utoipa::ToSchema))]
+pub struct RuleHistoryQuery {
+    /// Page number (starting from 1)
+    #[serde(default = "default_page")]
+    pub page: usize,
+    /// Items per page (max 100)
+    #[serde(default = "default_page_size")]
+    pub page_size: usize,
+    /// Filter by rule ID; omit to query history across all rules
+    pub rule_id: Option<i64>,
+    /// Filter by rule name (substring match, case-insensitive); omit to query history across all rules
+    pub rule_name: Option<String>,
+    /// Start time filter: Unix timestamp in milliseconds (inclusive)
+    pub start_time: Option<i64>,
+    /// End time filter: Unix timestamp in milliseconds (inclusive)
+    pub end_time: Option<i64>,
+}
 /// Request DTO for creating a new rule (empty shell, ID auto-generated)
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[cfg_attr(feature = "swagger-ui", derive(utoipa::ToSchema))]
@@ -336,7 +358,8 @@ pub struct UpdateRuleRequest {
     path = "/api/rules",
     params(
         ("page" = Option<usize>, Query, description = "Page number (default: 1)"),
-        ("page_size" = Option<usize>, Query, description = "Items per page (default: 20, max: 100)")
+        ("page_size" = Option<usize>, Query, description = "Items per page (default: 20, max: 100)"),
+        ("name" = Option<String>, Query, description = "Fuzzy name filter (case-insensitive)")
     ),
     responses(
         (status = 200, description = "List rules (paginated)", body = common::PaginatedResponse<serde_json::Value>,
@@ -365,7 +388,9 @@ pub async fn list_rules<R: Rtdb + Send + Sync + 'static, S: StateStore + 'static
     let page = query.page.max(1);
     let page_size = query.page_size.clamp(1, 100);
 
-    match rule_repository::list_rules_paginated(&state.pool, page, page_size).await {
+    match rule_repository::list_rules_paginated(&state.pool, page, page_size, query.name.as_deref())
+        .await
+    {
         Ok((rules, total)) => {
             // Only expose summary fields for list view
             let summaries: Vec<serde_json::Value> = rules
@@ -894,4 +919,196 @@ pub async fn get_rule_variables<R: Rtdb + Send + Sync + 'static, S: StateStore +
         "rule_id": id,
         "variables": variables
     }))))
+}
+
+/// Get rule execution history (paginated, most recent first)
+///
+/// Returns historical records of when rules actually fired (actions executed
+/// or execution failed). Idle ticks where conditions were not met are not
+/// recorded. Each entry includes the full result JSON and any error message.
+/// Records are auto-pruned to 500 per rule. Omit `rule_id` to query history
+/// across all rules.
+#[cfg_attr(feature = "swagger-ui", utoipa::path(
+    get,
+    path = "/api/rules/history",
+    params(
+        ("rule_id" = Option<i64>, Query, description = "Filter by rule ID; omit to query all rules"),
+        ("rule_name" = Option<String>, Query, description = "Filter by rule name (substring match, case-insensitive)"),
+        ("page" = Option<usize>, Query, description = "Page number (default: 1)"),
+        ("page_size" = Option<usize>, Query, description = "Items per page (default: 20, max: 100)"),
+        ("start_time" = Option<i64>, Query, description = "Start time filter: Unix timestamp in ms (inclusive)"),
+        ("end_time" = Option<i64>, Query, description = "End time filter: Unix timestamp in ms (inclusive)")
+    ),
+    responses(
+        (status = 200, description = "Rule execution history (paginated)", body = serde_json::Value,
+            example = json!({
+                "success": true,
+                "data": {
+                    "list": [
+                        {
+                            "id": 42,
+                            "rule_id": 1,
+                            "rule_name": "Battery SOC Protection",
+                            "triggered_at": 1704067200000i64,
+                            "result": {
+                                "success": true,
+                                "execution_path": ["start", "switch-soc", "action-high"],
+                                "actions_executed": [{ "target_type": "instance", "target_id": 1, "point_type": "A", "point_id": 5, "value": 78.0, "success": true }],
+                                "variable_values": { "X1": 78.0 },
+                                "matched_condition": "X1>=70"
+                            },
+                            "error": null
+                        }
+                    ],
+                    "total": 100,
+                    "page": 1,
+                    "page_size": 20,
+                    "total_pages": 5,
+                    "has_next": true,
+                    "has_previous": false
+                }
+            })
+        ),
+        (status = 404, description = "Rule not found (when rule_id is specified)")
+    ),
+    tag = "rules"
+))]
+pub async fn get_rule_history<R: Rtdb + Send + Sync + 'static, S: StateStore + 'static>(
+    State(state): State<Arc<RuleEngineState<R, S>>>,
+    Query(query): Query<RuleHistoryQuery>,
+) -> Result<Json<SuccessResponse<PaginatedResponse<serde_json::Value>>>, ModSrvError> {
+    let page = query.page.max(1);
+    let page_size = query.page_size.clamp(1, 100);
+    let offset = ((page - 1) * page_size) as i64;
+    let limit = page_size as i64;
+
+    // When rule_id is specified, verify it exists first.
+    if let Some(rule_id) = query.rule_id {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rules WHERE id = ?)")
+            .bind(rule_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ModSrvError::DatabaseError(format!("DB error: {}", e)))?;
+        if !exists {
+            return Err(ModSrvError::RuleNotFound(rule_id.to_string()));
+        }
+    }
+
+    // Build WHERE clauses dynamically — two variants: one for the count query
+    // (bare table name, no alias) and one for the rows query (aliased as `h`,
+    // joined with `rules`).
+    let mut count_where: Vec<&str> = Vec::new();
+    let mut rows_where: Vec<&str> = Vec::new();
+    if query.rule_id.is_some() {
+        count_where.push("rule_id = ?");
+        rows_where.push("h.rule_id = ?");
+    }
+    if query.rule_name.is_some() {
+        // count query has no JOIN, so filter via a subquery on `rules`;
+        // rows query already joins `rules` as `r`.
+        count_where.push("rule_id IN (SELECT id FROM rules WHERE name LIKE ? COLLATE NOCASE)");
+        rows_where.push("r.name LIKE ? COLLATE NOCASE");
+    }
+    if query.start_time.is_some() {
+        count_where.push("CAST(triggered_at AS INTEGER) >= ?");
+        rows_where.push("CAST(h.triggered_at AS INTEGER) >= ?");
+    }
+    if query.end_time.is_some() {
+        count_where.push("CAST(triggered_at AS INTEGER) <= ?");
+        rows_where.push("CAST(h.triggered_at AS INTEGER) <= ?");
+    }
+
+    let count_where_sql = if count_where.is_empty() {
+        "1=1".to_string()
+    } else {
+        count_where.join(" AND ")
+    };
+    let rows_where_sql = if rows_where.is_empty() {
+        "1=1".to_string()
+    } else {
+        rows_where.join(" AND ")
+    };
+
+    let rule_name_pattern = query.rule_name.as_ref().map(|n| format!("%{}%", n));
+
+    macro_rules! bind_filters {
+        ($q:expr) => {{
+            let mut q = $q;
+            if let Some(rid) = query.rule_id {
+                q = q.bind(rid);
+            }
+            if let Some(pat) = &rule_name_pattern {
+                q = q.bind(pat.clone());
+            }
+            if let Some(st) = query.start_time {
+                q = q.bind(st);
+            }
+            if let Some(et) = query.end_time {
+                q = q.bind(et);
+            }
+            q
+        }};
+    }
+
+    // Total count
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM rule_history WHERE {}",
+        count_where_sql
+    );
+    let total: i64 = bind_filters!(sqlx::query_scalar::<_, i64>(&count_sql))
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| ModSrvError::DatabaseError(format!("DB error: {}", e)))?;
+
+    // Paged rows — CAST(triggered_at AS INTEGER) avoids sqlx TEXT/INTEGER
+    // mismatch: the column is declared TEXT (monarch schema) but values are
+    // stored as numeric strings; CAST produces an untyped expression column
+    // that sqlx decodes as i64 without a type affinity conflict.
+    let rows_sql = format!(
+        "SELECT h.id, h.rule_id, CAST(h.triggered_at AS INTEGER), h.execution_result, h.error, r.name \
+         FROM rule_history h \
+         LEFT JOIN rules r ON r.id = h.rule_id \
+         WHERE {} \
+         ORDER BY h.id DESC \
+         LIMIT ? OFFSET ?",
+        rows_where_sql
+    );
+    let rows = bind_filters!(sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>
+        ),
+    >(&rows_sql))
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| ModSrvError::DatabaseError(format!("DB error: {}", e)))?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(
+            |(hist_id, row_rule_id, triggered_at_ms, exec_result, error, rule_name)| {
+                let result_data = exec_result
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                json!({
+                    "id": hist_id,
+                    "rule_id": row_rule_id,
+                    "rule_name": rule_name,
+                    "triggered_at": triggered_at_ms,
+                    "result": result_data,
+                    "error": error,
+                })
+            },
+        )
+        .collect();
+
+    let paginated = PaginatedResponse::new(items, total as usize, page, page_size);
+    Ok(Json(SuccessResponse::new(paginated)))
 }

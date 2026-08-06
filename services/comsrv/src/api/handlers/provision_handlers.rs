@@ -18,13 +18,15 @@ use axum::{
 use common::ErrorInfo;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-use voltage_model::sunspec::{ExpandConfig, ExpandFilter, expand_model, load_model, model_exists};
+use voltage_model::sunspec::{
+    ExpandConfig, ExpandFilter, collect_sf_points, expand_model, load_model, model_exists,
+};
 use voltage_rtdb::Rtdb;
 
 #[cfg(feature = "modbus")]
 use crate::protocols::adapters::modbus_config::ModbusChannelParamsConfig;
 #[cfg(feature = "modbus")]
-use crate::protocols::sunspec::{connect_modbus, discover_models};
+use crate::protocols::sunspec::{connect_modbus, discover_models, read_sf_registers};
 #[cfg(feature = "modbus")]
 use crate::utils::{is_modbus_family, normalize_protocol_name};
 
@@ -267,8 +269,6 @@ async fn provision_sunspec<R: Rtdb + 'static>(
     .await
     .map_err(|e| device_error(format!("SunSpec discovery failed: {e}")))?;
 
-    let _ = client.close().await;
-
     let models_to_expand: Vec<_> = discovered
         .iter()
         .filter(|m| {
@@ -280,9 +280,10 @@ async fn provision_sunspec<R: Rtdb + 'static>(
         .collect();
 
     if models_to_expand.is_empty() {
+        let _ = client.close().await;
         let ids: Vec<u16> = discovered.iter().map(|m| m.model_id).collect();
         return Err(AppError::bad_request(format!(
-            "No expandable models: discovered [{ids:?}], none have embedded JSON definitions"
+            "No expandable models: discovered {ids:?}, none have embedded JSON definitions"
         )));
     }
 
@@ -294,10 +295,15 @@ async fn provision_sunspec<R: Rtdb + 'static>(
 
     let mut expanded = Vec::new();
     let mut models_expanded = Vec::new();
+    let mut models_zero_points: Vec<u16> = Vec::new();
 
     for block in models_to_expand {
         let model = load_model(block.model_id)
             .map_err(|e| AppError::internal_error(format!("Load model {}: {e}", block.model_id)))?;
+
+        let sf_points = collect_sf_points(&model, block.start_register);
+        let sf_values =
+            read_sf_registers(&mut client, req.slave_id, req.function_code, &sf_points).await;
 
         let points = expand_model(
             &model,
@@ -307,19 +313,52 @@ async fn provision_sunspec<R: Rtdb + 'static>(
                 slave_id: req.slave_id,
                 function_code: req.function_code,
                 filter,
+                sf_values,
             },
         );
 
         if !points.is_empty() {
             models_expanded.push(block.model_id);
             expanded.extend(points);
+        } else {
+            models_zero_points.push(block.model_id);
         }
     }
 
+    let _ = client.close().await;
+
     if expanded.is_empty() {
-        return Err(AppError::bad_request(
-            "Discovery succeeded but filter produced zero mappable points",
-        ));
+        let all_discovered: Vec<u16> = discovered.iter().map(|m| m.model_id).collect();
+        let no_library: Vec<u16> = discovered
+            .iter()
+            .map(|m| m.model_id)
+            .filter(|&id| !model_exists(id))
+            .collect();
+
+        let mut msg = format!(
+            "Filter produced zero mappable points. \
+             Device models: {all_discovered:?}. \
+             Models with embedded definitions (tried): {models_zero_points:?}."
+        );
+        if !no_library.is_empty() {
+            msg.push_str(&format!(
+                " Models {no_library:?} were discovered but have no embedded JSON definitions \
+                 in this build — these are skipped."
+            ));
+        }
+        if models_zero_points.iter().all(|&id| id == 1) {
+            msg.push_str(
+                " Model 1 (Common) has no telemetry points by design (all string/pad/RW fields). \
+                 If your device should have measurement models (e.g. 101/103 for PV, 701 for battery), \
+                 those model IDs need to be added to the embedded model library.",
+            );
+        } else {
+            msg.push_str(
+                " Try adding \"include_optional\": true or \"include_static\": true \
+                 to expose more points.",
+            );
+        }
+        return Err(AppError::bad_request(msg));
     }
 
     let point_id_start = match req.point_id_start {

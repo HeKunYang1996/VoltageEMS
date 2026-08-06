@@ -91,17 +91,47 @@ impl AlertRule {
         }
     }
 
-    /// Serialise rule metadata as a JSON snapshot for storage in alert/event tables
-    pub fn snapshot(&self) -> String {
+    /// Serialise rule metadata as a JSON snapshot for storage in alert/event
+    /// tables. `device_name`/`point_name`/`unit` are resolved by the caller
+    /// (see `device_names::resolve_for_rule`) and baked in at trigger time —
+    /// this is what makes historical alert/event rows immune to the device
+    /// later being renamed or deleted; the flat `device_name`/`point_name`
+    /// columns on `alert`/`alert_event` carry the same values for direct
+    /// querying, `rule_snapshot` is the audit-trail copy.
+    pub fn snapshot(
+        &self,
+        device_name: Option<&str>,
+        point_name: Option<&str>,
+        unit: Option<&str>,
+    ) -> String {
         serde_json::json!({
             "rule_name": self.rule_name,
             "warning_level": self.warning_level,
             "operator": self.operator,
             "value": self.value,
             "description": self.description,
+            "device_name": device_name,
+            "point_name": point_name,
+            "unit": unit,
         })
         .to_string()
     }
+}
+
+/// `AlertRule` plus device/point names resolved live at read time (see
+/// `device_names::resolve_for_rule`). Unlike `Alert`/`AlertEvent`, rules are
+/// *live configuration*, not historical events — there's no "snapshot at
+/// creation" to preserve, so this is a join-on-read view, not a persisted
+/// column. If the underlying device is renamed later, the rule list just
+/// reflects the new name; if it's deleted, the name fields come back `None`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AlertRuleView {
+    #[serde(flatten)]
+    #[schema(inline)]
+    pub rule: AlertRule,
+    pub device_name: Option<String>,
+    pub point_name: Option<String>,
+    pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
@@ -119,6 +149,14 @@ pub struct Alert {
     pub operator: String,
     pub threshold_value: f64,
     pub current_value: f64,
+    /// Device/point name resolved at trigger time (see `device_names::resolve`)
+    /// and persisted here — a snapshot, not a live join, so renaming or
+    /// deleting the device afterwards doesn't change what this alert shows.
+    /// `None` when the device/point couldn't be resolved (e.g. deleted
+    /// before the alert fired).
+    pub device_name: Option<String>,
+    pub point_name: Option<String>,
+    pub unit: Option<String>,
     /// Always "active" — resolved alerts are deleted and moved to alert_event
     pub status: String,
     pub triggered_at: i64,
@@ -138,6 +176,11 @@ pub struct AlertEvent {
     pub warning_level: i64,
     pub operator: String,
     pub threshold_value: f64,
+    /// Snapshotted at trigger time — see `Alert::device_name` for why this
+    /// isn't a live join.
+    pub device_name: Option<String>,
+    pub point_name: Option<String>,
+    pub unit: Option<String>,
     pub trigger_value: Option<f64>,
     pub recovery_value: Option<f64>,
     /// "trigger" | "recovery"

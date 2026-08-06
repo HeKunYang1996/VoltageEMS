@@ -101,6 +101,28 @@ esac
 FOLDER_NAME="MonarchEdge"
 ARCH_LABEL=$(printf '%s' "$ARCH" | tr '[:lower:]' '[:upper:]')
 
+# 镜像加速自动检测
+# skopeo 不读 docker daemon 的 registry-mirrors，在配置了镜像加速的环境（如内网受限
+# 的办公网络）中会直连 Docker Hub 超时。脚本在启动时自动检测 daemon 是否配置了镜像加速，
+# 检测到则跳过 skopeo，直接走 docker 兜底路径（docker daemon 会正常使用镜像加速）。
+# CI/CD 服务器未配置 registry-mirrors 时，行为不受任何影响。
+# 也可手动强制跳过 skopeo：export REGISTRY_MIRROR=1
+REGISTRY_MIRROR="${REGISTRY_MIRROR:-}"
+_DOCKER_HAS_MIRROR=0
+_detected_mirrors=""
+if [[ -n "$REGISTRY_MIRROR" ]]; then
+    _DOCKER_HAS_MIRROR=1
+else
+    _detected_mirrors=$(docker info --format '{{range .RegistryConfig.Mirrors}}{{.}} {{end}}' 2>/dev/null | xargs 2>/dev/null || true)
+    if [[ -n "$_detected_mirrors" ]]; then
+        _DOCKER_HAS_MIRROR=1
+        echo -e "${YELLOW}Info: Docker registry mirrors detected ($_detected_mirrors), skipping skopeo${NC}"
+    fi
+fi
+# docker-container buildx builder（懒初始化，首次进入 docker 兜底路径时创建）
+_BUILDX_HELPER_BUILDER=""
+_BUILDX_HELPER_SETUP=0
+
 # All Rust services bundled into the voltageems image
 RUST_SERVICES="comsrv,modsrv,hissrv,apigateway,netsrv,alarmsrv"
 
@@ -327,6 +349,46 @@ _get_remote_digest() {
         "docker://$full_image" 2>/dev/null || true
 }
 
+# 初始化一个 docker-container 类型的 buildx builder，用于绕过 Docker 24+ containerd
+# 镜像存储下 docker save 对多架构 manifest list 的 bug。
+# docker-container builder 支持 --output type=docker,dest=file，直接写 tar 不走 daemon save。
+# 若检测到 registry-mirrors，同步写入 buildkitd.toml，让 builder 也能走镜像加速。
+_setup_buildx_helper_builder() {
+    local builder_name="voltage-build-helper"
+    if docker buildx inspect "$builder_name" &>/dev/null 2>&1; then
+        _BUILDX_HELPER_BUILDER="$builder_name"
+        return 0
+    fi
+
+    if [[ -n "$_detected_mirrors" ]]; then
+        local bk_config
+        bk_config=$(mktemp --suffix=.toml)
+        {
+            printf '[registry."docker.io"]\n  mirrors = ['
+            local first=1
+            for m in $_detected_mirrors; do
+                # 去掉协议头和末尾斜杠，buildkitd 只需要 hostname
+                local host="${m#https://}"; host="${host#http://}"; host="${host%/}"
+                [[ $first -eq 0 ]] && printf ', '
+                printf '"%s"' "$host"
+                first=0
+            done
+            printf ']\n'
+        } > "$bk_config"
+        docker buildx create --name "$builder_name" --driver docker-container \
+            --config "$bk_config" 2>/dev/null
+        rm -f "$bk_config"
+    else
+        docker buildx create --name "$builder_name" --driver docker-container 2>/dev/null
+    fi
+
+    if docker buildx inspect "$builder_name" &>/dev/null 2>&1; then
+        _BUILDX_HELPER_BUILDER="$builder_name"
+        return 0
+    fi
+    return 1
+}
+
 pull_and_save_image() {
     local image=$1
     local output_name=$2
@@ -337,7 +399,9 @@ pull_and_save_image() {
     [[ "$image" != *"/"* ]] && full_image="docker.io/library/$image"
 
     # ── skopeo 路径（含缓存）──────────────────────────────────────────────────
-    if command -v skopeo &> /dev/null; then
+    # _DOCKER_HAS_MIRROR=1 时跳过 skopeo：skopeo 不读 docker daemon registry-mirrors，
+    # 在镜像加速环境下会直连 Docker Hub 超时；docker 兜底路径会正确使用加速镜像。
+    if command -v skopeo &> /dev/null && [[ "$_DOCKER_HAS_MIRROR" -eq 0 ]]; then
         local cache_tar="$IMAGE_CACHE_DIR/${output_name}"
         local cache_digest_file="$IMAGE_CACHE_DIR/${output_name%.gz}.digest"
 
@@ -392,17 +456,49 @@ pull_and_save_image() {
     fi
 
     # ── docker 兜底路径（无缓存）────────────────────────────────────────────
-    # Docker 24+ containerd 镜像存储对多架构 manifest list 执行 docker save 有 bug，
-    # 使用 buildx 将镜像重新打包为单架构副本后再 save。
+    # Docker 24+ containerd 镜像存储对多架构 manifest list 执行 docker save 有 bug：
+    # docker pull --platform arm64 拉取成功但 docker save 报 "unable to create manifests"。
+    # 解决：用 docker-container 类型的 buildx builder（支持 --output type=docker,dest=file），
+    # 直接把镜像写成 tar，完全绕过 daemon 的 save 机制。
+    # builder 已在 _setup_buildx_helper_builder 中配好 registry-mirrors，可在镜像加速环境下拉取。
     echo -e "${BLUE}Pulling $image for $ARCH via docker...${NC}"
     docker pull --platform "$DOCKER_PLATFORM" "$image"
 
+    # 懒初始化 docker-container builder（多次调用只初始化一次）
+    if [[ "$_BUILDX_HELPER_SETUP" -eq 0 ]]; then
+        _setup_buildx_helper_builder 2>/dev/null || true
+        _BUILDX_HELPER_SETUP=1
+    fi
+
     local temp_tag="voltage-save-temp-$(date +%s%N)"
-    if echo "FROM --platform=$DOCKER_PLATFORM $image" \
+    local tmp_tar
+    tmp_tar=$(mktemp --suffix=.tar)
+
+    # 1) docker-container builder + --output type=docker（最可靠，绕过 docker save bug）
+    if [[ -n "$_BUILDX_HELPER_BUILDER" ]] && \
+        echo "FROM --platform=$DOCKER_PLATFORM $image" \
+        | docker buildx build --builder "$_BUILDX_HELPER_BUILDER" \
+        --platform "$DOCKER_PLATFORM" \
+        --output "type=docker,name=$image,dest=$tmp_tar" - 2>/dev/null \
+        && [[ -s "$tmp_tar" ]]; then
+        gzip -c "$tmp_tar" > "$output_path"
+        rm -f "$tmp_tar"
+    # 2) 默认 docker driver + --output type=docker（部分 Docker 版本支持）
+    elif echo "FROM --platform=$DOCKER_PLATFORM $image" \
+        | docker buildx build --platform "$DOCKER_PLATFORM" \
+        --output "type=docker,name=$image,dest=$tmp_tar" - 2>/dev/null \
+        && [[ -s "$tmp_tar" ]]; then
+        gzip -c "$tmp_tar" > "$output_path"
+        rm -f "$tmp_tar"
+    # 3) buildx --load + docker save（经典路径，containerd 下可能失败）
+    elif echo "FROM --platform=$DOCKER_PLATFORM $image" \
         | docker buildx build --platform "$DOCKER_PLATFORM" --load -t "$temp_tag" - 2>/dev/null; then
         docker save "$temp_tag" | gzip > "$output_path"
         docker rmi "$temp_tag" > /dev/null 2>&1
+        rm -f "$tmp_tar"
+    # 4) 裸 docker save（最后兜底）
     else
+        rm -f "$tmp_tar"
         echo -e "${YELLOW}Warning: buildx re-tag failed, trying direct docker save...${NC}"
         docker save "$image" | gzip > "$output_path"
     fi

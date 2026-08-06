@@ -331,7 +331,7 @@ update_service() {
     # Step 3: Start new containers (--no-deps avoids recreating running dependencies)
     for container in $containers; do
         local service="${CONTAINER_TO_SERVICE[$container]:-$container}"
-        run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps "$service"
+        run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps --pull never "$service"
     done
 
     # Step 4: Health check (wait for containers to start)
@@ -352,7 +352,7 @@ update_service() {
         docker tag "$backup_tag" "$image" 2>/dev/null || true
         for container in $containers; do
             local service="${CONTAINER_TO_SERVICE[$container]:-$container}"
-            run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps "$service"
+            run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps --pull never "$service"
         done
         echo -e "    ${YELLOW}Rollback completed${NC}"
         return 1
@@ -434,6 +434,56 @@ select_auxiliary_services() {
 
 # Ensure core services are running (called after image update/install)
 # This fixes the issue where services need manual restart after installation
+# Start only services whose images are available locally.
+# This handles partial builds (e.g. -s rust) where only a subset of images
+# are packaged, avoiding "No such image" errors for other services.
+start_available_services() {
+    local compose_file="$INSTALL_DIR/docker-compose.yml"
+    local started=0
+    local skipped=0
+
+    # Ordered list of all services in docker-compose.yml (infrastructure first)
+    local all_services=(
+        "voltage-redis"
+        "timescaledb"
+        "comsrv"
+        "modsrv"
+        "hissrv"
+        "apigateway"
+        "netsrv"
+        "alarmsrv"
+        "apps"
+    )
+
+    for service in "${all_services[@]}"; do
+        # Determine image from service name
+        local image=""
+        case "$service" in
+            voltage-redis) image="redis:8-alpine" ;;
+            timescaledb)   image="timescale/timescaledb:2.25.2-pg17" ;;
+            apps)          image="voltage-apps:latest" ;;
+            *)             image="voltageems:latest" ;;
+        esac
+
+        if docker image inspect "$image" >/dev/null 2>&1; then
+            echo -n "  Starting $service... "
+            if run_docker_compose -f "$compose_file" up -d --no-deps --pull never "$service" 2>/dev/null; then
+                echo -e "${GREEN}✓${NC}"
+                started=$((started + 1))
+            else
+                echo -e "${YELLOW}failed${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}⊘${NC} $service: image not available, skipped"
+            skipped=$((skipped + 1))
+        fi
+    done
+
+    echo ""
+    echo -e "${GREEN}✓ Started $started service(s)${NC}"
+    [[ $skipped -gt 0 ]] && echo -e "${YELLOW}⊘ Skipped $skipped service(s) — image not included in this installer${NC}"
+}
+
 ensure_core_services_running() {
     echo ""
     echo -e "${BLUE}Ensuring core services are running...${NC}"
@@ -449,7 +499,7 @@ ensure_core_services_running() {
             local service="${CONTAINER_TO_SERVICE[$container]:-$container}"
             echo "  Starting $service..."
 
-            if timeout 60 run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps "$service" 2>&1; then
+            if timeout 60 run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps --pull never "$service" 2>&1; then
                 services_started=$((services_started + 1))
             else
                 echo -e "    ${YELLOW}Warning: Failed to start $service${NC}"
@@ -501,7 +551,7 @@ verify_containers_using_correct_images() {
                 local service="${CONTAINER_TO_SERVICE[$container]:-$container}"
                 docker stop "$container" 2>/dev/null || true
                 docker rm "$container" 2>/dev/null || true
-                run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps "$service" 2>/dev/null || true
+                run_docker_compose -f "$INSTALL_DIR/docker-compose.yml" up -d --no-deps --pull never "$service" 2>/dev/null || true
                 all_ok=false
             fi
         done
@@ -936,25 +986,17 @@ if command -v docker &> /dev/null; then
             fi
         done
 
-        # Verify loaded images
+        # Verify loaded images — only check images that were in the docker/ directory
         echo "Verifying loaded images..."
-        # Required: voltageems:latest, redis:8-alpine
-        # Optional: timescaledb (can configure hissrv storage later via API), voltage-apps, alpine
-        for image_name in voltageems:latest redis:8-alpine timescale/timescaledb:2.25.2-pg17 voltage-apps:latest alpine:latest; do
+        for image_name in $FRESH_LOADED_IMAGES; do
             echo -n "  Checking $image_name... "
             if docker image inspect "$image_name" >/dev/null 2>&1; then
                 CREATED=$(docker image inspect "$image_name" --format='{{.Created}}' 2>/dev/null | cut -d'T' -f1)
                 echo -e "${GREEN}present${NC} (created: $CREATED)"
             else
-                if [[ "$image_name" == "timescale/timescaledb:2.25.2-pg17" ]] || \
-                   [[ "$image_name" == "voltage-apps:latest" ]] || \
-                   [[ "$image_name" == "alpine:latest" ]]; then
-                    echo -e "${YELLOW}missing (optional, skipping)${NC}"
-                else
-                    echo -e "${RED}missing!${NC}"
-                    echo -e "${RED}ERROR: Expected image $image_name was not loaded properly${NC}"
-                    exit 1
-                fi
+                echo -e "${RED}missing!${NC}"
+                echo -e "${RED}ERROR: Expected image $image_name was not loaded properly${NC}"
+                exit 1
             fi
         done
 
@@ -1480,7 +1522,7 @@ elif [[ "$AUTO_MODE" == true ]]; then
     # Ensure SHM file exists before Docker starts
     ensure_shm_file
     echo -e "${GREEN}Auto mode: Starting services...${NC}"
-    cd "$INSTALL_DIR" && run_docker_compose up -d
+    cd "$INSTALL_DIR" && start_available_services
     echo ""
     echo -e "${GREEN}✓ Services started${NC}"
     docker ps --format "table {{.Names}}\t{{.Status}}"
@@ -1491,7 +1533,7 @@ else
         # Ensure SHM file exists before Docker starts
         ensure_shm_file
         echo -e "${GREEN}Starting services...${NC}"
-        cd "$INSTALL_DIR" && run_docker_compose up -d
+        cd "$INSTALL_DIR" && start_available_services
         echo ""
         echo -e "${GREEN}✓ Services started${NC}"
         docker ps --format "table {{.Names}}\t{{.Status}}"

@@ -13,7 +13,7 @@ use crate::types::{
 };
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use voltage_calc::{CalcEngine, MemoryStateStore, StateStore};
 use voltage_model::{PointType, ValidationConfig, validate_value};
@@ -256,6 +256,13 @@ pub struct NodeExecutionDetail {
     /// Actions executed (for ChangeValue nodes)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<ActionResult>>,
+    /// True when this node ended its branch without handing off to any
+    /// downstream node — either a Switch whose conditions matched no
+    /// branch, or an action node with no configured output wire. This is
+    /// normal, expected flow control (a branch of the graph simply has
+    /// nothing more to do), NOT an execution error: it does not set
+    /// `RuleExecutionResult.error` or flip `success` to false.
+    pub terminal: bool,
 }
 
 /// Result of evaluating a single condition branch
@@ -337,7 +344,24 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         self
     }
 
-    /// Execute a rule with RuleFlow
+    /// Execute a rule with RuleFlow.
+    ///
+    /// Traverses the flow graph via a work queue rather than a single
+    /// `current_id` — a node's output wires may fan out to more than one
+    /// downstream node (the flow editor allows connecting one port to
+    /// several cards), and every one of them actually runs, not just the
+    /// first. Each node is visited at most once per execution (the
+    /// `visited` guard), which also makes cycles harmless without needing a
+    /// separate iteration cap.
+    ///
+    /// `success`/`error` reflect *engine* health, not "did every branch
+    /// reach an End node": a Switch whose conditions matched no branch, or
+    /// an action node with no configured output wire, just ends that
+    /// branch (see `NodeExecutionDetail.terminal`) — it is normal flow
+    /// control, not a failure. Only real problems (node not found, missing
+    /// variable data, formula errors, a Start node with no output wire)
+    /// are collected into `error`; branches fail independently of each
+    /// other, so one bad branch does not hide actions taken by another.
     pub async fn execute(&self, rule: &Rule) -> Result<RuleExecutionResult> {
         let mut result = RuleExecutionResult {
             rule_id: rule.id,
@@ -351,54 +375,56 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             node_details: HashMap::new(),
         };
 
-        // Execute from start node, accumulating variable values along the path
+        // Shared across the whole run: every node reads/writes into the
+        // same flat maps (this predates branching and is unchanged by it —
+        // two branches referencing the same variable name still see/clobber
+        // each other, same as a linear flow always did).
         let mut values: HashMap<String, f64> = HashMap::new();
         // Mirror of `values` keyed by point identifier (M:{inst}:{point} or
         // A:{inst}:{point}) so scheduler can advance OnChange last_value
         // against what the executor actually saw, not the Redis snapshot.
         let mut point_values: HashMap<String, f64> = HashMap::new();
-        let mut current_id = rule.flow.start_node.as_str();
-        let max_iterations = 100; // Prevent infinite loops
-        let mut iterations = 0;
-
         let mut values_snapshot: Option<Arc<HashMap<String, f64>>> = None;
+        // Real engine errors, collected across all branches instead of
+        // aborting the whole run on the first one.
+        let mut branch_errors: Vec<String> = Vec::new();
 
-        loop {
-            iterations += 1;
-            if iterations > max_iterations {
-                result.error = Some("Execution exceeded maximum iterations".to_string());
-                return Ok(result);
+        let mut queue: VecDeque<String> = VecDeque::new();
+        queue.push_back(rule.flow.start_node.clone());
+        let mut visited: HashSet<String> = HashSet::new();
+        // Belt-and-suspenders cap on total distinct nodes visited. The
+        // `visited` guard alone already bounds this to `flow.nodes.len()`
+        // (a node can't be (re-)queued productively once visited), so this
+        // only trips on pathologically large flows.
+        const MAX_VISITS: usize = 1000;
+
+        while let Some(current_id) = queue.pop_front() {
+            if !visited.insert(current_id.clone()) {
+                continue; // already ran this node (cycle or diamond reconvergence)
+            }
+            if visited.len() > MAX_VISITS {
+                branch_errors.push("Execution exceeded maximum node visits".to_string());
+                break;
             }
 
-            result.execution_path.push(current_id.to_string());
+            result.execution_path.push(current_id.clone());
 
-            let node = match rule.flow.nodes.get(current_id) {
+            let node = match rule.flow.nodes.get(current_id.as_str()) {
                 Some(n) => n,
                 None => {
-                    result.error = Some(format!("Node not found: {}", current_id));
-                    return Ok(result);
+                    branch_errors.push(format!("Node not found: {}", current_id));
+                    continue;
                 },
             };
 
             match node {
-                RuleNode::End => {
-                    // Save final variable values and mark success (wrap in Arc).
-                    // point_values is the executor's authoritative "what we
-                    // actually read" view, surfaced to scheduler for OnChange
-                    // last_value advancement so deadband matches reality.
-                    result.variable_values = Arc::new(std::mem::take(&mut values));
-                    result.point_values = Arc::new(std::mem::take(&mut point_values));
-                    result.success = true;
-                    break;
-                },
+                RuleNode::End => {},
                 RuleNode::Start { wires } => {
-                    current_id = match wires.default.first() {
-                        Some(next) => next.as_str(),
-                        None => {
-                            result.error = Some("Start node has no output wire".to_string());
-                            return Ok(result);
-                        },
-                    };
+                    if wires.default.is_empty() {
+                        branch_errors.push("Start node has no output wire".to_string());
+                    } else {
+                        queue.extend(wires.default.iter().cloned());
+                    }
                 },
                 RuleNode::Switch {
                     variables,
@@ -411,55 +437,46 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     let outcome = match self.read_rule_variables(variables, &mut values).await {
                         Ok(o) => o,
                         Err(e) => {
-                            result.error = Some(format!("Failed to read variables: {}", e));
-                            result.variable_values = Arc::new(std::mem::take(&mut values));
-                            result.point_values = Arc::new(std::mem::take(&mut point_values));
-                            return Ok(result);
+                            branch_errors.push(format!("Failed to read variables: {}", e));
+                            continue;
                         },
                     };
                     point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
-                        result.error = Some(format!(
+                        branch_errors.push(format!(
                             "Rule cycle skipped: variables unavailable: {}",
                             outcome.missing.join(", ")
                         ));
-                        result.variable_values = Arc::new(std::mem::take(&mut values));
-                        result.point_values = Arc::new(std::mem::take(&mut point_values));
-                        return Ok(result);
+                        continue;
                     }
                     let values_changed = outcome.values_changed;
 
                     // Snapshot values when entering this node (reuse cache if nothing changed)
                     let snapshot = snapshot_or_reuse(&mut values_snapshot, &values, values_changed);
-                    result.variable_values = Arc::clone(&snapshot);
 
                     // Evaluate all conditions for debugging/visualization
                     let condition_results = self.evaluate_all_conditions(rules, &values);
 
-                    // Evaluate switch rules to determine next node and capture matched condition
-                    let (next_node, matched_port, matched_cond) =
+                    // Evaluate switch rules: every wire target of the first
+                    // matching branch runs (fan-out), not just the first.
+                    let (targets, matched_port, matched_cond) =
                         self.evaluate_rule_switch_with_details(rules, wires, &values);
-                    result.matched_condition = matched_cond;
+                    if matched_cond.is_some() {
+                        result.matched_condition = matched_cond;
+                    }
 
-                    // Record node execution detail (reuse Arc snapshot)
                     result.node_details.insert(
-                        current_id.to_string(),
+                        current_id.clone(),
                         NodeExecutionDetail {
                             node_type: "switch",
                             input_values: snapshot,
                             condition_results: Some(condition_results),
                             matched_port,
                             actions: None,
+                            terminal: targets.is_empty(),
                         },
                     );
-
-                    match next_node {
-                        Some(next) => current_id = next,
-                        None => {
-                            result.error = Some("No matching switch rule".to_string());
-                            return Ok(result);
-                        },
-                    }
+                    queue.extend(targets.into_iter().map(String::from));
                 },
                 RuleNode::ChangeValue {
                     variables,
@@ -471,24 +488,23 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     let outcome = match self.read_rule_variables(variables, &mut values).await {
                         Ok(o) => o,
                         Err(e) => {
-                            result.error = Some(format!("Failed to read variables: {}", e));
-                            return Ok(result);
+                            branch_errors.push(format!("Failed to read variables: {}", e));
+                            continue;
                         },
                     };
                     point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
-                        result.error = Some(format!(
+                        branch_errors.push(format!(
                             "Rule cycle skipped: variables unavailable: {}",
                             outcome.missing.join(", ")
                         ));
-                        return Ok(result);
+                        continue;
                     }
                     let values_changed = outcome.values_changed;
 
                     // Snapshot values when entering this node (before executing actions)
                     let input_snapshot =
                         snapshot_or_reuse(&mut values_snapshot, &values, values_changed);
-                    result.variable_values = Arc::clone(&input_snapshot);
 
                     // Execute value assignments and collect actions for this node
                     let mut node_actions = Vec::new();
@@ -501,77 +517,85 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                         }
                     }
 
-                    // Record node execution detail
                     result.node_details.insert(
-                        current_id.to_string(),
+                        current_id.clone(),
                         NodeExecutionDetail {
                             node_type: "change",
                             input_values: input_snapshot,
                             condition_results: None,
                             matched_port: None,
                             actions: Some(node_actions),
+                            terminal: wires.default.is_empty(),
                         },
                     );
-
-                    current_id = match wires.default.first() {
-                        Some(next) => next.as_str(),
-                        None => {
-                            result.error = Some("ChangeValue node has no output wire".to_string());
-                            return Ok(result);
-                        },
-                    };
+                    queue.extend(wires.default.iter().cloned());
                 },
                 RuleNode::Calculation {
                     variables,
                     rule: calculations,
                     wires,
-                } => match self
-                    .handle_calculation_node(
-                        current_id,
-                        variables,
-                        calculations,
-                        wires,
-                        &mut values,
-                        &mut point_values,
-                        &mut values_snapshot,
-                        &mut result,
-                        rule.id,
-                    )
-                    .await
-                {
-                    Some(next) => current_id = next,
-                    None => return Ok(result),
+                } => {
+                    let targets = self
+                        .handle_calculation_node(
+                            &current_id,
+                            variables,
+                            calculations,
+                            wires,
+                            &mut values,
+                            &mut point_values,
+                            &mut values_snapshot,
+                            &mut result,
+                            &mut branch_errors,
+                            rule.id,
+                        )
+                        .await;
+                    queue.extend(targets.into_iter().map(String::from));
                 },
                 RuleNode::PeriodDelta {
                     input,
                     output,
                     period,
                     wires,
-                } => match self
-                    .handle_period_delta_node(
-                        current_id,
-                        input,
-                        output,
-                        period,
-                        wires,
-                        &mut values,
-                        &mut point_values,
-                        &mut values_snapshot,
-                        &mut result,
-                        rule.id,
-                    )
-                    .await
-                {
-                    Some(next) => current_id = next,
-                    None => return Ok(result),
+                } => {
+                    let targets = self
+                        .handle_period_delta_node(
+                            &current_id,
+                            input,
+                            output,
+                            period,
+                            wires,
+                            &mut values,
+                            &mut point_values,
+                            &mut values_snapshot,
+                            &mut result,
+                            &mut branch_errors,
+                            rule.id,
+                        )
+                        .await;
+                    queue.extend(targets.into_iter().map(String::from));
                 },
             }
         }
 
+        result.variable_values = Arc::new(values);
+        result.point_values = Arc::new(point_values);
+        result.success = branch_errors.is_empty();
+        result.error = if branch_errors.is_empty() {
+            None
+        } else {
+            Some(branch_errors.join("; "))
+        };
+
         Ok(result)
     }
 
-    /// Handle Calculation node: evaluate formulas and write results
+    /// Handle Calculation node: evaluate formulas and write results.
+    ///
+    /// Returns every wire target to continue to (empty if the node has none
+    /// configured, or a formula error stopped this branch — see
+    /// `branch_errors` for the latter). Errors are pushed to
+    /// `branch_errors` instead of aborting the whole run: other branches
+    /// keep going.
     #[allow(clippy::too_many_arguments)]
     async fn handle_calculation_node<'a>(
         &self,
@@ -583,27 +607,27 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         point_values: &mut HashMap<String, f64>,
         snapshot_cache: &mut Option<Arc<HashMap<String, f64>>>,
         result: &mut RuleExecutionResult,
+        branch_errors: &mut Vec<String>,
         rule_id: i64,
-    ) -> Option<&'a str> {
+    ) -> Vec<&'a str> {
         let outcome = match self.read_rule_variables(variables, values).await {
             Ok(o) => o,
             Err(e) => {
-                result.error = Some(format!("Failed to read variables: {}", e));
-                return None;
+                branch_errors.push(format!("Failed to read variables: {}", e));
+                return Vec::new();
             },
         };
         point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
-            result.error = Some(format!(
+            branch_errors.push(format!(
                 "Calculation skipped: variables unavailable: {}",
                 outcome.missing.join(", ")
             ));
-            return None;
+            return Vec::new();
         }
         let values_changed = outcome.values_changed;
 
         let input_snapshot = snapshot_or_reuse(snapshot_cache, values, values_changed);
-        result.variable_values = Arc::clone(&input_snapshot);
 
         let calc_engine =
             CalcEngine::new(Arc::clone(&self.state_store), format!("rule_{}", rule_id));
@@ -613,8 +637,8 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             let calc_result = match calc_engine.evaluate(&calc.formula, values).await {
                 Ok(v) => v,
                 Err(e) => {
-                    result.error = Some(format!("Calc '{}' error: {}", calc.formula, e));
-                    return None;
+                    branch_errors.push(format!("Calc '{}' error: {}", calc.formula, e));
+                    return Vec::new();
                 },
             };
 
@@ -636,19 +660,15 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 condition_results: None,
                 matched_port: None,
                 actions: Some(node_actions),
+                terminal: wires.default.is_empty(),
             },
         );
 
-        match wires.default.first() {
-            Some(next) => Some(next.as_str()),
-            None => {
-                result.error = Some("Calculation node has no output wire".to_string());
-                None
-            },
-        }
+        wires.default.iter().map(String::as_str).collect()
     }
 
-    /// Handle PeriodDelta node: calculate period delta and write result
+    /// Handle PeriodDelta node: calculate period delta and write result.
+    /// See `handle_calculation_node` for the branch-error/continuation contract.
     #[allow(clippy::too_many_arguments)]
     async fn handle_period_delta_node<'a>(
         &self,
@@ -661,44 +681,44 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         point_values: &mut HashMap<String, f64>,
         snapshot_cache: &mut Option<Arc<HashMap<String, f64>>>,
         result: &mut RuleExecutionResult,
+        branch_errors: &mut Vec<String>,
         rule_id: i64,
-    ) -> Option<&'a str> {
+    ) -> Vec<&'a str> {
         let input_vars = vec![input.clone()];
         let outcome = match self.read_rule_variables(&input_vars, values).await {
             Ok(o) => o,
             Err(e) => {
-                result.error = Some(format!("Failed to read input variable: {}", e));
-                return None;
+                branch_errors.push(format!("Failed to read input variable: {}", e));
+                return Vec::new();
             },
         };
         point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
-            result.error = Some(format!(
+            branch_errors.push(format!(
                 "PeriodDelta skipped: input variable unavailable: {}",
                 outcome.missing.join(", ")
             ));
-            return None;
+            return Vec::new();
         }
         let values_changed = outcome.values_changed;
 
         let input_snapshot = snapshot_or_reuse(snapshot_cache, values, values_changed);
-        result.variable_values = Arc::clone(&input_snapshot);
 
         let input_value = match values.get(&input.name).copied() {
             Some(v) if v.is_finite() => v,
             Some(v) => {
-                result.error = Some(format!(
+                branch_errors.push(format!(
                     "PeriodDelta skipped: input variable '{}' is non-finite ({})",
                     input.name, v
                 ));
-                return None;
+                return Vec::new();
             },
             None => {
-                result.error = Some(format!(
+                branch_errors.push(format!(
                     "PeriodDelta skipped: input variable '{}' unavailable after read",
                     input.name
                 ));
-                return None;
+                return Vec::new();
             },
         };
         let calc_engine =
@@ -717,8 +737,8 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         {
             Ok(v) => v,
             Err(e) => {
-                result.error = Some(format!("period_delta error: {}", e));
-                return None;
+                branch_errors.push(format!("period_delta error: {}", e));
+                return Vec::new();
             },
         };
 
@@ -736,16 +756,11 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 condition_results: None,
                 matched_port: None,
                 actions: Some(vec![action]),
+                terminal: wires.default.is_empty(),
             },
         );
 
-        match wires.default.first() {
-            Some(next) => Some(next.as_str()),
-            None => {
-                result.error = Some("PeriodDelta node has no output wire".to_string());
-                None
-            },
-        }
+        wires.default.iter().map(String::as_str).collect()
     }
 
     /// Read variables from RTDB with two-tier priority
@@ -969,33 +984,33 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         Ok(outcome)
     }
 
-    /// Evaluate compact switch rules and return the next node ID with matched condition and port
+    /// Evaluate compact switch rules and return every wire target for the
+    /// first matching branch, with matched condition and port.
     ///
-    /// Returns: (next_node_id, matched_port, matched_condition_expression)
+    /// A branch's output port may fan out to more than one downstream node
+    /// (the flow editor allows connecting one port to several cards) — all
+    /// of them run, not just the first. An empty `Vec` means either no
+    /// branch matched, or the matching branch has no wire configured; the
+    /// caller treats both as a normal branch termination, not an error.
+    ///
+    /// Returns: (targets, matched_port, matched_condition_expression)
     fn evaluate_rule_switch_with_details<'a>(
         &self,
         rules: &[RuleSwitchBranch],
         wires: &'a HashMap<String, Vec<String>>,
         values: &HashMap<String, f64>,
-    ) -> (Option<&'a str>, Option<String>, Option<String>) {
+    ) -> (Vec<&'a str>, Option<String>, Option<String>) {
         for rule in rules {
             if self.evaluate_flow_conditions(&rule.rule, values) {
-                // Format the matched condition expression
                 let condition_str = format_conditions(&rule.rule);
-
-                // Find the wire target for this rule's output
-                if let Some(targets) = wires.get(&rule.name)
-                    && let Some(target) = targets.first()
-                {
-                    return (
-                        Some(target.as_str()),
-                        Some(rule.name.clone()),
-                        Some(condition_str),
-                    );
-                }
+                let targets: Vec<&str> = wires
+                    .get(&rule.name)
+                    .map(|t| t.iter().map(String::as_str).collect())
+                    .unwrap_or_default();
+                return (targets, Some(rule.name.clone()), Some(condition_str));
             }
         }
-        (None, None, None)
+        (Vec::new(), None, None)
     }
 
     /// Evaluate all switch conditions and return results for each branch

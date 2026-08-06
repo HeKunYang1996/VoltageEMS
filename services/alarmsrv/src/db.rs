@@ -7,9 +7,10 @@ use chrono::{TimeZone, Utc};
 use sqlx::SqlitePool;
 use tracing::{debug, info};
 
+use crate::device_names::{self, DeviceNames};
 use crate::models::{
-    Alert, AlertEvent, AlertQueryParams, AlertRule, EventQueryParams, PagedData, RuleQueryParams,
-    resolve_pagination,
+    Alert, AlertEvent, AlertQueryParams, AlertRule, AlertRuleView, EventQueryParams, PagedData,
+    RuleQueryParams, resolve_pagination,
 };
 
 // ============================================================================
@@ -55,6 +56,9 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
             operator        TEXT,
             threshold_value REAL,
             current_value   REAL,
+            device_name     TEXT,
+            point_name      TEXT,
+            unit            TEXT,
             status          TEXT    NOT NULL DEFAULT 'active',
             triggered_at    INTEGER NOT NULL,
             FOREIGN KEY (rule_id) REFERENCES alert_rule(id)
@@ -64,6 +68,9 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("create alert table")?;
+    add_column_if_missing(pool, "alert", "device_name", "TEXT").await?;
+    add_column_if_missing(pool, "alert", "point_name", "TEXT").await?;
+    add_column_if_missing(pool, "alert", "unit", "TEXT").await?;
 
     sqlx::query(
         r#"
@@ -79,6 +86,9 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
             warning_level   INTEGER,
             operator        TEXT,
             threshold_value REAL,
+            device_name     TEXT,
+            point_name      TEXT,
+            unit            TEXT,
             trigger_value   REAL,
             recovery_value  REAL,
             event_type      TEXT    NOT NULL,
@@ -92,8 +102,43 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("create alert_event table")?;
+    add_column_if_missing(pool, "alert_event", "device_name", "TEXT").await?;
+    add_column_if_missing(pool, "alert_event", "point_name", "TEXT").await?;
+    add_column_if_missing(pool, "alert_event", "unit", "TEXT").await?;
 
     info!("Alert tables ready");
+    Ok(())
+}
+
+/// Idempotent `ALTER TABLE ... ADD COLUMN` for databases created before a
+/// column existed. `CREATE TABLE IF NOT EXISTS` above only applies the new
+/// column shape to brand-new installs; existing `voltage.db` files need this
+/// to pick it up. `table`/`column`/`sql_type` are always fixed literals from
+/// call sites in this file, never user input, so building the SQL with
+/// `format!` here is safe.
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    sql_type: &str,
+) -> Result<()> {
+    let has_column: bool = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('{table}') WHERE name = ?"
+    ))
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("check column {}.{}", table, column))?;
+
+    if !has_column {
+        sqlx::query(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {sql_type}"
+        ))
+        .execute(pool)
+        .await
+        .with_context(|| format!("add column {}.{}", table, column))?;
+        info!("Migration: added {}.{} column", table, column);
+    }
     Ok(())
 }
 
@@ -156,10 +201,27 @@ pub async fn get_rule_by_id(pool: &SqlitePool, id: i64) -> Result<Option<AlertRu
     Ok(row)
 }
 
+/// Resolves and attaches `device_name`/`point_name`/`unit` to each rule.
+/// Live join (see `AlertRuleView` doc comment) — one query per rule, which
+/// is fine for the admin-facing, paginated (max 200 rows) rule list.
+pub async fn attach_rule_names(pool: &SqlitePool, rules: Vec<AlertRule>) -> Vec<AlertRuleView> {
+    let mut views = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let names: DeviceNames = device_names::resolve_for_rule(pool, &rule).await;
+        views.push(AlertRuleView {
+            rule,
+            device_name: names.device_name,
+            point_name: names.point_name,
+            unit: names.unit,
+        });
+    }
+    views
+}
+
 pub async fn list_rules(
     pool: &SqlitePool,
     params: &RuleQueryParams,
-) -> Result<PagedData<AlertRule>> {
+) -> Result<PagedData<AlertRuleView>> {
     let mut cond_strings: Vec<String> = Vec::new();
 
     // keyword: fuzzy match across rule_name, description, channel_id, point_id
@@ -243,6 +305,7 @@ pub async fn list_rules(
         .fetch_all(pool)
         .await
         .context("list rules")?;
+    let list = attach_rule_names(pool, list).await;
 
     Ok(PagedData {
         total,
@@ -515,17 +578,27 @@ pub async fn list_alerts(pool: &SqlitePool, params: &AlertQueryParams) -> Result
     })
 }
 
+/// Inserts a new active alert, resolving and permanently baking in the
+/// device/point names at this moment (see `device_names::resolve_for_rule`
+/// and the `Alert::device_name` doc comment for why this is a snapshot, not
+/// a live join).
 pub async fn insert_alert(pool: &SqlitePool, rule: &AlertRule, current_value: f64) -> Result<i64> {
     let now = Utc::now().timestamp();
-    let snapshot = rule.snapshot();
+    let names = device_names::resolve_for_rule(pool, rule).await;
+    let snapshot = rule.snapshot(
+        names.device_name_ref(),
+        names.point_name_ref(),
+        names.unit_ref(),
+    );
 
     let id = sqlx::query_scalar::<_, i64>(
         r#"
         INSERT INTO alert
             (rule_id, rule_snapshot, service_type, channel_id, data_type, point_id,
              rule_name, warning_level, operator, threshold_value, current_value,
+             device_name, point_name, unit,
              status, triggered_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
         RETURNING id
         "#,
     )
@@ -540,6 +613,9 @@ pub async fn insert_alert(pool: &SqlitePool, rule: &AlertRule, current_value: f6
     .bind(&rule.operator)
     .bind(rule.value)
     .bind(current_value)
+    .bind(&names.device_name)
+    .bind(&names.point_name)
+    .bind(&names.unit)
     .bind(now)
     .fetch_one(pool)
     .await
@@ -574,9 +650,10 @@ pub async fn resolve_alert(pool: &SqlitePool, alert: &Alert, recovery_value: f64
         INSERT INTO alert_event
             (rule_id, rule_snapshot, service_type, channel_id, data_type, point_id,
              rule_name, warning_level, operator, threshold_value,
+             device_name, point_name, unit,
              trigger_value, recovery_value, event_type,
              triggered_at, recovered_at, duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recovery', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recovery', ?, ?, ?)
         RETURNING id
         "#,
     )
@@ -590,6 +667,9 @@ pub async fn resolve_alert(pool: &SqlitePool, alert: &Alert, recovery_value: f64
     .bind(alert.warning_level)
     .bind(&alert.operator)
     .bind(alert.threshold_value)
+    .bind(&alert.device_name)
+    .bind(&alert.point_name)
+    .bind(&alert.unit)
     .bind(alert.current_value)
     .bind(recovery_value)
     .bind(alert.triggered_at)
@@ -633,9 +713,10 @@ pub async fn resolve_alerts_by_rule_id(pool: &SqlitePool, rule_id: i64) -> Resul
             INSERT INTO alert_event
                 (rule_id, rule_snapshot, service_type, channel_id, data_type, point_id,
                  rule_name, warning_level, operator, threshold_value,
+                 device_name, point_name, unit,
                  trigger_value, recovery_value, event_type,
                  triggered_at, recovered_at, duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'recovery', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'recovery', ?, ?, ?)
             "#,
         )
         .bind(alert.rule_id)
@@ -648,6 +729,9 @@ pub async fn resolve_alerts_by_rule_id(pool: &SqlitePool, rule_id: i64) -> Resul
         .bind(alert.warning_level)
         .bind(&alert.operator)
         .bind(alert.threshold_value)
+        .bind(&alert.device_name)
+        .bind(&alert.point_name)
+        .bind(&alert.unit)
         .bind(alert.current_value)
         .bind(alert.triggered_at)
         .bind(now)

@@ -16,6 +16,7 @@ use tracing::info;
 mod broadcast;
 mod config;
 mod db;
+mod device_names;
 mod models;
 mod monitor;
 mod routes;

@@ -162,10 +162,19 @@ pub struct ModbusChannelParamsConfig {
     #[serde(default = "default_baud_rate")]
     pub baud_rate: u32,
 
+    #[serde(default = "default_data_bits")]
+    pub data_bits: u8,
+
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: u8,
+
+    #[serde(default = "default_parity")]
+    pub parity: String,
+
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
 
-    #[serde(default = "default_io_timeout_ms")]
+    #[serde(default = "default_io_timeout_ms", alias = "read_timeout_ms")]
     pub io_timeout_ms: u64,
 
     #[serde(default = "default_max_batch_size_config")]
@@ -181,6 +190,18 @@ fn default_modbus_port() -> u16 {
 
 fn default_baud_rate() -> u32 {
     9600
+}
+
+fn default_data_bits() -> u8 {
+    8
+}
+
+fn default_stop_bits() -> u8 {
+    1
+}
+
+fn default_parity() -> String {
+    "none".to_string()
 }
 
 fn default_connect_timeout_ms() -> u64 {
@@ -220,6 +241,7 @@ impl ModbusChannelParamsConfig {
                 .with_max_gap(self.max_gap)
         } else if let Some(device) = &self.device {
             ModbusChannelConfig::rtu(device, self.baud_rate)
+                .with_serial_format(self.data_bits, self.stop_bits, self.parity.clone())
                 .with_io_timeout(Duration::from_millis(self.io_timeout_ms))
                 .with_max_batch_size(self.max_batch_size)
                 .with_max_gap(self.max_gap)
@@ -250,6 +272,15 @@ pub struct ModbusChannelConfig {
     /// RTU baud rate (e.g., 9600, 19200, 115200)
     #[cfg(feature = "modbus")]
     pub baud_rate: u32,
+    /// RTU data bits (7 or 8)
+    #[cfg(feature = "modbus")]
+    pub data_bits: u8,
+    /// RTU stop bits (1 or 2)
+    #[cfg(feature = "modbus")]
+    pub stop_bits: u8,
+    /// RTU parity ("none", "even", or "odd")
+    #[cfg(feature = "modbus")]
+    pub parity: String,
     /// Point configurations
     pub points: Vec<PointConfig>,
     /// Maximum registers per batch read (default: 125)
@@ -272,6 +303,12 @@ impl ModbusChannelConfig {
             rtu_device: String::new(),
             #[cfg(feature = "modbus")]
             baud_rate: 9600,
+            #[cfg(feature = "modbus")]
+            data_bits: 8,
+            #[cfg(feature = "modbus")]
+            stop_bits: 1,
+            #[cfg(feature = "modbus")]
+            parity: "none".to_string(),
             points: Vec::new(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             max_gap: DEFAULT_MAX_GAP,
@@ -289,6 +326,9 @@ impl ModbusChannelConfig {
             io_timeout: Duration::from_millis(DEFAULT_IO_TIMEOUT_MS),
             rtu_device: device.into(),
             baud_rate,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
             points: Vec::new(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             max_gap: DEFAULT_MAX_GAP,
@@ -305,6 +345,20 @@ impl ModbusChannelConfig {
     /// Set I/O timeout.
     pub fn with_io_timeout(mut self, timeout: Duration) -> Self {
         self.io_timeout = timeout;
+        self
+    }
+
+    /// Set RTU serial framing.
+    #[cfg(feature = "modbus")]
+    pub fn with_serial_format(
+        mut self,
+        data_bits: u8,
+        stop_bits: u8,
+        parity: impl Into<String>,
+    ) -> Self {
+        self.data_bits = data_bits;
+        self.stop_bits = stop_bits;
+        self.parity = parity.into();
         self
     }
 

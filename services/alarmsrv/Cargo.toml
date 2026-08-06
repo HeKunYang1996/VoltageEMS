@@ -12,6 +12,7 @@ path = "src/main.rs"
 # Local libraries
 common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum"] }
 voltage-rtdb = { path = "../../libs/voltage-rtdb" }
+voltage-model = { path = "../../libs/voltage-model" }
 
 # Async runtime
 tokio = { workspace = true }

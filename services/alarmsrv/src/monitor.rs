@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use voltage_rtdb::Rtdb;
 
 use crate::db;
+use crate::device_names;
 use crate::state::AppState;
 
 pub async fn run_monitor(state: Arc<AppState>, shutdown: CancellationToken) {
@@ -151,9 +152,16 @@ async fn check_single_rule(state: Arc<AppState>, rule: crate::models::AlertRule)
                         "ALARM TRIGGERED: rule='{}' value={} {} {}",
                         rule.rule_name, current_value, rule.operator, rule.value
                     );
+                    let names = device_names::resolve_for_rule(&state.db, &rule).await;
                     state
                         .broadcaster
-                        .send_alarm_triggered(alert_id, &rule, current_value)
+                        .send_alarm_triggered(
+                            alert_id,
+                            &rule,
+                            current_value,
+                            names.device_name_ref(),
+                            names.point_name_ref(),
+                        )
                         .await;
                     send_alarm_count_broadcast(&state).await;
                 },
@@ -175,7 +183,14 @@ async fn check_single_rule(state: Arc<AppState>, rule: crate::models::AlertRule)
                 );
                 state
                     .broadcaster
-                    .send_alarm_recovery(alert.id, &rule, Some(current_value), "条件恢复")
+                    .send_alarm_recovery(
+                        alert.id,
+                        &rule,
+                        Some(current_value),
+                        "条件恢复",
+                        alert.device_name.as_deref(),
+                        alert.point_name.as_deref(),
+                    )
                     .await;
                 send_alarm_count_broadcast(&state).await;
             },
@@ -214,7 +229,14 @@ pub async fn on_rule_updated(state: &Arc<AppState>, rule_id: i64) {
         for alert in &resolved {
             state
                 .broadcaster
-                .send_alarm_recovery(alert.id, &rule, None, "规则被禁用")
+                .send_alarm_recovery(
+                    alert.id,
+                    &rule,
+                    None,
+                    "规则被禁用",
+                    alert.device_name.as_deref(),
+                    alert.point_name.as_deref(),
+                )
                 .await;
         }
         // Broadcast updated count only when at least one alert was resolved.
@@ -234,7 +256,14 @@ pub async fn on_rule_deleted(state: &Arc<AppState>, rule: &crate::models::AlertR
     for alert in &resolved {
         state
             .broadcaster
-            .send_alarm_recovery(alert.id, rule, None, "规则被删除")
+            .send_alarm_recovery(
+                alert.id,
+                rule,
+                None,
+                "规则被删除",
+                alert.device_name.as_deref(),
+                alert.point_name.as_deref(),
+            )
             .await;
     }
     if !resolved.is_empty() {

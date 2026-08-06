@@ -192,6 +192,25 @@ pub const ACTION_ROUTING_TABLE: &str = r#"
     )
 "#;
 
+/// Station topology table DDL
+///
+/// Stores the visual modeling topology JSON for a single edge station.
+/// `station_id` is UNIQUE (defaults to `'station'`), giving upsert semantics —
+/// there is exactly one topology record per station. `flow_json` holds the full
+/// Vue-Flow canvas JSON including node positions and device bindings.
+pub const STATION_TOPOLOGY_TABLE: &str = r#"
+    CREATE TABLE IF NOT EXISTS station_topology (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        station_id   TEXT NOT NULL UNIQUE DEFAULT 'station',
+        station_name TEXT NOT NULL DEFAULT 'Edge Station',
+        description  TEXT,
+        gateway_id   TEXT,
+        flow_json    TEXT NOT NULL,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+"#;
+
 /// Instance property values table DDL
 ///
 /// One row per (instance_id, property_id). `value_json` holds the property's
@@ -312,6 +331,9 @@ pub async fn init_modsrv_schema(pool: &SqlitePool) -> Result<()> {
 
     // Instance property values (one row per property)
     sqlx::query(INSTANCE_PROPERTIES_TABLE).execute(pool).await?;
+
+    // Station visual modeling topology
+    sqlx::query(STATION_TOPOLOGY_TABLE).execute(pool).await?;
 
     Ok(())
 }

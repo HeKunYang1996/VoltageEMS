@@ -310,7 +310,10 @@ async fn create_rule(
     .await
     {
         Ok(id) => {
-            let rule = db::get_rule_by_id(&state.db, id).await.ok().flatten();
+            let rule = match db::get_rule_by_id(&state.db, id).await.ok().flatten() {
+                Some(r) => db::attach_rule_names(&state.db, vec![r]).await.pop(),
+                None => None,
+            };
             Json(ApiResponse::ok(
                 format!("Rule '{}' created", req.rule_name),
                 json!({
@@ -344,10 +347,11 @@ async fn create_rule(
 async fn get_rule(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> impl IntoResponse {
     match db::get_rule_by_id(&state.db, id).await {
         Ok(Some(rule)) => {
+            let view = db::attach_rule_names(&state.db, vec![rule]).await;
             // Return list format for compatibility with alarmsrv-py (data.list[0])
             Json(ApiResponse::ok(
                 "Rule retrieved",
-                json!({ "total": 1, "list": [rule] }),
+                json!({ "total": 1, "list": view }),
             ))
             .into_response()
         },
@@ -566,6 +570,7 @@ async fn rules_by_channel(
         Ok(list) => {
             let total = list.len() as i64;
             let page_size = total.max(1);
+            let list = db::attach_rule_names(&state.db, list).await;
             Json(ApiResponse::ok(
                 format!("Found {} rule(s) for channel {}", total, channel_id),
                 crate::models::PagedData {
@@ -682,7 +687,14 @@ async fn resolve_alert(
             if let Ok(Some(rule)) = db::get_rule_by_id(&state.db, rule_id).await {
                 state
                     .broadcaster
-                    .send_alarm_recovery(id, &rule, Some(recovery_value), "manually resolved")
+                    .send_alarm_recovery(
+                        id,
+                        &rule,
+                        Some(recovery_value),
+                        "manually resolved",
+                        alert.device_name.as_deref(),
+                        alert.point_name.as_deref(),
+                    )
                     .await;
             }
             if let Ok(counts) = db::get_active_alarm_counts(&state.db).await {
@@ -769,8 +781,10 @@ async fn export_events_csv(
         "Rule Name",
         "Service Type",
         "Channel ID",
+        "Device Name",
         "Data Type",
         "Point ID",
+        "Point Name",
         "Warning Level",
         "Operator",
         "Threshold",
@@ -793,8 +807,10 @@ async fn export_events_csv(
             ev.rule_name.clone(),
             ev.service_type.clone(),
             ev.channel_id.to_string(),
+            ev.device_name.clone().unwrap_or_default(),
             ev.data_type.clone(),
             ev.point_id.to_string(),
+            ev.point_name.clone().unwrap_or_default(),
             ev.warning_level.to_string(),
             ev.operator.clone(),
             ev.threshold_value.to_string(),

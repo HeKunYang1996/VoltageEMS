@@ -95,7 +95,7 @@ hex = "0.4"
 
 [features]
 default = ["modbus", "gpio", "voltage_485", "openapi", "iec61850", "can"]
-modbus = ["dep:voltage_modbus"]
+modbus = ["dep:voltage_modbus", "dep:tokio-serial"]
 iec104 = ["dep:voltage_iec104"]
 opcua = ["dep:async-opcua"]
 can = ["dep:socketcan"]

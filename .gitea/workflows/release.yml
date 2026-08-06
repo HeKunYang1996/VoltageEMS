@@ -1,0 +1,288 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================================================
+  # Job 1: Pre-Release Quality Check
+  # ============================================================================
+  pre-check:
+    name: Pre-Release Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Environment
+        uses: ./.gitea/actions/setup-rust-env
+        with:
+          rust-components: clippy
+          install-protoc: 'true'
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Quick Quality Check
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace -- -D warnings
+          cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used
+          cargo nextest run --workspace --lib --bins
+
+  # ============================================================================
+  # Job 2: Build Multi-Arch Installers (Parallel Matrix)
+  # ============================================================================
+  build:
+    name: Build ${{ matrix.arch }} Installer
+    runs-on: ubuntu-latest
+    needs: pre-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            docker_platform: linux/arm64
+            cli_arch: aarch64
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            docker_platform: linux/amd64
+            cli_arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Extract Version
+        id: version
+        run: |
+          VERSION=${GITEA_REF_NAME#v}
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $GITEA_REF_NAME" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITEA_OUTPUT
+          echo "artifact_name=MonarchEdge-${{ matrix.arch }}-${VERSION}.run" >> $GITEA_OUTPUT
+          echo "Building version $VERSION for ${{ matrix.arch }}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-
+
+      - name: Install Cross-Compilation Tools
+        run: |
+          ZIG_VERSION="0.13.0"
+          ZIG_ARCH="x86_64"
+          echo "Installing Zig ${ZIG_VERSION} for ${ZIG_ARCH}..."
+          wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz"
+          tar -xf "zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz"
+          ZIG_INSTALL_DIR="${RUNNER_TEMP}/zig-${ZIG_VERSION}"
+          rm -rf "$ZIG_INSTALL_DIR"
+          mv "zig-linux-${ZIG_ARCH}-${ZIG_VERSION}" "$ZIG_INSTALL_DIR"
+          echo "$ZIG_INSTALL_DIR" >> $GITEA_PATH
+
+          echo "Installing cargo-zigbuild..."
+          cargo install cargo-zigbuild --locked
+
+      - name: Install Packaging Tools
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y makeself
+          elif command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y makeself
+          else
+            echo "Installing makeself requires root or sudo" >&2
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.docker_platform }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Installer
+        run: |
+          chmod +x scripts/build-installer.sh
+          ./scripts/build-installer.sh "${{ steps.version.outputs.version }}" "${{ matrix.arch }}" "${{ matrix.target }}"
+
+      - name: Package Standalone Monarch CLI
+        run: |
+          MONARCH_BIN="target/${{ matrix.target }}/release/monarch"
+          MONARCH_TAR="release/monarch-linux-${{ matrix.cli_arch }}.tar.gz"
+          tar czf "$MONARCH_TAR" -C "$(dirname "$MONARCH_BIN")" monarch
+          sha256sum "$MONARCH_TAR" > "${MONARCH_TAR}.sha256"
+          echo "Monarch CLI:"
+          ls -lh "$MONARCH_TAR"
+
+      - name: Verify Build Artifacts
+        run: |
+          ARTIFACT="release/${{ steps.version.outputs.artifact_name }}"
+          if [[ ! -f "$ARTIFACT" ]]; then
+            echo "ERROR: Build artifact not found: $ARTIFACT"
+            ls -la release/ || echo "release directory not found"
+            exit 1
+          fi
+          echo "Build artifacts:"
+          ls -lh release/
+
+      - name: Upload Installer
+        uses: https://gitea.com/actions/gitea-upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}-installer
+          path: release/${{ steps.version.outputs.artifact_name }}
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload Monarch CLI
+        uses: https://gitea.com/actions/gitea-upload-artifact@v4
+        with:
+          name: monarch-linux-${{ matrix.cli_arch }}
+          path: |
+            release/monarch-linux-${{ matrix.cli_arch }}.tar.gz
+            release/monarch-linux-${{ matrix.cli_arch }}.tar.gz.sha256
+          retention-days: 7
+
+  # ============================================================================
+  # Job 3: Create Gitea Release
+  # ============================================================================
+  release:
+    name: Create Gitea Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      code: read
+      releases: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Version
+        id: version
+        run: |
+          VERSION=${GITEA_REF_NAME#v}
+          echo "version=$VERSION" >> $GITEA_OUTPUT
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITEA_OUTPUT
+          else
+            echo "prerelease=false" >> $GITEA_OUTPUT
+          fi
+
+      - name: Download All Artifacts
+        uses: https://github.com/christopherHX/gitea-download-artifact@v4
+        with:
+          path: release/
+          merge-multiple: true
+
+      - name: List Downloaded Artifacts
+        run: ls -lh release/
+
+      - name: Generate Release Notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG_NAME="${GITEA_REF_NAME}"
+
+          cat > release_notes.md << EOF
+          ## MonarchEdge ${VERSION}
+
+          ### Installer (full deployment package)
+
+          | Architecture | File |
+          |--------------|------|
+          | ARM64 | \`MonarchEdge-arm64-${VERSION}.run\` |
+          | AMD64 | \`MonarchEdge-amd64-${VERSION}.run\` |
+
+          ### Monarch CLI (standalone)
+
+          | Platform | File |
+          |----------|------|
+          | Linux x86_64 | \`monarch-linux-x86_64.tar.gz\` |
+          | Linux aarch64 | \`monarch-linux-aarch64.tar.gz\` |
+
+          ### Quick Start
+
+          \`\`\`bash
+          # Full deployment
+          scp MonarchEdge-<arch>-${VERSION}.run user@device:/tmp/
+          chmod +x /tmp/MonarchEdge-<arch>-${VERSION}.run
+          sudo /tmp/MonarchEdge-<arch>-${VERSION}.run
+          monarch sync
+
+          # Monarch CLI only
+          tar xzf monarch-<platform>.tar.gz
+          sudo mv monarch /usr/local/bin/
+          \`\`\`
+
+          ### Package Contents
+
+          - **Rust Services**: comsrv (6001), modsrv (6002), hissrv (6004), apigateway (6005), netsrv (6006), alarmsrv (6007)
+          - **Infrastructure**: Redis 8, TimescaleDB (pg17)
+          - **Frontend**: Vue.js (8080)
+          - **CLI Tool**: monarch
+
+          EOF
+
+          # Add tag message if exists
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' "$TAG_NAME" 2>/dev/null || echo "")
+          if [[ -n "$TAG_MESSAGE" ]]; then
+            echo "" >> release_notes.md
+            echo "### Release Notes" >> release_notes.md
+            echo "" >> release_notes.md
+            echo "$TAG_MESSAGE" >> release_notes.md
+          fi
+
+          # Add commits since previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -n "$PREV_TAG" ]]; then
+            echo "" >> release_notes.md
+            echo "### Changes since $PREV_TAG" >> release_notes.md
+            echo "" >> release_notes.md
+            git log --pretty=format:"- %s" "$PREV_TAG".."$TAG_NAME" >> release_notes.md || true
+          fi
+
+          cat release_notes.md
+
+      - name: Create Release
+        uses: https://gitea.com/actions/gitea-release-action@v1
+        with:
+          name: MonarchEdge ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          files: |
+            release/MonarchEdge-arm64-${{ steps.version.outputs.version }}.run
+            release/MonarchEdge-amd64-${{ steps.version.outputs.version }}.run
+            release/monarch-linux-x86_64.tar.gz
+            release/monarch-linux-x86_64.tar.gz.sha256
+            release/monarch-linux-aarch64.tar.gz
+            release/monarch-linux-aarch64.tar.gz.sha256
+          token: ${{ secrets.GITEA_TOKEN }}

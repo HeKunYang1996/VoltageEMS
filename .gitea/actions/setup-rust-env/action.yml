@@ -1,0 +1,72 @@
+name: 'Setup Rust Environment'
+description: 'Install dependencies and set up the Rust toolchain for Gitea Actions'
+
+inputs:
+  rust-components:
+    description: 'Rust components to install (comma-separated)'
+    required: false
+    default: ''
+  install-protoc:
+    description: 'Whether to install protoc'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    # Install system libraries needed by optional features (e.g. btleplug → dbus)
+    - name: Install System Dependencies
+      shell: bash
+      run: |
+        if [ "$(id -u)" -eq 0 ]; then
+          apt-get update -qq
+          apt-get install -y -qq curl unzip libdbus-1-dev pkg-config
+        elif command -v sudo >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl unzip libdbus-1-dev pkg-config
+        else
+          echo "Installing system dependencies requires root or sudo" >&2
+          exit 1
+        fi
+
+    # Install protoc for gRPC compilation (optional)
+    - name: Install Protoc
+      if: inputs.install-protoc == 'true'
+      shell: bash
+      run: |
+        PROTOC_VERSION="23.4"
+        case "$(uname -m)" in
+          x86_64) PROTOC_ARCH="x86_64" ;;
+          aarch64|arm64) PROTOC_ARCH="aarch_64" ;;
+          *) echo "Unsupported architecture for protoc: $(uname -m)" >&2; exit 1 ;;
+        esac
+
+        PROTOC_TMP_DIR=$(mktemp -d)
+        PROTOC_INSTALL_DIR="${RUNNER_TOOL_CACHE:-${HOME}/.cache}/protoc/${PROTOC_VERSION}/${PROTOC_ARCH}"
+        trap 'rm -rf "$PROTOC_TMP_DIR"' EXIT
+        curl --fail --location --retry 3 \
+          --output "$PROTOC_TMP_DIR/protoc.zip" \
+          "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip"
+        mkdir -p "$PROTOC_INSTALL_DIR"
+        unzip -q -o "$PROTOC_TMP_DIR/protoc.zip" -d "$PROTOC_INSTALL_DIR" 'bin/protoc' 'include/*'
+        echo "$PROTOC_INSTALL_DIR/bin" >> "$GITEA_PATH"
+        "$PROTOC_INSTALL_DIR/bin/protoc" --version
+
+    # Setup Rust toolchain
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.rust-components }}
+
+    # Cache Cargo dependencies
+    - name: Cache Dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
