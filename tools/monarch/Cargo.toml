@@ -1,0 +1,69 @@
+[package]
+name = "monarch"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+voltage-rtdb = { path = "../../libs/voltage-rtdb" }
+voltage-rtdb-shm = { path = "../../libs/voltage-rtdb-shm" }
+voltage-routing = { path = "../../libs/voltage-routing" }
+voltage-model = { path = "../../libs/voltage-model" }
+voltage-rules = { path = "../../libs/voltage-rules" }
+common = { path = "../../libs/common" }
+
+# Cross-platform config schema. Replaces the previous comsrv/modsrv service
+# crate dependencies so monarch.exe builds on Windows (service crates are
+# Linux-only due to SHM/UDS deps).
+voltage-config = { path = "../../libs/voltage-config" }
+
+# CLI
+clap = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Database
+# Use sqlx with SQLite only and rustls runtime to avoid OpenSSL for MUSL builds
+sqlx = { workspace = true, default-features = false, features = [
+    "sqlite", "chrono", "json", "uuid", "macros", "runtime-tokio-rustls"
+] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+csv = { workspace = true }
+
+# Time formatting
+chrono = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# File system
+tempfile = { workspace = true }
+
+# Output formatting
+colored = { workspace = true }
+# indicatif removed - not currently used
+
+# Interactive REPL
+rustyline = "15"
+
+# TUI dashboard
+ratatui = "0.29"
+crossterm = "0.28"
+
+# HTTP client
+reqwest = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# Features section removed - lib-mode eliminated in favor of HTTP-only mode
+
+[lints]
+workspace = true
