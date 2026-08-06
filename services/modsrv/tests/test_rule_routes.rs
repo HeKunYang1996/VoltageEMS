@@ -35,26 +35,7 @@ use voltage_rules::RuleScheduler;
 /// Create test SQLite database with rules schema
 async fn create_test_database() -> Result<sqlx::SqlitePool> {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
-
-    // Create rules table
-    sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS rules (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            enabled INTEGER DEFAULT 1,
-            priority INTEGER DEFAULT 0,
-            cooldown_ms INTEGER DEFAULT 0,
-            trigger_config TEXT,
-            nodes_json TEXT NOT NULL DEFAULT '{}',
-            flow_json TEXT,
-            format TEXT DEFAULT 'vue-flow',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"#,
-    )
-    .execute(&pool)
-    .await?;
+    common::test_utils::schema::init_rules_schema(&pool).await?;
 
     Ok(pool)
 }
