@@ -82,7 +82,7 @@ fn generate_sunspec_models(
     ];
 
     for (id, path) in entries {
-        lines.push(format!("    ({id}, include_str!(\"{path}\")),"));
+        lines.push(format!("    ({id}, include_str!({path:?})),"));
     }
 
     lines.push("];".to_string());
