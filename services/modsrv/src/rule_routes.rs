@@ -755,6 +755,14 @@ pub async fn disable_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stat
                      { "target_type": "instance", "target_id": "pv_01", "point_type": "action", "point_id": 5, "value": 78.0, "success": true }
                  ],
                  "execution_path": ["start", "switch-soc", "action-high", "end"],
+                 "execution_graph": {
+                     "nodes": [
+                         { "id": "start", "type": "start", "label": "START", "status": "executed", "terminal": false }
+                     ],
+                     "edges": [
+                         { "source": "start", "target": "switch-soc" }
+                     ]
+                 },
                  "timestamp": "2024-01-01T12:00:00Z"
              }
          }))
@@ -795,6 +803,7 @@ pub async fn execute_rule_now<R: Rtdb + Send + Sync + 'static, S: StateStore + '
         "success": result.success,
         "actions_executed": action_results,
         "execution_path": result.execution_path,
+        "execution_graph": result.execution_graph,
         "timestamp": timestamp
     });
     if !result.success {

@@ -252,6 +252,15 @@ async fn test_soc_strategy_low_battery() {
     );
     assert_eq!(result.actions_executed.len(), 1);
     assert_eq!(result.actions_executed[0].value, 999.0);
+    let switch_edge = result
+        .execution_graph
+        .edges
+        .iter()
+        .find(|edge| edge.source == "switch1")
+        .expect("matched Switch branch should activate an edge");
+    assert_eq!(switch_edge.target, "changeValue1");
+    assert_eq!(switch_edge.port.as_deref(), Some("out001"));
+    assert_eq!(switch_edge.label.as_deref(), Some("out001"));
 }
 
 #[tokio::test]
@@ -312,6 +321,23 @@ async fn test_soc_strategy_no_match() {
         "switch node should be marked as ending its branch"
     );
     assert!(switch_detail.matched_port.is_none());
+    let switch_node = result
+        .execution_graph
+        .nodes
+        .iter()
+        .find(|node| node.id == "switch1")
+        .expect("visited Switch should be present in execution_graph");
+    assert_eq!(switch_node.status, ExecutionNodeStatus::Executed);
+    assert!(switch_node.terminal);
+    assert_eq!(switch_node.terminal_kind, Some("no_matching_branch"));
+    assert!(
+        result
+            .execution_graph
+            .edges
+            .iter()
+            .all(|edge| edge.source != "switch1"),
+        "unmatched Switch must not emit an activated edge"
+    );
 }
 
 /// Reproduces a real production rule: a single wire fans out to two
@@ -397,6 +423,22 @@ async fn test_fan_out_wire_executes_all_downstream_branches() {
     let values: Vec<f64> = result.actions_executed.iter().map(|a| a.value).collect();
     assert!(values.contains(&111.0));
     assert!(values.contains(&222.0));
+    let start_targets: HashSet<&str> = result
+        .execution_graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source == "start")
+        .map(|edge| edge.target.as_str())
+        .collect();
+    assert_eq!(start_targets, HashSet::from(["cv1", "cv2"]));
+    assert!(
+        result
+            .execution_graph
+            .edges
+            .iter()
+            .all(|edge| edge.source != "start" || edge.port.is_none()),
+        "default fan-out edges should not invent a port label"
+    );
 }
 
 // =========================================================================
