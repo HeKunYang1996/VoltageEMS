@@ -67,9 +67,9 @@ jobs:
       - name: Extract Version
         id: version
         run: |
-          VERSION=${GITEA_REF_NAME#v}
+          VERSION=${GITHUB_REF_NAME#v}
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: $GITEA_REF_NAME" >&2
+            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
             exit 1
           fi
           echo "version=$VERSION" >> $GITEA_OUTPUT
@@ -189,7 +189,7 @@ jobs:
       - name: Extract Version
         id: version
         run: |
-          VERSION=${GITEA_REF_NAME#v}
+          VERSION=${GITHUB_REF_NAME#v}
           echo "version=$VERSION" >> $GITEA_OUTPUT
           if [[ "$VERSION" == *-* ]]; then
             echo "prerelease=true" >> $GITEA_OUTPUT
@@ -209,7 +209,7 @@ jobs:
       - name: Generate Release Notes
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG_NAME="${GITEA_REF_NAME}"
+          TAG_NAME="${GITHUB_REF_NAME}"
 
           cat > release_notes.md << EOF
           ## MonarchEdge ${VERSION}

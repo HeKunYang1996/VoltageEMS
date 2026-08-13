@@ -200,6 +200,7 @@ pub async fn build_execution_display(
         &var_defs,
         &instance_map,
     );
+    let execution_graph = build_execution_graph(result, &execution_steps);
     let action_display = build_action_display(&result.actions_executed, &instance_map);
 
     // ── 8. Assemble top-level display object ────────────────────────────────
@@ -217,6 +218,7 @@ pub async fn build_execution_display(
         "trigger_reason": trigger_reason,
         "variables": variable_display,
         "execution_steps": execution_steps,
+        "execution_graph": execution_graph,
         "actions": action_display,
     })
 }
@@ -540,6 +542,66 @@ fn build_execution_steps(
             step
         })
         .collect()
+}
+
+/// Build the final graph-shaped display contract while retaining
+/// `execution_steps` during the frontend migration.
+///
+/// Node presentation details come from the enriched legacy steps; status and
+/// edges come from the executor's machine-readable trace. Redundant
+/// `matched_port` / `matched_label` fields are intentionally omitted here:
+/// the activated edge owns that information.
+fn build_execution_graph(result: &RuleExecutionResult, steps: &[Value]) -> Value {
+    let trace_nodes: HashMap<&str, &crate::executor::ExecutionGraphNode> = result
+        .execution_graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+
+    let nodes: Vec<Value> = steps
+        .iter()
+        .map(|step| {
+            let mut node = step.clone();
+            let id = node
+                .get("node_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if let Some(object) = node.as_object_mut() {
+                object.remove("node_id");
+                object.remove("node_kind");
+                object.remove("matched_port");
+                object.remove("matched_label");
+                object.insert("id".to_string(), json!(id));
+            }
+
+            if let Some(trace) = trace_nodes.get(id.as_str()) {
+                // Graph `type` is the stable execution kind (`switch`,
+                // `change`, ...), not the Vue editor component type
+                // (`function-switch`, `action-changeValue`, ...).
+                node["type"] = json!(trace.node_type);
+                node["status"] = json!(trace.status);
+                node["terminal"] = json!(trace.terminal);
+                if let Some(kind) = trace.terminal_kind {
+                    node["terminal_kind"] = json!(kind);
+                } else if let Some(object) = node.as_object_mut() {
+                    object.remove("terminal_kind");
+                }
+                if let Some(reason) = &trace.terminal_reason {
+                    node["terminal_reason"] = json!(reason);
+                } else if let Some(object) = node.as_object_mut() {
+                    object.remove("terminal_reason");
+                }
+            }
+            node
+        })
+        .collect();
+
+    json!({
+        "nodes": nodes,
+        "edges": result.execution_graph.edges,
+    })
 }
 
 /// Switch step: expose every branch's raw + device/point-resolved
@@ -923,11 +985,58 @@ mod tests {
             actions_executed: vec![],
             error: None,
             execution_path: vec![],
+            execution_graph: Default::default(),
             matched_condition: None,
             variable_values: Arc::new(HashMap::new()),
             point_values: Arc::new(HashMap::new()),
             node_details: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn execution_graph_uses_enriched_nodes_without_matched_port_duplication() {
+        let mut result = base_result();
+        result
+            .execution_graph
+            .nodes
+            .push(crate::executor::ExecutionGraphNode {
+                id: "sw1".to_string(),
+                node_type: "switch",
+                label: "Switch Function",
+                status: crate::executor::ExecutionNodeStatus::Executed,
+                terminal: false,
+                terminal_kind: None,
+                terminal_reason: None,
+            });
+        result
+            .execution_graph
+            .edges
+            .push(crate::executor::ExecutionGraphEdge {
+                source: "sw1".to_string(),
+                target: "cv1".to_string(),
+                port: Some("out001".to_string()),
+                label: Some("out001".to_string()),
+            });
+
+        let steps = vec![json!({
+            "node_id": "sw1",
+            "label": "SOC Branch",
+            "type": "function-switch",
+            "matched_port": "out001",
+            "matched_label": "out001",
+            "conditions": [],
+        })];
+        let graph = build_execution_graph(&result, &steps);
+        let node = &graph["nodes"][0];
+
+        assert_eq!(node["id"], "sw1");
+        assert_eq!(node["label"], "SOC Branch");
+        assert_eq!(node["type"], "switch");
+        assert_eq!(node["status"], "executed");
+        assert!(node.get("node_kind").is_none());
+        assert!(node.get("matched_port").is_none());
+        assert!(node.get("matched_label").is_none());
+        assert_eq!(graph["edges"][0]["port"], "out001");
     }
 
     #[test]

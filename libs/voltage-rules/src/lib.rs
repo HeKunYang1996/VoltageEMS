@@ -50,7 +50,10 @@ pub use repository::{
 };
 
 #[cfg(unix)]
-pub use executor::{ActionResult, RuleExecutionResult, RuleExecutor};
+pub use executor::{
+    ActionResult, ExecutionGraph, ExecutionGraphEdge, ExecutionGraphNode, ExecutionNodeStatus,
+    RuleExecutionResult, RuleExecutor,
+};
 #[cfg(unix)]
 pub use logger::{RuleLogger, RuleLoggerManager, format_conditions};
 #[cfg(unix)]

@@ -206,6 +206,9 @@ pub struct RuleExecutionResult {
     pub actions_executed: Vec<ActionResult>,
     pub error: Option<String>,
     pub execution_path: Vec<String>, // Node IDs visited
+    /// Machine-readable trace of nodes visited and output edges activated.
+    /// `execution_path` is retained during the API migration.
+    pub execution_graph: ExecutionGraph,
     /// Matched condition expression (e.g., "X1>=49" or "X1>10 && X2<50")
     pub matched_condition: Option<String>,
     /// Variable values at execution time (for logging)
@@ -219,6 +222,96 @@ pub struct RuleExecutionResult {
     pub point_values: Arc<HashMap<String, f64>>,
     /// Node execution details for debugging/visualization
     pub node_details: HashMap<String, NodeExecutionDetail>,
+}
+
+/// Machine-readable trace of one rule execution.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ExecutionGraph {
+    pub nodes: Vec<ExecutionGraphNode>,
+    pub edges: Vec<ExecutionGraphEdge>,
+}
+
+/// Processing outcome for a node that the executor visited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionNodeStatus {
+    Executed,
+    Skipped,
+    Failed,
+}
+
+/// One node visited during this execution.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutionGraphNode {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub node_type: &'static str,
+    pub label: &'static str,
+    pub status: ExecutionNodeStatus,
+    pub terminal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+}
+
+/// One output edge selected by a node during this execution.
+///
+/// An activated edge means the source selected and scheduled the target. The
+/// target may already have run when a cycle or diamond reconverges, because
+/// the executor intentionally visits each node at most once.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutionGraphEdge {
+    pub source: String,
+    pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl ExecutionGraph {
+    fn push_node(&mut self, id: &str, node_type: &'static str, label: &'static str) {
+        self.nodes.push(ExecutionGraphNode {
+            id: id.to_string(),
+            node_type,
+            label,
+            status: ExecutionNodeStatus::Executed,
+            terminal: false,
+            terminal_kind: None,
+            terminal_reason: None,
+        });
+    }
+
+    fn finish_node(
+        &mut self,
+        id: &str,
+        status: ExecutionNodeStatus,
+        terminal_kind: Option<&'static str>,
+        reason: Option<String>,
+    ) {
+        if let Some(node) = self.nodes.iter_mut().rev().find(|node| node.id == id) {
+            node.status = status;
+            node.terminal = terminal_kind.is_some();
+            node.terminal_kind = terminal_kind;
+            node.terminal_reason = reason;
+        }
+    }
+
+    fn activate_edges<I>(&mut self, source: &str, port: Option<&str>, targets: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let targets: Vec<String> = targets.into_iter().collect();
+        self.edges
+            .extend(targets.iter().map(|target| ExecutionGraphEdge {
+                source: source.to_string(),
+                target: target.clone(),
+                port: port.map(str::to_string),
+                label: port.map(str::to_string),
+            }));
+        targets
+    }
 }
 
 /// Record of an executed action
@@ -369,6 +462,7 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             actions_executed: vec![],
             error: None,
             execution_path: vec![],
+            execution_graph: ExecutionGraph::default(),
             matched_condition: None,
             variable_values: Arc::new(HashMap::new()),
             point_values: Arc::new(HashMap::new()),
@@ -412,18 +506,58 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             let node = match rule.flow.nodes.get(current_id.as_str()) {
                 Some(n) => n,
                 None => {
-                    branch_errors.push(format!("Node not found: {}", current_id));
+                    let reason = format!("Node not found: {}", current_id);
+                    result
+                        .execution_graph
+                        .push_node(&current_id, "unknown", "Unknown");
+                    result.execution_graph.finish_node(
+                        &current_id,
+                        ExecutionNodeStatus::Failed,
+                        Some("node_not_found"),
+                        Some(reason.clone()),
+                    );
+                    branch_errors.push(reason);
                     continue;
                 },
             };
+            let (node_type, node_label) = match node {
+                RuleNode::Start { .. } => ("start", "START"),
+                RuleNode::End => ("end", "END"),
+                RuleNode::Switch { .. } => ("switch", "Switch Function"),
+                RuleNode::ChangeValue { .. } => ("change", "Change Value"),
+                RuleNode::Calculation { .. } => ("calculation", "Calculation"),
+                RuleNode::PeriodDelta { .. } => ("periodDelta", "Period Delta"),
+            };
+            result
+                .execution_graph
+                .push_node(&current_id, node_type, node_label);
 
             match node {
-                RuleNode::End => {},
+                RuleNode::End => {
+                    result.execution_graph.finish_node(
+                        &current_id,
+                        ExecutionNodeStatus::Executed,
+                        Some("end"),
+                        Some("End node reached".to_string()),
+                    );
+                },
                 RuleNode::Start { wires } => {
                     if wires.default.is_empty() {
-                        branch_errors.push("Start node has no output wire".to_string());
+                        let reason = "Start node has no output wire".to_string();
+                        result.execution_graph.finish_node(
+                            &current_id,
+                            ExecutionNodeStatus::Failed,
+                            Some("no_downstream"),
+                            Some(reason.clone()),
+                        );
+                        branch_errors.push(reason);
                     } else {
-                        queue.extend(wires.default.iter().cloned());
+                        let targets = result.execution_graph.activate_edges(
+                            &current_id,
+                            None,
+                            wires.default.iter().cloned(),
+                        );
+                        queue.extend(targets);
                     }
                 },
                 RuleNode::Switch {
@@ -437,16 +571,30 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     let outcome = match self.read_rule_variables(variables, &mut values).await {
                         Ok(o) => o,
                         Err(e) => {
-                            branch_errors.push(format!("Failed to read variables: {}", e));
+                            let reason = format!("Failed to read variables: {}", e);
+                            result.execution_graph.finish_node(
+                                &current_id,
+                                ExecutionNodeStatus::Failed,
+                                Some("execution_error"),
+                                Some(reason.clone()),
+                            );
+                            branch_errors.push(reason);
                             continue;
                         },
                     };
                     point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
-                        branch_errors.push(format!(
+                        let reason = format!(
                             "Rule cycle skipped: variables unavailable: {}",
                             outcome.missing.join(", ")
-                        ));
+                        );
+                        result.execution_graph.finish_node(
+                            &current_id,
+                            ExecutionNodeStatus::Skipped,
+                            Some("variables_unavailable"),
+                            Some(reason.clone()),
+                        );
+                        branch_errors.push(reason);
                         continue;
                     }
                     let values_changed = outcome.values_changed;
@@ -465,18 +613,33 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                         result.matched_condition = matched_cond;
                     }
 
+                    let terminal = targets.is_empty();
                     result.node_details.insert(
                         current_id.clone(),
                         NodeExecutionDetail {
                             node_type: "switch",
                             input_values: snapshot,
                             condition_results: Some(condition_results),
-                            matched_port,
+                            matched_port: matched_port.clone(),
                             actions: None,
-                            terminal: targets.is_empty(),
+                            terminal,
                         },
                     );
-                    queue.extend(targets.into_iter().map(String::from));
+                    if terminal {
+                        result.execution_graph.finish_node(
+                            &current_id,
+                            ExecutionNodeStatus::Executed,
+                            Some("no_matching_branch"),
+                            Some("No branch condition matched".to_string()),
+                        );
+                    } else {
+                        let targets = result.execution_graph.activate_edges(
+                            &current_id,
+                            matched_port.as_deref(),
+                            targets.into_iter().map(String::from),
+                        );
+                        queue.extend(targets);
+                    }
                 },
                 RuleNode::ChangeValue {
                     variables,
@@ -488,16 +651,30 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                     let outcome = match self.read_rule_variables(variables, &mut values).await {
                         Ok(o) => o,
                         Err(e) => {
-                            branch_errors.push(format!("Failed to read variables: {}", e));
+                            let reason = format!("Failed to read variables: {}", e);
+                            result.execution_graph.finish_node(
+                                &current_id,
+                                ExecutionNodeStatus::Failed,
+                                Some("execution_error"),
+                                Some(reason.clone()),
+                            );
+                            branch_errors.push(reason);
                             continue;
                         },
                     };
                     point_values.extend(outcome.point_values);
                     if !outcome.missing.is_empty() {
-                        branch_errors.push(format!(
+                        let reason = format!(
                             "Rule cycle skipped: variables unavailable: {}",
                             outcome.missing.join(", ")
-                        ));
+                        );
+                        result.execution_graph.finish_node(
+                            &current_id,
+                            ExecutionNodeStatus::Skipped,
+                            Some("variables_unavailable"),
+                            Some(reason.clone()),
+                        );
+                        branch_errors.push(reason);
                         continue;
                     }
                     let values_changed = outcome.values_changed;
@@ -528,7 +705,21 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                             terminal: wires.default.is_empty(),
                         },
                     );
-                    queue.extend(wires.default.iter().cloned());
+                    if wires.default.is_empty() {
+                        result.execution_graph.finish_node(
+                            &current_id,
+                            ExecutionNodeStatus::Executed,
+                            Some("no_downstream"),
+                            Some("No downstream node connected".to_string()),
+                        );
+                    } else {
+                        let targets = result.execution_graph.activate_edges(
+                            &current_id,
+                            None,
+                            wires.default.iter().cloned(),
+                        );
+                        queue.extend(targets);
+                    }
                 },
                 RuleNode::Calculation {
                     variables,
@@ -549,7 +740,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                             rule.id,
                         )
                         .await;
-                    queue.extend(targets.into_iter().map(String::from));
+                    if !targets.is_empty() {
+                        let targets = result.execution_graph.activate_edges(
+                            &current_id,
+                            None,
+                            targets.into_iter().map(String::from),
+                        );
+                        queue.extend(targets);
+                    }
                 },
                 RuleNode::PeriodDelta {
                     input,
@@ -572,7 +770,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                             rule.id,
                         )
                         .await;
-                    queue.extend(targets.into_iter().map(String::from));
+                    if !targets.is_empty() {
+                        let targets = result.execution_graph.activate_edges(
+                            &current_id,
+                            None,
+                            targets.into_iter().map(String::from),
+                        );
+                        queue.extend(targets);
+                    }
                 },
             }
         }
@@ -613,16 +818,30 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         let outcome = match self.read_rule_variables(variables, values).await {
             Ok(o) => o,
             Err(e) => {
-                branch_errors.push(format!("Failed to read variables: {}", e));
+                let reason = format!("Failed to read variables: {}", e);
+                result.execution_graph.finish_node(
+                    node_id,
+                    ExecutionNodeStatus::Failed,
+                    Some("execution_error"),
+                    Some(reason.clone()),
+                );
+                branch_errors.push(reason);
                 return Vec::new();
             },
         };
         point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
-            branch_errors.push(format!(
+            let reason = format!(
                 "Calculation skipped: variables unavailable: {}",
                 outcome.missing.join(", ")
-            ));
+            );
+            result.execution_graph.finish_node(
+                node_id,
+                ExecutionNodeStatus::Skipped,
+                Some("variables_unavailable"),
+                Some(reason.clone()),
+            );
+            branch_errors.push(reason);
             return Vec::new();
         }
         let values_changed = outcome.values_changed;
@@ -637,7 +856,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
             let calc_result = match calc_engine.evaluate(&calc.formula, values).await {
                 Ok(v) => v,
                 Err(e) => {
-                    branch_errors.push(format!("Calc '{}' error: {}", calc.formula, e));
+                    let reason = format!("Calc '{}' error: {}", calc.formula, e);
+                    result.execution_graph.finish_node(
+                        node_id,
+                        ExecutionNodeStatus::Failed,
+                        Some("execution_error"),
+                        Some(reason.clone()),
+                    );
+                    branch_errors.push(reason);
                     return Vec::new();
                 },
             };
@@ -663,6 +889,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 terminal: wires.default.is_empty(),
             },
         );
+        if wires.default.is_empty() {
+            result.execution_graph.finish_node(
+                node_id,
+                ExecutionNodeStatus::Executed,
+                Some("no_downstream"),
+                Some("No downstream node connected".to_string()),
+            );
+        }
 
         wires.default.iter().map(String::as_str).collect()
     }
@@ -688,16 +922,30 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         let outcome = match self.read_rule_variables(&input_vars, values).await {
             Ok(o) => o,
             Err(e) => {
-                branch_errors.push(format!("Failed to read input variable: {}", e));
+                let reason = format!("Failed to read input variable: {}", e);
+                result.execution_graph.finish_node(
+                    node_id,
+                    ExecutionNodeStatus::Failed,
+                    Some("execution_error"),
+                    Some(reason.clone()),
+                );
+                branch_errors.push(reason);
                 return Vec::new();
             },
         };
         point_values.extend(outcome.point_values);
         if !outcome.missing.is_empty() {
-            branch_errors.push(format!(
+            let reason = format!(
                 "PeriodDelta skipped: input variable unavailable: {}",
                 outcome.missing.join(", ")
-            ));
+            );
+            result.execution_graph.finish_node(
+                node_id,
+                ExecutionNodeStatus::Skipped,
+                Some("variables_unavailable"),
+                Some(reason.clone()),
+            );
+            branch_errors.push(reason);
             return Vec::new();
         }
         let values_changed = outcome.values_changed;
@@ -707,17 +955,31 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         let input_value = match values.get(&input.name).copied() {
             Some(v) if v.is_finite() => v,
             Some(v) => {
-                branch_errors.push(format!(
+                let reason = format!(
                     "PeriodDelta skipped: input variable '{}' is non-finite ({})",
                     input.name, v
-                ));
+                );
+                result.execution_graph.finish_node(
+                    node_id,
+                    ExecutionNodeStatus::Skipped,
+                    Some("invalid_input"),
+                    Some(reason.clone()),
+                );
+                branch_errors.push(reason);
                 return Vec::new();
             },
             None => {
-                branch_errors.push(format!(
+                let reason = format!(
                     "PeriodDelta skipped: input variable '{}' unavailable after read",
                     input.name
-                ));
+                );
+                result.execution_graph.finish_node(
+                    node_id,
+                    ExecutionNodeStatus::Skipped,
+                    Some("variables_unavailable"),
+                    Some(reason.clone()),
+                );
+                branch_errors.push(reason);
                 return Vec::new();
             },
         };
@@ -737,7 +999,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
         {
             Ok(v) => v,
             Err(e) => {
-                branch_errors.push(format!("period_delta error: {}", e));
+                let reason = format!("period_delta error: {}", e);
+                result.execution_graph.finish_node(
+                    node_id,
+                    ExecutionNodeStatus::Failed,
+                    Some("execution_error"),
+                    Some(reason.clone()),
+                );
+                branch_errors.push(reason);
                 return Vec::new();
             },
         };
@@ -759,6 +1028,14 @@ impl<R: Rtdb, S: StateStore> RuleExecutor<R, S> {
                 terminal: wires.default.is_empty(),
             },
         );
+        if wires.default.is_empty() {
+            result.execution_graph.finish_node(
+                node_id,
+                ExecutionNodeStatus::Executed,
+                Some("no_downstream"),
+                Some("No downstream node connected".to_string()),
+            );
+        }
 
         wires.default.iter().map(String::as_str).collect()
     }

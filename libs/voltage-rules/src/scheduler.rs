@@ -993,6 +993,7 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
     /// - `timestamp` → execution timestamp
     /// - `success` → "true" or "false"
     /// - `execution_path` → JSON array of node IDs
+    /// - `execution_graph` → JSON object of visited nodes and activated edges
     /// - `variable_values` → JSON object of variable values
     /// - `node_details` → JSON object of node execution details
     /// - `error` → error message if any
@@ -1009,7 +1010,7 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
             .unwrap_or(0);
 
         // Build all fields in a single Vec for one hash_mset round-trip
-        let mut fields: Vec<(String, Bytes)> = Vec::with_capacity(7);
+        let mut fields: Vec<(String, Bytes)> = Vec::with_capacity(8);
         fields.push(("rule_name".into(), Bytes::from(rule_name.to_string())));
         fields.push(("timestamp".into(), Bytes::from(ts.to_string())));
         fields.push(("success".into(), Bytes::from(result.success.to_string())));
@@ -1017,6 +1018,9 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
         // JSON fields: skip if serialization fails
         if let Ok(path_json) = serde_json::to_string(&result.execution_path) {
             fields.push(("execution_path".into(), Bytes::from(path_json)));
+        }
+        if let Ok(graph_json) = serde_json::to_string(&result.execution_graph) {
+            fields.push(("execution_graph".into(), Bytes::from(graph_json)));
         }
         if let Ok(vars_json) = serde_json::to_string(&result.variable_values) {
             fields.push(("variable_values".into(), Bytes::from(vars_json)));
@@ -1053,6 +1057,7 @@ impl<R: Rtdb + 'static, S: StateStore + 'static> RuleScheduler<R, S> {
         let exec_json = serde_json::to_string(&serde_json::json!({
             "success": result.success,
             "execution_path": &result.execution_path,
+            "execution_graph": &result.execution_graph,
             "variable_values": *result.variable_values,
             "actions_executed": &result.actions_executed,
             "matched_condition": &result.matched_condition,

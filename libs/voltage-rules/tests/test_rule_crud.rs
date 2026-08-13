@@ -13,29 +13,9 @@ async fn setup_test_db() -> SqlitePool {
     let pool = SqlitePool::connect("sqlite::memory:")
         .await
         .expect("Failed to create in-memory database");
-
-    // Create rules table (matches actual schema)
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS rules (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            priority INTEGER NOT NULL DEFAULT 100,
-            cooldown_ms INTEGER NOT NULL DEFAULT 0,
-            trigger_config TEXT,
-            format TEXT NOT NULL DEFAULT 'vue-flow',
-            flow_json TEXT NOT NULL,
-            nodes_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        "#,
-    )
-    .execute(&pool)
-    .await
-    .expect("Failed to create rules table");
+    common::test_utils::schema::init_rules_schema(&pool)
+        .await
+        .expect("Failed to initialize rules schema");
 
     pool
 }

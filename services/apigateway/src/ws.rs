@@ -459,6 +459,11 @@ async fn push_rule_data(hub: &Arc<WsHub>, client_id: &str, rule_id: i64) {
                 .and_then(|v| serde_json::from_str(&String::from_utf8_lossy(v)).ok())
                 .unwrap_or(Value::Array(vec![]));
 
+            let execution_graph: Value = data
+                .get("execution_graph")
+                .and_then(|v| serde_json::from_str(&String::from_utf8_lossy(v)).ok())
+                .unwrap_or_else(|| json!({ "nodes": [], "edges": [] }));
+
             let variable_values: Value = data
                 .get("variable_values")
                 .and_then(|v| serde_json::from_str(&String::from_utf8_lossy(v)).ok())
@@ -481,6 +486,7 @@ async fn push_rule_data(hub: &Arc<WsHub>, client_id: &str, rule_id: i64) {
                         "timestamp": exec_timestamp,
                         "error": error_val,
                         "execution_path": execution_path,
+                        "execution_graph": execution_graph,
                         "variable_values": variable_values,
                         "node_details": node_details,
                     }
