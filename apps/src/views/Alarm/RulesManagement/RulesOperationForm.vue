@@ -17,6 +17,7 @@
         <div class="monitor-data-group" ref="monitorDataGroupRef">
           <el-form-item label="Monitor Data:" prop="channel_id" class="rules-form__compact-item">
             <el-select
+              fit-input-width
               v-model="form.channel_id"
               placeholder="Select Instance"
               popper-class="rules-dialog-popper"
@@ -34,6 +35,7 @@
           </el-form-item>
           <el-form-item prop="data_type" class="rules-form__compact-item">
             <el-select
+              fit-input-width
               v-model="form.data_type"
               placeholder="Select Point Type"
               popper-class="rules-dialog-popper"
@@ -51,6 +53,7 @@
           </el-form-item>
           <el-form-item prop="point_id" class="rules-form__compact-item">
             <el-select
+              fit-input-width
               v-model="form.point_id"
               placeholder="Select Point"
               popper-class="rules-dialog-popper"
@@ -69,6 +72,7 @@
         <div class="alarm-level-group" ref="alarmLevelGroupRef">
           <el-form-item label="Alarm Level:" prop="warning_level">
             <el-select
+              fit-input-width
               v-model="form.warning_level"
               placeholder="Select level"
               popper-class="rules-dialog-popper"
@@ -86,6 +90,7 @@
         <div class="condition-group" ref="conditionGroupRef">
           <el-form-item prop="operator" label="Condition:" class="rules-form__compact-item">
             <el-select
+              fit-input-width
               v-model="form.operator"
               placeholder="Operator"
               popper-class="rules-dialog-popper"

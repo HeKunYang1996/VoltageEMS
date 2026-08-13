@@ -146,22 +146,12 @@ export const dynamicRoutes: RouteItem[] = [
       //   },
       // },
       {
-        path: 'devicemeter1',
-        name: 'devicemeter1',
-        component: () => import('@/views/Devices/DeviceMeter1/index.vue'),
+        path: 'devicemeter',
+        name: 'devicemeter',
+        component: () => import('@/views/Devices/DeviceMeter/index.vue'),
         meta: {
-          title: 'Meter1',
-          activeNav: '/devices/devicemeter1',
-          roles: ['Admin', 'Viewer', 'Engineer'],
-        },
-      },
-      {
-        path: 'devicemeter2',
-        name: 'devicemeter2',
-        component: () => import('@/views/Devices/DeviceMeter2/index.vue'),
-        meta: {
-          title: 'Meter2',
-          activeNav: '/devices/devicemeter2',
+          title: 'Meter',
+          activeNav: '/devices/devicemeter',
           roles: ['Admin', 'Viewer', 'Engineer'],
         },
       },

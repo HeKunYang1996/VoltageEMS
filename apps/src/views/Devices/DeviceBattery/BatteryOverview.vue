@@ -26,12 +26,15 @@ interface BatteryCardItem {
 }
 
 const topoStore = useDeviceTopologyStore()
-const batteryInstanceId = computed<number | undefined>(() => topoStore.getInstanceIds('Battery')[0])
+const batteryInstanceIds = computed(() => topoStore.selectedBatteryGroup?.primaryInstanceIds ?? [])
+const batteryInstanceId = computed<number | undefined>(
+  () => topoStore.getInstanceIds('Battery')[0] ?? batteryInstanceIds.value[0],
+)
 const wsData = ref<any>(null)
 
 // 拓扑加载后自动订阅，加载前静默等待
 useTopologySubscribe(
-  () => topoStore.getInstanceIds('Battery'),
+  () => batteryInstanceIds.value,
   { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
   { onBatchDataUpdate: (data: any) => { wsData.value = data } },
 )

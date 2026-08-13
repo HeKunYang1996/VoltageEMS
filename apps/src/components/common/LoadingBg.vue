@@ -43,7 +43,11 @@ watch(
   (val) => {
     if (val) {
       nextTick(() => {
-        openLoading()
+        // 空数据场景可能在同一渲染周期内完成：此时 loading 已变为 false，
+        // 不应再由延迟回调创建一个无法关闭的遮罩。
+        if (props.loading) {
+          openLoading()
+        }
       })
     } else {
       closeLoading()

@@ -60,6 +60,18 @@
   --el-select-option-selected-text-color: var(--vt-text-primary);
 
   @include select-trigger.vt-el-select-trigger;
+
+  // Keep the selected value and option text inside the trigger/dropdown width.
+  // Element Plus calculates the popper width from the trigger when
+  // `fit-input-width` is enabled on the component.
+  .el-select__selected-item,
+  .el-select__placeholder,
+  .el-select__input {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 // ---------- Select dropdown (teleported) ----------
@@ -100,6 +112,16 @@
 
       .el-select-dropdown__item {
         @extend %select-menu-item;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        .select-option-text {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
 
         &.selected {
           color: var(--vt-text-primary);

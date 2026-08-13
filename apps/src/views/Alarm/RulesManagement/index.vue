@@ -8,7 +8,7 @@
               <el-input v-model="filters.keyword" placeholder="Please enter keyword" />
             </el-form-item>
             <el-form-item label="Alarm Level:">
-              <el-select v-model="filters.warning_level" placeholder="Please select level" clearable
+            <el-select v-model="filters.warning_level" fit-input-width placeholder="Please select level" clearable
                 :append-to="levelSelectRef">
                 <el-option label="Critical Alarm" :value="1" />
                 <el-option label="Warning Alarm" :value="2" />
@@ -16,7 +16,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="Enabled:">
-              <el-select v-model="filters.enabled" placeholder="Please select enabled" clearable
+            <el-select v-model="filters.enabled" fit-input-width placeholder="Please select enabled" clearable
                 :append-to="levelSelectRef">
                 <el-option label="Enabled" :value="true" />
                 <el-option label="Disabled" :value="false" />

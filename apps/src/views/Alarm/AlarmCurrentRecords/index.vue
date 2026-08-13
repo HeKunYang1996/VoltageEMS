@@ -6,7 +6,7 @@
         <div class="alarm-records__toolbar-left vt-toolbar__left" ref="toolbarLeftRef">
           <el-form :model="filters" :inline="true" class="test-form alarm-records__toolbar-form vt-toolbar-form">
             <el-form-item label="Alarm Level:">
-              <el-select v-model="filters.warning_level" clearable placeholder="Please select level"
+              <el-select v-model="filters.warning_level" clearable fit-input-width placeholder="Please select level"
                 :append-to="toolbarLeftRef" style="width: 2.4rem">
                 <el-option label="Critical Alarm" :value="1" />
                 <el-option label="Warning Alarm" :value="2" />

@@ -28,6 +28,14 @@
           Battery Management
         </el-button>
       </div>
+      <div v-if="topoStore.batteryGroups.length > 1" class="device-group-selector">
+        <span>Battery System:</span>
+        <el-select v-model="topoStore.selectedBatteryGroupId" size="small" fit-input-width :title="topoStore.selectedBatteryGroup?.displayName ?? ''">
+          <el-option v-for="group in topoStore.batteryGroups" :key="group.id" :label="group.displayName" :value="group.id">
+            <span class="select-option-text" :title="group.displayName">{{ group.displayName }}</span>
+          </el-option>
+        </el-select>
+      </div>
     </div>
     <!-- 路由内容区域 -->
     <div class="devices-battery__content vt-page-content">
@@ -39,9 +47,11 @@
 <script setup lang="ts">
 import alarmCurrentIcon from '@/assets/icons/alarm-current.svg'
 import alarmHistoryIcon from '@/assets/icons/alarm-history.svg'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
 const route = useRoute()
 const router = useRouter()
+const topoStore = useDeviceTopologyStore()
 
 // 根据当前路由计算激活的标签
 const activeTab = computed(() => {
@@ -68,6 +78,9 @@ const handleTabClick = (tab: 'overview' | 'value' | 'management') => {
 
 <style scoped lang="scss">
 .devices-battery {
+  .devices-battery__header { display: flex; align-items: center; justify-content: space-between; }
+  .device-group-selector { display: flex; align-items: center; gap: 0.16rem; margin-left: auto; }
+  .device-group-selector .el-select { width: 2rem; }
   .devices-battery__content {
     padding-top: 0.2rem;
     min-height: 0;

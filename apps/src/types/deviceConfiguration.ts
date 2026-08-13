@@ -78,6 +78,16 @@ export interface DeviceInstanceBasic {
   instance_name: string
   product_name: string
 }
+export interface DeviceInstanceListItem {
+  id: number
+  name: string
+  product_name: string
+}
+
+export interface DeviceInstanceListResponse {
+  list: DeviceInstanceListItem[]
+  count?: number
+}
 export interface AddDeviceInstanceDetail {
   instance_name: string
   product_name: string

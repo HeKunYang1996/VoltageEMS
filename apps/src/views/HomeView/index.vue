@@ -162,6 +162,7 @@ import type { BatchQueryResponse } from '@/types/Statistics/OverView'
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
 import alterL1 from '@/assets/icons/home-alter-L1.svg'
 import alterL2 from '@/assets/icons/home-alter-L2.svg'
@@ -505,23 +506,36 @@ const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3
 const fetchHomeChartData = async () => {
   const range = getRecentHoursRange(6)
   try {
+    const topoStore = useDeviceTopologyStore()
+    if (!topoStore.loaded) await topoStore.load()
+    const instanceIds = {
+      pv: topoStore.selectedPvGroup?.relatedInstanceIds[0],
+      dg: topoStore.getLogicalDeviceInstanceIds('diesel')[0],
+      ess: topoStore.selectedBatteryGroup?.primaryInstanceIds[0],
+    }
+    const queryDefinitions = [
+      { instanceId: instanceIds.pv, pointId: '7' },
+      { instanceId: instanceIds.dg, pointId: '1' },
+      { instanceId: instanceIds.ess, pointId: '5' },
+      { instanceId: instanceIds.pv, pointId: '15' },
+      { instanceId: instanceIds.dg, pointId: '2' },
+      { instanceId: instanceIds.ess, pointId: '9' },
+    ].filter((item) => item.instanceId !== undefined)
     const res = await batchQueryHistory({
       start_time: range.start!,
       end_time: range.end!,
       limit_per_series: 500,
-      series: [
-        { redis_key: 'inst:4:M', point_id: '7' },  // Power PV
-        { redis_key: 'inst:2:M', point_id: '1' },  // Power DG
-        { redis_key: 'inst:1:M', point_id: '5' },  // Power ESS
-        { redis_key: 'inst:4:M', point_id: '15' }, // Energy PV
-        { redis_key: 'inst:2:M', point_id: '2' },  // Energy DG
-        { redis_key: 'inst:1:M', point_id: '9' },  // Energy ESS
-      ],
+      series: queryDefinitions.map(({ instanceId, pointId }) => ({
+        redis_key: `inst:${instanceId}:M`,
+        point_id: pointId,
+      })),
     })
 
     const responses: BatchQueryResponse[] = res.data?.series ?? []
-    const find = (rk: string, pid: string) =>
-      responses.find((r) => r.redis_key === rk && r.point_id === pid)
+    const find = (instanceId: number | undefined, pointId: string) =>
+      instanceId === undefined
+        ? undefined
+        : responses.find((r) => r.redis_key === `inst:${instanceId}:M` && r.point_id === pointId)
 
     const allTs = new Set<string>()
     responses.forEach((r) => (r.data ?? []).forEach((p) => allTs.add(p.timestamp)))
@@ -535,15 +549,15 @@ const fetchHomeChartData = async () => {
     }
 
     lineChartSeries.value = [
-      { name: 'PV', data: makeVals(find('inst:4:M', '7')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find('inst:2:M', '1')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find('inst:1:M', '5')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: makeVals(find(instanceIds.pv, '7')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find(instanceIds.dg, '1')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find(instanceIds.ess, '5')), color: 'rgba(29, 134, 255, 1)' },
     ]
 
     exampleSeries.value = [
-      { name: 'PV', data: makeVals(find('inst:4:M', '15')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find('inst:2:M', '2')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find('inst:1:M', '9')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: makeVals(find(instanceIds.pv, '15')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find(instanceIds.dg, '2')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find(instanceIds.ess, '9')), color: 'rgba(29, 134, 255, 1)' },
     ]
   } catch (error) {
     console.error('Failed to fetch home chart data:', error)
