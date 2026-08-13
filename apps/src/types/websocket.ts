@@ -132,7 +132,7 @@ export interface AlarmMessage extends WebSocketMessage {
     unit?: string | null
     status: AlarmStatus
     level: AlarmLevel
-    value: number
+    value: number | null
     message: string
   }
 }

@@ -32,7 +32,7 @@
       <div class="control-history__table vt-table-shell">
         <el-table :data="tableData" class="control-history__table-content vt-table-content" table-layout="fixed"
           align="left">
-          <el-table-column prop="rule_name" label="Rule Name" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="rule_name" label="Rule Name" min-width="100" show-overflow-tooltip />
 
           <el-table-column label="Trigger Reason" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">
@@ -40,13 +40,13 @@
             </template>
           </el-table-column>
 
-          <el-table-column prop="triggered_at" label="Trigger Time" width="200">
+          <el-table-column prop="triggered_at" label="Trigger Time" min-width="100">
             <template #default="{ row }">
               {{ formatDateTime(row.triggered_at) }}
             </template>
           </el-table-column>
 
-          <el-table-column label="Result" width="100">
+          <el-table-column label="Result" min-width="80">
             <template #default="{ row }">
               <span
                 class="control-history__status"

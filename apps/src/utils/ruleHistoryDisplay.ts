@@ -21,8 +21,10 @@ const formatOptionalNumber = (value: number | undefined): string => {
 export const getHistoryDisplay = (row: RuleHistoryItem) => row.result?.display
 
 export const getHistorySummary = (row: RuleHistoryItem): string => {
-  const summary = getHistoryDisplay(row)?.summary
-  if (summary) return summary
+  const descriptions = getHistoryDisplay(row)?.actions
+    ?.map((action) => action.description?.trim())
+    .filter((description): description is string => Boolean(description))
+  if (descriptions?.length) return descriptions.join('; ')
   if (row.error) return row.error
   return '-'
 }
