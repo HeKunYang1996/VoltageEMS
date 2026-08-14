@@ -55,9 +55,8 @@ import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { ref, watch, reactive, computed } from 'vue'
 
 const topoStore = useDeviceTopologyStore()
-const pvInstanceId = computed<number | undefined>(
-  () => topoStore.getInstanceIds('PV DCDC')[0] ?? topoStore.getInstanceIds('PVInverter')[0],
-)
+const pvInstanceIds = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds ?? [])
+const pvInstanceId = computed<number | undefined>(() => pvInstanceIds.value[0])
 
 const hoveredRow = ref<number | null>(null)
 const rowData = reactive([
@@ -99,8 +98,7 @@ const wsData = ref<any>(null)
 
 useTopologySubscribe(
   () => {
-    const ids = [...topoStore.getInstanceIds('PV DCDC'), ...topoStore.getInstanceIds('PVInverter')]
-    return ids
+    return pvInstanceIds.value
   },
   { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
   { onBatchDataUpdate: (data: any) => { wsData.value = data } },

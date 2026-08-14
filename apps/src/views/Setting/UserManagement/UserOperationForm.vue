@@ -20,7 +20,7 @@
 
         <el-form-item label="Role:" prop="role_id">
           <div class="role-group" ref="roleGroupRef">
-            <el-select v-model="form.role_id" placeholder="Select role" :append-to="roleGroupRef">
+            <el-select v-model="form.role_id" fit-input-width placeholder="Select role" :append-to="roleGroupRef">
               <el-option
                 v-for="item in roleOptions"
                 :key="item.value"

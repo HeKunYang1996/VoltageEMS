@@ -4,12 +4,24 @@
       <LoadingBg :loading="globalStore.loading">
         <el-tabs v-model="activeTab" type="card" class="devices-pv__tabs">
           <el-tab-pane label="Battery" name="battery">
+            <div v-if="batteryChIds.length > 1" class="channel-toolbar">
+              <span class="channel-toolbar__label">Channel:</span>
+              <el-select v-model="selectedBatteryChId" size="small" fit-input-width>
+                <el-option v-for="id in batteryChIds" :key="id" :label="String(id)" :value="id" />
+              </el-select>
+            </div>
             <DeviceMonitoringTable
               :leftTableData="BatteryleftTableData"
               :rightTableData="BatteryrightTableData"
             />
           </el-tab-pane>
           <el-tab-pane label="PCS" name="pcs">
+            <div v-if="pcsChIds.length > 1" class="channel-toolbar">
+              <span class="channel-toolbar__label">Channel:</span>
+              <el-select v-model="selectedPcsChId" size="small" fit-input-width>
+                <el-option v-for="id in pcsChIds" :key="id" :label="String(id)" :value="id" />
+              </el-select>
+            </div>
             <DeviceMonitoringTable
               :leftTableData="PCSleftTableData"
               :rightTableData="PCSrightTableData"
@@ -35,8 +47,12 @@ const globalStore = useGlobalStore()
 const topoStore = useDeviceTopologyStore()
 
 // 无回退值：store 未加载时为 undefined，响应式触发后再请求/订阅
-const batteryChId = computed<number | undefined>(() => topoStore.getChannelIds('Battery')[0])
-const pcsChId = computed<number | undefined>(() => topoStore.getChannelIds('PCS')[0])
+const batteryChIds = computed(() => topoStore.selectedBatteryGroup?.primaryChannelIds ?? [])
+const pcsChIds = computed(() => topoStore.selectedBatteryGroup?.relatedChannelIds ?? [])
+const selectedBatteryChId = ref<number>()
+const selectedPcsChId = ref<number>()
+const batteryChId = computed<number | undefined>(() => selectedBatteryChId.value)
+const pcsChId = computed<number | undefined>(() => selectedPcsChId.value)
 
 const BatteryleftTableData  = ref<LeftTableItem[]>([])
 const BatteryrightTableData = ref<RightTableItem[]>([])
@@ -45,11 +61,11 @@ const PCSrightTableData     = ref<RightTableItem[]>([])
 
 // ── 点位表加载 ─────────────────────────────────────────────────────────────────
 
-async function loadPointTables(batteryId: number, pcsId: number) {
+async function loadPointTables(batteryId?: number, pcsId?: number) {
   try {
     const [batteryRes, pcsRes] = await Promise.all([
-      getPointsTables(batteryId),
-      getPointsTables(pcsId),
+      batteryId === undefined ? Promise.resolve(null) : getPointsTables(batteryId),
+      pcsId === undefined ? Promise.resolve(null) : getPointsTables(pcsId),
     ])
     if (batteryRes?.success && batteryRes.data) {
       const d = batteryRes.data as PointInfoResponse
@@ -75,8 +91,14 @@ async function loadPointTables(batteryId: number, pcsId: number) {
 }
 
 // 拓扑加载后（或通道变化时）拉取点位表；immediate: true 覆盖 onMounted
+watch(batteryChIds, (ids) => {
+  if (!ids.includes(selectedBatteryChId.value ?? -1)) selectedBatteryChId.value = ids[0]
+}, { immediate: true })
+watch(pcsChIds, (ids) => {
+  if (!ids.includes(selectedPcsChId.value ?? -1)) selectedPcsChId.value = ids[0]
+}, { immediate: true })
 watch([batteryChId, pcsChId], ([bId, pId]) => {
-  if (bId !== undefined && pId !== undefined) loadPointTables(bId, pId)
+  if (bId !== undefined || pId !== undefined) loadPointTables(bId, pId)
 }, { immediate: true })
 
 // ── WebSocket 订阅 ─────────────────────────────────────────────────────────────
@@ -134,8 +156,7 @@ const makeHandlers = () => ({
 
 useTopologySubscribe(
   () => {
-    const bId = batteryChId.value, pId = pcsChId.value
-    return bId !== undefined && pId !== undefined ? [bId, pId] : []
+    return [batteryChId.value, pcsChId.value].filter((id): id is number => id !== undefined)
   },
   { source: 'comsrv', dataTypes: ['T', 'S'], interval: 1000 },
   makeHandlers(),
@@ -158,4 +179,8 @@ const activeTab = ref<'battery' | 'pcs'>('battery')
 
 :deep(.devices-pv__tabs.el-tabs) { height: 100%; }
 :deep(.devices-pv__tabs .el-tab-pane) { height: 100%; }
+.group-toolbar, .channel-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 0.16rem; height: 0.38rem; margin-bottom: 0.1rem; }
+.channel-toolbar__label { color: var(--vt-text-primary); font-size: 0.14rem; }
+.channel-toolbar .el-select { width: 1.2rem; }
+.group-toolbar .el-select { width: 2rem; }
 </style>

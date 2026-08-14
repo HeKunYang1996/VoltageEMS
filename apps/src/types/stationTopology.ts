@@ -23,6 +23,8 @@ export interface ChannelBindingsData {
 /** 拓扑节点的业务数据（data 字段） */
 export interface TopologyNodeData {
   label: string
+  displayName?: string
+  display_name?: string
   productName?: string
   /** 节点绑定的实例列表（Visual Modeling 配置后写入 flow_json） */
   instances?: Array<{
@@ -57,19 +59,21 @@ export interface TopologyFlowEdge {
 export interface TopologyFlowData {
   nodes: TopologyFlowNode[]
   edges: TopologyFlowEdge[]
+  /** Optional fixed card bindings stored alongside the editable graph. */
+  fixedBindings?: {
+    station?: number | string | null
+    environment?: number | string | null
+  }
 }
 
 /**
- * 站点拓扑完整记录。
- * GET /modApi/api/station/topology 返回 ApiResponse<StationTopology>。
- * 首次未配置时返回 flow_json: { nodes: [], edges: [] }，不返回 404。
+ * 站点拓扑完整记录（与当前接口的 camelCase 响应一致）。
  */
 export interface StationTopology {
   station_id: string
   station_name: string
   description: string | null
-  gateway_id?: string | null
-  flow_json: TopologyFlowData
   created_at: string | null
   updated_at: string | null
+  flow_json: TopologyFlowData
 }

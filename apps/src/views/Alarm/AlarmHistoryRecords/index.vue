@@ -7,6 +7,7 @@
           <el-form :model="filters" inline class="alarm-records__toolbar-form vt-toolbar-form">
             <el-form-item label="Alarm Level:">
               <el-select
+                fit-input-width
                 v-model="filters.warning_level"
                 :append-to="toolbarLeftRef"
                 clearable

@@ -110,9 +110,17 @@
       </div>
       <div class="home-alters">
         <ModuleCard title="Alters infomation">
-          <div class="home-altersList">
+          <div
+            class="home-altersList"
+            @touchstart="handleAlarmTouchStart"
+            @touchmove="handleAlarmTouchMove"
+            @touchend="handleAlarmTouchEnd"
+          >
+            <div v-if="alarmPullDistance > 0" class="home-altersRefreshHint">
+              {{ refreshingAlarms ? 'Refreshing...' : alarmPullDistance >= ALARM_PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh' }}
+            </div>
             <div class="home-altersItem" v-for="item in alterInfoList" :key="item.id">
-              <div class="alters__item-name">{{ item.deviceName }}</div>
+              <div class="alters__item-name" :title="item.deviceName">{{ item.deviceName }}</div>
               <img
                 v-if="item.alterLevel == 'Critical Alarm'"
                 :src="alterL1"
@@ -128,8 +136,9 @@
                 :src="alterL3"
                 class="alters__item-icon"
               />
-              <div class="alters__item-msg">{{ item.alterMsg }}</div>
+              <div class="alters__item-msg" :title="item.alterMsg">{{ item.alterMsg }}</div>
             </div>
+            <div v-if="!alterInfoList.length && !refreshingAlarms" class="home-altersEmpty">No current alarms</div>
           </div>
         </ModuleCard>
       </div>
@@ -150,6 +159,10 @@ import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
 import { getRecentHoursRange } from '@/utils/date'
 import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import { getCurrentAlarms } from '@/api/alarm'
+import type { CurrentAlarmData } from '@/types/alarm'
+import type { AlarmMessage } from '@/types/websocket'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
 import alterL1 from '@/assets/icons/home-alter-L1.svg'
 import alterL2 from '@/assets/icons/home-alter-L2.svg'
@@ -371,29 +384,102 @@ useWebSocket(
         applyHomepageBatch(data)
       }
     },
+    onAlarm: handleHomeAlarm,
   },
 )
 
-const alterInfoList = reactive([
-  {
-    id: 1,
-    deviceName: 'ESS',
-    alterLevel: 'Critical Alarm',
-    alterMsg: 'Battery Overvoltage Alarm',
-  },
-  {
-    id: 2,
-    deviceName: 'PV',
-    alterLevel: 'Warning Alarm',
-    alterMsg: 'Battery Overvoltage Alarm',
-  },
-  {
-    id: 3,
-    deviceName: 'Load',
-    alterLevel: 'Info Alarm',
-    alterMsg: 'Battery Overvoltage Alarm',
-  },
-])
+interface HomeAlarmItem {
+  id: number | string
+  deviceName: string
+  alterLevel: string
+  alterMsg: string
+}
+
+type HomeAlarmSource = CurrentAlarmData | AlarmMessage['data']
+
+const alterInfoList = ref<HomeAlarmItem[]>([])
+const refreshingAlarms = ref(false)
+const alarmPullDistance = ref(0)
+const alarmTouchStartY = ref<number | null>(null)
+const ALARM_PULL_TRIGGER = 48
+let alarmListVersion = 0
+const alarmLevelText: Record<number, string> = {
+  1: 'Critical Alarm',
+  2: 'Warning Alarm',
+  3: 'Info Alarm',
+}
+
+const toHomeAlarm = (alarm: HomeAlarmSource): HomeAlarmItem => {
+  if ('warning_level' in alarm) {
+    const pointName = alarm.point_name || `Point ${alarm.point_id}`
+    const unit = alarm.unit || ''
+    const value = alarm.current_value ?? '-'
+    const threshold = alarm.threshold_value ?? '-'
+    const fallbackMessage = `${pointName}: ${value}${unit} ${alarm.operator || ''} ${threshold}${unit} (Rule: ${alarm.rule_name || 'Alarm'})`
+
+    return {
+      id: alarm.id,
+      deviceName: alarm.device_name || alarm.channel_id.toString() || '-',
+      alterLevel: alarmLevelText[alarm.warning_level] || 'Alarm',
+      alterMsg: fallbackMessage,
+    }
+  }
+
+  return {
+    id: alarm.alarm_id,
+    deviceName: alarm.device_name || alarm.device || alarm.channel_id?.toString() || '-',
+    alterLevel: alarmLevelText[alarm.level] || 'Alarm',
+    alterMsg: alarm.message.trim() || 'Alarm',
+  }
+}
+
+const fetchHomeAlarms = async () => {
+  const requestVersion = alarmListVersion
+  refreshingAlarms.value = true
+  try {
+    const response = await getCurrentAlarms({ page: 1, page_size: 8 })
+    if (response.success && requestVersion === alarmListVersion) {
+      alterInfoList.value = (response.data?.list ?? []).map(toHomeAlarm)
+    }
+  } catch (error) {
+    console.error('Failed to fetch current alarms:', error)
+  } finally {
+    refreshingAlarms.value = false
+    alarmPullDistance.value = 0
+  }
+}
+
+function handleHomeAlarm(alarm: AlarmMessage['data']) {
+  alarmListVersion += 1
+  const id = alarm.alarm_id
+  if (alarm.status === 0) {
+    alterInfoList.value = alterInfoList.value.filter((item) => String(item.id) !== String(id))
+    return
+  }
+  alterInfoList.value = [
+    toHomeAlarm(alarm),
+    ...alterInfoList.value.filter((item) => String(item.id) !== String(id)),
+  ].slice(0, 8)
+}
+
+const handleAlarmTouchStart = (event: TouchEvent) => {
+  if (refreshingAlarms.value) return
+  alarmTouchStartY.value = event.touches[0]?.clientY ?? null
+}
+
+const handleAlarmTouchMove = (event: TouchEvent) => {
+  if (alarmTouchStartY.value === null || refreshingAlarms.value) return
+  const distance = (event.touches[0]?.clientY ?? 0) - alarmTouchStartY.value
+  if (distance > 0) alarmPullDistance.value = Math.min(distance * 0.5, 80)
+}
+
+const handleAlarmTouchEnd = () => {
+  if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) fetchHomeAlarms()
+  else alarmPullDistance.value = 0
+  alarmTouchStartY.value = null
+}
+
+fetchHomeAlarms()
 
 // ─── 图表数据（Power Curve + Energy Chart）────────────────────
 const chartXAxisData = ref<string[]>([])
@@ -420,23 +506,36 @@ const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3
 const fetchHomeChartData = async () => {
   const range = getRecentHoursRange(6)
   try {
+    const topoStore = useDeviceTopologyStore()
+    if (!topoStore.loaded) await topoStore.load()
+    const instanceIds = {
+      pv: topoStore.selectedPvGroup?.relatedInstanceIds[0],
+      dg: topoStore.getLogicalDeviceInstanceIds('diesel')[0],
+      ess: topoStore.selectedBatteryGroup?.primaryInstanceIds[0],
+    }
+    const queryDefinitions = [
+      { instanceId: instanceIds.pv, pointId: '7' },
+      { instanceId: instanceIds.dg, pointId: '1' },
+      { instanceId: instanceIds.ess, pointId: '5' },
+      { instanceId: instanceIds.pv, pointId: '15' },
+      { instanceId: instanceIds.dg, pointId: '2' },
+      { instanceId: instanceIds.ess, pointId: '9' },
+    ].filter((item) => item.instanceId !== undefined)
     const res = await batchQueryHistory({
       start_time: range.start!,
       end_time: range.end!,
       limit_per_series: 500,
-      series: [
-        { redis_key: 'inst:4:M', point_id: '7' },  // Power PV
-        { redis_key: 'inst:2:M', point_id: '1' },  // Power DG
-        { redis_key: 'inst:1:M', point_id: '5' },  // Power ESS
-        { redis_key: 'inst:4:M', point_id: '15' }, // Energy PV
-        { redis_key: 'inst:2:M', point_id: '2' },  // Energy DG
-        { redis_key: 'inst:1:M', point_id: '9' },  // Energy ESS
-      ],
+      series: queryDefinitions.map(({ instanceId, pointId }) => ({
+        redis_key: `inst:${instanceId}:M`,
+        point_id: pointId,
+      })),
     })
 
     const responses: BatchQueryResponse[] = res.data?.series ?? []
-    const find = (rk: string, pid: string) =>
-      responses.find((r) => r.redis_key === rk && r.point_id === pid)
+    const find = (instanceId: number | undefined, pointId: string) =>
+      instanceId === undefined
+        ? undefined
+        : responses.find((r) => r.redis_key === `inst:${instanceId}:M` && r.point_id === pointId)
 
     const allTs = new Set<string>()
     responses.forEach((r) => (r.data ?? []).forEach((p) => allTs.add(p.timestamp)))
@@ -450,15 +549,15 @@ const fetchHomeChartData = async () => {
     }
 
     lineChartSeries.value = [
-      { name: 'PV', data: makeVals(find('inst:4:M', '7')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find('inst:2:M', '1')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find('inst:1:M', '5')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: makeVals(find(instanceIds.pv, '7')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find(instanceIds.dg, '1')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find(instanceIds.ess, '5')), color: 'rgba(29, 134, 255, 1)' },
     ]
 
     exampleSeries.value = [
-      { name: 'PV', data: makeVals(find('inst:4:M', '15')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find('inst:2:M', '2')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find('inst:1:M', '9')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: makeVals(find(instanceIds.pv, '15')), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: makeVals(find(instanceIds.dg, '2')), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: makeVals(find(instanceIds.ess, '9')), color: 'rgba(29, 134, 255, 1)' },
     ]
   } catch (error) {
     console.error('Failed to fetch home chart data:', error)
@@ -675,6 +774,7 @@ const handleNext = () => {
       .home-altersList {
         height: 100%;
         overflow-y: scroll;
+        touch-action: pan-y;
         // 默认隐藏滚动条
         scrollbar-width: none;
         /* Firefox */
@@ -685,6 +785,14 @@ const handleNext = () => {
         &::-webkit-scrollbar {
           width: 0;
           height: 0;
+        }
+
+        .home-altersRefreshHint,
+        .home-altersEmpty {
+          padding: 0.12rem 0;
+          color: rgba(255, 255, 255, 0.55);
+          font-size: 0.13rem;
+          text-align: center;
         }
 
         // 鼠标悬停时显示滚动条
@@ -705,39 +813,43 @@ const handleNext = () => {
         }
 
         .home-altersItem {
-          min-height: 0.9rem;
-          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
-          display: flex;
+          min-height: 0.6rem;
+          border-bottom: 0.01rem solid rgba(255, 255, 255, 0.2);
+          display: grid;
+          grid-template-columns: 0.4rem 0.46rem minmax(0, 1fr);
+          column-gap: 0.1rem;
           align-items: center;
 
           .alters__item-name {
-            width: 0.4rem;
             font-size: 0.16rem;
             font-weight: 700;
             line-height: 0.16rem;
-            margin-right: 0.17rem;
+            overflow: hidden;
+            word-break: break-word;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
           }
 
           .alters__item-icon {
             width: 0.46rem;
             height: 0.2rem;
             object-fit: contain;
-            margin-right: 0.1rem;
           }
 
           .alters__item-msg {
+            min-width: 0;
             font-size: 0.14rem;
             line-height: 0.16rem;
             font-weight: 400;
-
-            &:last-child {
-              border-bottom: none;
-            }
+            overflow: hidden;
+            word-break: break-word;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
           }
 
-          &:last-child {
-            border-bottom: none;
-          }
+
         }
       }
     }

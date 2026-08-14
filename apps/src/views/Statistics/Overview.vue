@@ -163,16 +163,20 @@ const stationInfoList = reactive([
 const topoStore = useDeviceTopologyStore()
 
 // 无回退值：store 未加载时为 undefined，响应式触发后再订阅/请求
-const essId    = computed<number | undefined>(() => topoStore.getInstanceIds('Battery')[0])
-const dgId     = computed<number | undefined>(() => topoStore.getInstanceIds('Diesel')[0])
-const pvId     = computed<number | undefined>(
-  () => topoStore.getInstanceIds('PV DCDC')[0] ?? topoStore.getInstanceIds('PVInverter')[0],
+const essIds = computed(() => topoStore.selectedBatteryGroup?.primaryInstanceIds ?? [])
+const dgIds = computed(() => topoStore.getLogicalDeviceInstanceIds('diesel'))
+const pvIds = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds ?? [])
+const loadWsIds = computed(() => topoStore.getLogicalDeviceInstanceIds('meterLoad'))
+const essId = computed<number | undefined>(
+  () => essIds.value[0],
 )
-const loadWsId = computed<number | undefined>(() => topoStore.getInstanceIds('Load')[0])
+const dgId = computed<number | undefined>(() => dgIds.value[0])
+const pvId = computed<number | undefined>(() => pvIds.value[0])
+const loadWsId = computed<number | undefined>(() => loadWsIds.value[0])
 
 // WebSocket 订阅的 inst 通道列表（过滤掉尚未解析的 undefined）
 const wsInstChannels = computed<number[]>(() =>
-  [essId.value, dgId.value, pvId.value, loadWsId.value].filter((id): id is number => id !== undefined),
+  [...new Set([...essIds.value, ...dgIds.value, ...pvIds.value, ...loadWsIds.value])],
 )
 
 // 加载状态 & 请求取消
@@ -214,13 +218,13 @@ const energyDistributionData = [
 
 // 实时值映射：根据 store 提供的动态 instanceId 分发到对应卡片
 const applyChannelValues = (channelId: number, values: Record<string, number>) => {
-  if (channelId === pvId.value) {
+  if (pvIds.value.includes(channelId)) {
     if (values['7'] !== undefined) stationInfoList[0].value = formatNumber(values['7'])
-  } else if (channelId === essId.value) {
+  } else if (essIds.value.includes(channelId)) {
     if (values['9'] !== undefined) stationInfoList[1].value = formatNumber(values['9'])
-  } else if (channelId === dgId.value) {
+  } else if (dgIds.value.includes(channelId)) {
     if (values['1'] !== undefined) stationInfoList[2].value = formatNumber(values['1'])
-  } else if (channelId === loadWsId.value) {
+  } else if (loadWsIds.value.includes(channelId)) {
     if (values['2'] !== undefined) totalLoadEnergy.value = Math.round(Number(values['2']))
   }
 }

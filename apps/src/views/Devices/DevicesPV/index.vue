@@ -20,6 +20,14 @@
           Value Monitoring
         </el-button>
       </div>
+      <div v-if="topoStore.pvGroups.length > 1" class="device-group-selector">
+        <span>PV System:</span>
+        <el-select v-model="topoStore.selectedPvGroupId" size="small" fit-input-width :title="topoStore.selectedPvGroup?.displayName ?? ''">
+          <el-option v-for="group in topoStore.pvGroups" :key="group.id" :label="group.displayName" :value="group.id">
+            <span class="select-option-text" :title="group.displayName">{{ group.displayName }}</span>
+          </el-option>
+        </el-select>
+      </div>
     </div>
     <!-- 路由内容区域 -->
     <div class="devices-pv__content vt-page-content">
@@ -32,10 +40,12 @@
 // 正确引入SVG图标，避免部署后图片加载不出�?
 import alarmCurrentIcon from '@/assets/icons/alarm-current.svg'
 import alarmHistoryIcon from '@/assets/icons/alarm-history.svg'
+import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
 // 响应式数�?
 const route = useRoute()
 const router = useRouter()
+const topoStore = useDeviceTopologyStore()
 
 // 根据当前路由计算激活的标签
 const activeTab = computed(() => {
@@ -58,6 +68,9 @@ const handleTabClick = (tab: 'overview' | 'monitoring') => {
 
 <style scoped lang="scss">
 .devices-pv {
+  .devices-pv__header { display: flex; align-items: center; justify-content: space-between; }
+  .device-group-selector { display: flex; align-items: center; gap: 0.16rem; margin-left: auto; }
+  .device-group-selector .el-select { width: 2rem; }
   .devices-pv__content {
     min-height: 0;
   }

@@ -19,11 +19,12 @@ import useTopologySubscribe from '@/composables/useTopologySubscribe'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 
 const topoStore = useDeviceTopologyStore()
-const dgInstanceId = computed<number | undefined>(() => topoStore.getInstanceIds('Diesel')[0])
+const dgInstanceIds = computed(() => topoStore.getLogicalDeviceInstanceIds('diesel'))
+const dgInstanceId = computed<number | undefined>(() => topoStore.selectedDieselId ?? dgInstanceIds.value[0])
 const wsData = ref<any>(null)
 
 useTopologySubscribe(
-  () => topoStore.getInstanceIds('Diesel'),
+  () => dgInstanceIds.value,
   { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
   { onBatchDataUpdate: (data: any) => { wsData.value = data } },
 )

@@ -8,6 +8,8 @@
           <el-select
             v-model="selectedDevice"
             class="device-select"
+            fit-input-width
+            :title="selectedDevice === 'all' ? 'All Devices' : (deviceConfigs.find((dev) => dev.id === selectedDevice)?.label ?? '')"
             placeholder="All Devices"
             :teleported="false"
             :append-to="deviceSelectWrapperRef"
@@ -19,7 +21,7 @@
               :key="dev.id"
               :label="`${dev.label} (${dev.subtitle})`"
               :value="dev.id"
-            />
+            ><span class="select-option-text" :title="`${dev.label} (${dev.subtitle})`">{{ dev.label }} ({{ dev.subtitle }})</span></el-option>
           </el-select>
         </div>
 
@@ -133,25 +135,17 @@ interface ChartSeriesData {
   values: number[]
 }
 
-const PRODUCT_LABELS: Record<string, string> = {
-  Battery: 'Battery',
-  Diesel: 'DG',
-  PCS: 'PCS',
-  'PV DCDC': 'PV',
-  PVInverter: 'PV',
-  Load: 'Load',
-}
-
 const PRODUCT_ACCENT: Record<string, string> = {
   Battery: '#6DD400',       // --vt-color-chart-online
   Diesel: '#F6C85F',        // --vt-color-chart-dg
   PCS: '#4FADF7',           // --vt-color-chart-ess
   'PV DCDC': '#69CBFF',     // --vt-color-chart-pv
   PVInverter: '#69CBFF',    // --vt-color-chart-pv
+  AC_Inverter: '#69CBFF',   // --vt-color-chart-pv
   Load: '#FF4D4F',          // --vt-color-chart-alarm
+  Meter: '#FF4D4F',         // --vt-color-chart-alarm
 }
 
-const getProductLabel = (productName: string) => PRODUCT_LABELS[productName] ?? productName
 const getAccentColor = (productName: string) => PRODUCT_ACCENT[productName] ?? '#69CBFF'
 
 const mapMeasurementPoints = (measurements: Record<string, InstanceMeasurementItem>): PointDef[] => {
@@ -185,9 +179,16 @@ const loadDeviceConfigs = async () => {
       await topoStore.load()
     }
 
-    const instances = topoStore.bindings.flatMap((binding) =>
-      binding.instances.map((inst) => ({ binding, inst })),
+    const selectedNodeIds = new Set(
+      topoStore.topology?.flow_json?.nodes.map((node) => node.id) ?? [],
     )
+    const instancesById = new Map<number, { binding: typeof topoStore.bindings[number]; inst: typeof topoStore.bindings[number]['instances'][number] }>()
+    topoStore.bindings
+      .filter((binding) => selectedNodeIds.has(binding.nodeId))
+      .forEach((binding) => binding.instances.forEach((inst) => {
+        if (!instancesById.has(inst.instanceId)) instancesById.set(inst.instanceId, { binding, inst })
+      }))
+    const instances = [...instancesById.values()]
 
     const configs = await Promise.all(
       instances.map(async ({ binding, inst }) => {
@@ -198,8 +199,8 @@ const loadDeviceConfigs = async () => {
             : []
           return {
             id: String(inst.instanceId),
-            label: getProductLabel(binding.productName),
-            subtitle: inst.instanceName,
+            label: topoStore.instances.find((item) => item.id === inst.instanceId)?.name ?? inst.instanceName,
+            subtitle: binding.productName,
             redisKey: `inst:${inst.instanceId}:M`,
             accentColor: getAccentColor(binding.productName),
             points,
