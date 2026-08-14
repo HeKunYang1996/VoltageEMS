@@ -161,6 +161,7 @@ async fn check_single_rule(state: Arc<AppState>, rule: crate::models::AlertRule)
                             current_value,
                             names.device_name_ref(),
                             names.point_name_ref(),
+                            names.unit_ref(),
                         )
                         .await;
                     send_alarm_count_broadcast(&state).await;
@@ -187,9 +188,10 @@ async fn check_single_rule(state: Arc<AppState>, rule: crate::models::AlertRule)
                         alert.id,
                         &rule,
                         Some(current_value),
-                        "条件恢复",
+                        "Condition cleared",
                         alert.device_name.as_deref(),
                         alert.point_name.as_deref(),
+                        alert.unit.as_deref(),
                     )
                     .await;
                 send_alarm_count_broadcast(&state).await;
@@ -233,9 +235,10 @@ pub async fn on_rule_updated(state: &Arc<AppState>, rule_id: i64) {
                     alert.id,
                     &rule,
                     None,
-                    "规则被禁用",
+                    "Rule disabled",
                     alert.device_name.as_deref(),
                     alert.point_name.as_deref(),
+                    alert.unit.as_deref(),
                 )
                 .await;
         }
@@ -260,9 +263,10 @@ pub async fn on_rule_deleted(state: &Arc<AppState>, rule: &crate::models::AlertR
                 alert.id,
                 rule,
                 None,
-                "规则被删除",
+                "Rule deleted",
                 alert.device_name.as_deref(),
                 alert.point_name.as_deref(),
+                alert.unit.as_deref(),
             )
             .await;
     }

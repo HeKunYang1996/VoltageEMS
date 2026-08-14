@@ -8,6 +8,56 @@ use tracing::{debug, warn};
 use crate::db::AlarmCounts;
 use crate::models::AlertRule;
 
+fn point_label(point_name: Option<&str>, point_id: i64) -> String {
+    point_name
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Point {}", point_id))
+}
+
+fn value_with_unit(value: f64, unit: Option<&str>) -> String {
+    format!("{}{}", value, unit.unwrap_or_default())
+}
+
+fn format_trigger_message(
+    rule: &AlertRule,
+    current_value: f64,
+    point_name: Option<&str>,
+    unit: Option<&str>,
+) -> String {
+    format!(
+        "{}: {} {} {} (Rule: {})",
+        point_label(point_name, rule.point_id),
+        value_with_unit(current_value, unit),
+        rule.operator,
+        value_with_unit(rule.value, unit),
+        rule.rule_name
+    )
+}
+
+fn format_recovery_message(
+    rule: &AlertRule,
+    recovery_value: Option<f64>,
+    reason: &str,
+    point_name: Option<&str>,
+    unit: Option<&str>,
+) -> String {
+    let point_name = point_label(point_name, rule.point_id);
+    match recovery_value {
+        Some(value) => format!(
+            "{}: {} (No longer satisfies {} {}) (Rule: {})",
+            point_name,
+            value_with_unit(value, unit),
+            rule.operator,
+            value_with_unit(rule.value, unit),
+            rule.rule_name
+        ),
+        None => format!(
+            "{}: - (Recovered: {}) (Rule: {})",
+            point_name, reason, rule.rule_name
+        ),
+    }
+}
+
 pub struct Broadcaster {
     client: Client,
     apigateway_url: String,
@@ -34,6 +84,7 @@ impl Broadcaster {
         current_value: f64,
         device_name: Option<&str>,
         point_name: Option<&str>,
+        unit: Option<&str>,
     ) {
         let ts = Utc::now().timestamp();
         let payload = serde_json::json!({
@@ -50,13 +101,11 @@ impl Broadcaster {
                 "data_type": rule.data_type,
                 "point_id": rule.point_id,
                 "point_name": point_name,
+                "unit": unit,
                 "status": 1,
                 "level": rule.warning_level,
                 "value": current_value,
-                "message": format!(
-                    "{}: {} {} {}",
-                    rule.rule_name, current_value, rule.operator, rule.value
-                ),
+                "message": format_trigger_message(rule, current_value, point_name, unit),
             }
         });
         self.broadcast_all(&payload).await;
@@ -70,18 +119,10 @@ impl Broadcaster {
         reason: &str,
         device_name: Option<&str>,
         point_name: Option<&str>,
+        unit: Option<&str>,
     ) {
         let ts = Utc::now().timestamp();
-        let (message, value) = match recovery_value {
-            Some(rv) => (
-                format!(
-                    "{}已恢复: {} (不再满足 {} {})",
-                    rule.rule_name, rv, rule.operator, rule.value
-                ),
-                rv,
-            ),
-            None => (format!("{}已恢复: {}", rule.rule_name, reason), 0.0),
-        };
+        let message = format_recovery_message(rule, recovery_value, reason, point_name, unit);
 
         let payload = serde_json::json!({
             "type": "alarm",
@@ -97,9 +138,10 @@ impl Broadcaster {
                 "data_type": rule.data_type,
                 "point_id": rule.point_id,
                 "point_name": point_name,
+                "unit": unit,
                 "status": 0,
                 "level": rule.warning_level,
-                "value": value,
+                "value": recovery_value,
                 "message": message,
             }
         });
@@ -182,12 +224,15 @@ impl Broadcaster {
                         "data_type": rule.data_type,
                         "point_id": rule.point_id,
                         "point_name": alert.point_name,
+                        "unit": alert.unit,
                         "status": 1,
                         "level": rule.warning_level,
                         "value": alert.current_value,
-                        "message": format!(
-                            "{}: {} {} {}",
-                            rule.rule_name, alert.current_value, rule.operator, rule.value
+                        "message": format_trigger_message(
+                            rule,
+                            alert.current_value,
+                            alert.point_name.as_deref(),
+                            alert.unit.as_deref(),
                         ),
                     }
                 });
@@ -205,5 +250,58 @@ impl Broadcaster {
             }
         }
         futures::future::join_all(futures_vec).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule() -> AlertRule {
+        AlertRule {
+            id: 1,
+            service_type: "inst".to_string(),
+            channel_id: 1,
+            data_type: "M".to_string(),
+            point_id: 7,
+            rule_name: "Battery Overvoltage".to_string(),
+            warning_level: 2,
+            operator: ">".to_string(),
+            value: 50.0,
+            enabled: true,
+            description: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn trigger_message_includes_point_unit_threshold_and_rule() {
+        assert_eq!(
+            format_trigger_message(&rule(), 100.0, Some("Voltage"), Some("V")),
+            "Voltage: 100V > 50V (Rule: Battery Overvoltage)"
+        );
+    }
+
+    #[test]
+    fn realtime_recovery_message_uses_recovery_value() {
+        assert_eq!(
+            format_recovery_message(
+                &rule(),
+                Some(48.0),
+                "Condition cleared",
+                Some("Voltage"),
+                Some("V")
+            ),
+            "Voltage: 48V (No longer satisfies > 50V) (Rule: Battery Overvoltage)"
+        );
+    }
+
+    #[test]
+    fn reason_recovery_message_does_not_invent_a_value() {
+        assert_eq!(
+            format_recovery_message(&rule(), None, "Rule disabled", Some("Voltage"), Some("V")),
+            "Voltage: - (Recovered: Rule disabled) (Rule: Battery Overvoltage)"
+        );
     }
 }

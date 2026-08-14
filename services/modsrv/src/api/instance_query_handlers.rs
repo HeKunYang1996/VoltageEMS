@@ -283,11 +283,11 @@ pub async fn search_instances(
     Ok(Json(SuccessResponse::new(json!({ "list": list }))))
 }
 
-/// Minimal instance list (id + name only, no pagination).
+/// Minimal instance list (id + name + product name, no pagination).
 ///
 /// For dropdown menus, routing-bind pickers, and other "pick an instance"
-/// scenarios. Returns all instances in one shot with only two fields,
-/// minimising response size. For full details use the paginated endpoint.
+/// scenarios. Returns all instances in one shot with their ID, instance name,
+/// and product name. For full details use the paginated endpoint.
 #[utoipa::path(
     get,
     path = "/api/instances/list",
@@ -295,8 +295,8 @@ pub async fn search_instances(
         (status = 200, description = "Instance list", body = serde_json::Value,
             example = json!({
                 "list": [
-                    {"id": 1, "name": "battery_01"},
-                    {"id": 2, "name": "pcs_01"}
+                    {"id": 1, "name": "battery_01", "product_name": "Battery"},
+                    {"id": 2, "name": "pcs_01", "product_name": "PCS"}
                 ]
             })
         )
@@ -306,15 +306,18 @@ pub async fn search_instances(
 pub async fn list_instances_slim(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
-    let instances: Vec<(u32, String)> =
-        sqlx::query_as("SELECT instance_id, instance_name FROM instances ORDER BY instance_id")
-            .fetch_all(&state.instance_manager.pool)
-            .await
-            .map_err(|e| ModSrvError::InternalError(format!("Failed to list instances: {}", e)))?;
+    let instances: Vec<(u32, String, String)> = sqlx::query_as(
+        "SELECT instance_id, instance_name, product_name FROM instances ORDER BY instance_id",
+    )
+    .fetch_all(&state.instance_manager.pool)
+    .await
+    .map_err(|e| ModSrvError::InternalError(format!("Failed to list instances: {}", e)))?;
 
     let list: Vec<serde_json::Value> = instances
         .into_iter()
-        .map(|(id, name)| json!({"id": id, "name": name}))
+        .map(|(id, name, product_name)| {
+            json!({"id": id, "name": name, "product_name": product_name})
+        })
         .collect();
 
     Ok(Json(SuccessResponse::new(json!({ "list": list }))))

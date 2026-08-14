@@ -532,6 +532,13 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
             .get_product(&req.product_name)
             .map_err(|e| ModSrvError::InvalidData(format!("Unknown product: {}", e)))?;
 
+        if !product.can_create_instance {
+            return Err(ModSrvError::InvalidData(format!(
+                "Product '{}' does not allow instance creation",
+                req.product_name
+            )));
+        }
+
         // 3. Hierarchy validation: soft check on pName (warn only, never block)
         //    Product JSON defines pName for documentation, but we don't enforce it
         //    since real-world topologies may differ from the product library defaults.

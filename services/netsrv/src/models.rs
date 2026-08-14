@@ -162,7 +162,8 @@ pub struct CommandReply {
     "system_monitor_interval_secs": 10,
     "subscribe_patterns": ["inst:*:M", "inst:*:A"],
     "exclude_patterns": [],
-    "alarmsrv_url": "http://localhost:6007"
+    "alarmsrv_url": "http://localhost:6007",
+    "modsrv_url": "http://localhost:6002"
 }))]
 pub struct NetConfig {
     // -- Device identity --

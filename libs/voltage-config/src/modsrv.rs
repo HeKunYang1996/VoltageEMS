@@ -111,6 +111,13 @@ pub struct Product {
     /// Parent product name for hierarchy
     pub parent_name: Option<String>,
 
+    /// Whether users may create an instance from this product
+    pub can_create_instance: bool,
+
+    /// Visual-topology capabilities; None means the product cannot be placed
+    /// in the topology editor
+    pub topology: TopologyDefinition,
+
     /// Measurement points (includes physical and virtual)
     #[serde(default)]
     pub measurements: Vec<MeasurementPoint>,
@@ -122,6 +129,49 @@ pub struct Product {
     /// Property templates
     #[serde(default)]
     pub properties: Vec<PropertyTemplate>,
+}
+
+/// Product capability in the visual topology editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TopologyType {
+    TopLevel,
+    Standalone,
+    Composite,
+    Container,
+}
+
+/// A product-backed or inline component of a topology product.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum TopologyComponent {
+    Product {
+        #[serde(rename = "productName")]
+        product_name: String,
+    },
+    Inline {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
+        #[serde(rename = "selectableProductTypes", default)]
+        selectable_product_types: Vec<String>,
+    },
+}
+
+/// Visual-topology definition attached to a product.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TopologyDefinition {
+    pub enabled: bool,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub topology_type: Option<TopologyType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub components: Vec<TopologyComponent>,
+    /// Concrete product names that may connect to this product. Modsrv expands
+    /// the source library's one-sided declarations into an undirected relation.
+    #[serde(rename = "connectableProducts", default)]
+    pub connectable_products: Vec<String>,
 }
 
 /// Measurement point definition (M type)

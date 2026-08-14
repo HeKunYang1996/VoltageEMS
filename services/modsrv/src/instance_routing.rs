@@ -536,7 +536,8 @@ mod tests {
             .expect("Failed to create instance");
     }
 
-    /// Setup standard hierarchy: Station(1) -> ESS(2), returns ESS instance_id
+    /// Create the real Station instance used as the parent. Logical catalog
+    /// nodes such as ESS are deliberately not instantiated.
     async fn setup_hierarchy(manager: &InstanceManager<voltage_rtdb::MemoryRtdb>) -> u32 {
         let station_req = crate::product_loader::CreateInstanceRequest {
             instance_id: Some(1),
@@ -550,19 +551,7 @@ mod tests {
             .await
             .expect("Failed to create Station");
 
-        let ess_req = crate::product_loader::CreateInstanceRequest {
-            instance_id: Some(2),
-            instance_name: "ess_parent".to_string(),
-            product_name: "ESS".to_string(),
-            parent_id: Some(1),
-            properties: HashMap::new(),
-        };
-        manager
-            .create_instance(ess_req)
-            .await
-            .expect("Failed to create ESS");
-
-        2
+        1
     }
 
     // Helper: Create a test channel in the database
@@ -585,7 +574,7 @@ mod tests {
         let (_temp_dir, pool) = create_test_database().await;
         let manager = create_test_instance_manager(pool.clone());
 
-        // Setup hierarchy: Station -> ESS, then create Battery under ESS
+        // Create Battery under the real Station instance; ESS is catalog-only.
         let ess_id = setup_hierarchy(&manager).await;
         create_test_instance(&manager, 1001, "battery_test", "Battery", Some(ess_id)).await;
 
