@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(components.len(), 2);
         assert!(matches!(
             &components[0],
-            TopologyComponent::Product { product_name } if product_name == "Battery"
+            TopologyComponent::Product { product_name } if product_name == "AC_Inverter"
         ));
         assert!(matches!(
             &components[1],
@@ -362,7 +362,7 @@ mod tests {
                 selectable_product_types,
                 ..
             } if name == "Meter"
-                && selectable_product_types == &["Single Phase Load", "Three Phase Load"]
+                && selectable_product_types == &["Single_Phase_Load", "Three_Phase_Load"]
         ));
     }
 

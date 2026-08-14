@@ -425,7 +425,7 @@ mod tests {
             assert_eq!(topology.components.len(), 2);
             assert!(matches!(
                 &topology.components[0],
-                TopologyComponent::Product { product_name } if product_name == "Battery"
+                TopologyComponent::Product { product_name } if product_name == "AC_Inverter"
             ));
         });
     }
