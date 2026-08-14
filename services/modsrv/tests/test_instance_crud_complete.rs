@@ -7,7 +7,7 @@
 //! - Batch: create/delete multiple instances
 //!
 //! Note: Products are now compile-time built-in constants from voltage-model crate.
-//! Use built-in product names like "Battery", "PCS", "ESS", "Station", etc.
+//! Use creatable built-in product names like "Battery", "PCS", and "Station".
 
 #![allow(clippy::disallowed_methods)] // Test code - unwrap is acceptable
 
@@ -42,8 +42,8 @@ async fn create_test_instance_manager(env: &TestEnv) -> InstanceManager<MemoryRt
     )
 }
 
-/// Setup standard hierarchy for tests: Station(9901) -> ESS(9902)
-/// Returns ESS instance_id (9902) as parent for Battery/PCS instances
+/// Create the real Station instance used as the parent in tests. Logical
+/// catalog nodes such as ESS are deliberately not instantiated.
 async fn setup_hierarchy(manager: &InstanceManager<MemoryRtdb>) -> u32 {
     let station_req = CreateInstanceRequest {
         instance_id: Some(9901),
@@ -57,19 +57,7 @@ async fn setup_hierarchy(manager: &InstanceManager<MemoryRtdb>) -> u32 {
         .await
         .expect("Failed to create Station");
 
-    let ess_req = CreateInstanceRequest {
-        instance_id: Some(9902),
-        instance_name: "test_ess_parent".to_string(),
-        product_name: "ESS".to_string(),
-        parent_id: Some(9901),
-        properties: HashMap::new(),
-    };
-    manager
-        .create_instance(ess_req)
-        .await
-        .expect("Failed to create ESS");
-
-    9902
+    9901
 }
 
 /// Create a test instance
@@ -283,12 +271,12 @@ async fn test_list_instances_all() {
         .await;
     }
 
-    // List all instances (5 Battery + 2 hierarchy = 7)
+    // List all instances (5 Battery + 1 Station = 6)
     let (_, instances) = manager
         .list_instances_paginated(None, 1, 10_000)
         .await
         .expect("Failed to list instances");
-    assert_eq!(instances.len(), 7);
+    assert_eq!(instances.len(), 6);
 
     // Verify Battery instances are present and ordered
     let battery_instances: Vec<_> = instances
@@ -373,26 +361,26 @@ async fn test_list_instances_paginated() {
         .await;
     }
 
-    // 15 Battery + 2 hierarchy = 17 total
-    // Ordered by instance_id ASC: 1-15, 9901, 9902
+    // 15 Battery + 1 Station = 16 total
+    // Ordered by instance_id ASC: 1-15, 9901
 
     // Page 1: should have 10 items (IDs 1-10)
     let (total, page1) = manager
         .list_instances_paginated(None, 1, 10)
         .await
         .expect("Failed to paginate");
-    assert_eq!(total, 17);
+    assert_eq!(total, 16);
     assert_eq!(page1.len(), 10);
     assert_eq!(page1[0].core.instance_id, 1);
     assert_eq!(page1[9].core.instance_id, 10);
 
-    // Page 2: should have 7 items (IDs 11-15, 9901, 9902)
+    // Page 2: should have 6 items (IDs 11-15, 9901)
     let (total, page2) = manager
         .list_instances_paginated(None, 2, 10)
         .await
         .expect("Failed to paginate");
-    assert_eq!(total, 17);
-    assert_eq!(page2.len(), 7);
+    assert_eq!(total, 16);
+    assert_eq!(page2.len(), 6);
     assert_eq!(page2[0].core.instance_id, 11);
     assert_eq!(page2[4].core.instance_id, 15);
 
@@ -401,7 +389,7 @@ async fn test_list_instances_paginated() {
         .list_instances_paginated(None, 3, 10)
         .await
         .expect("Failed to paginate");
-    assert_eq!(total, 17);
+    assert_eq!(total, 16);
     assert!(page3.is_empty());
 
     env.cleanup().await.expect("Cleanup failed");
@@ -549,12 +537,12 @@ async fn test_batch_create_instances() {
         .await;
     }
 
-    // Verify all created (20 Battery + 2 hierarchy = 22)
+    // Verify all created (20 Battery + 1 Station = 21)
     let (total, _) = manager
         .list_instances_paginated(None, 1, 100)
         .await
         .expect("Failed to list");
-    assert_eq!(total, 22);
+    assert_eq!(total, 21);
 
     env.cleanup().await.expect("Cleanup failed");
 }
@@ -586,15 +574,15 @@ async fn test_batch_delete_instances() {
             .expect("Failed to delete instance");
     }
 
-    // Verify: only even-numbered Battery remain + 2 hierarchy instances
+    // Verify: only even-numbered Battery remain + 1 Station instance
     let (_, instances) = manager
         .list_instances_paginated(None, 1, 10_000)
         .await
         .expect("Failed to list");
-    assert_eq!(instances.len(), 7);
+    assert_eq!(instances.len(), 6);
 
     let ids: Vec<u32> = instances.iter().map(|i| i.core.instance_id).collect();
-    assert_eq!(ids, vec![2, 4, 6, 8, 10, 9901, 9902]);
+    assert_eq!(ids, vec![2, 4, 6, 8, 10, 9901]);
 
     env.cleanup().await.expect("Cleanup failed");
 }

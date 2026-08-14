@@ -3,7 +3,7 @@
 //! Tests the complete data flow from channels to instances
 //!
 //! Note: Products are now compile-time built-in constants from voltage-model crate.
-//! Use built-in product names like "Battery", "PCS", "ESS", "Station", etc.
+//! Use creatable built-in product names like "Battery", "PCS", and "Station".
 
 #![allow(clippy::disallowed_methods)] // Integration test - unwrap is acceptable
 
@@ -43,7 +43,7 @@ async fn test_measurement_routing_load_from_db() -> Result<()> {
         noop_dispatch(),
     );
 
-    // 4. Setup hierarchy: Station -> ESS (required for Battery)
+    // 4. Create the real Station parent; ESS is a logical catalog node.
     let station_req = CreateInstanceRequest {
         instance_id: Some(9901),
         instance_name: "test_station_root".to_string(),
@@ -53,21 +53,12 @@ async fn test_measurement_routing_load_from_db() -> Result<()> {
     };
     instance_manager.create_instance(station_req).await?;
 
-    let ess_req = CreateInstanceRequest {
-        instance_id: Some(9902),
-        instance_name: "test_ess_parent".to_string(),
-        product_name: "ESS".to_string(),
-        parent_id: Some(9901),
-        properties: std::collections::HashMap::new(),
-    };
-    instance_manager.create_instance(ess_req).await?;
-
-    // 5. Create Battery instance (child of ESS)
+    // 5. Create Battery instance under Station
     let req = CreateInstanceRequest {
         instance_id: Some(1001),
         instance_name: "battery_001".to_string(),
         product_name: product_name.to_string(),
-        parent_id: Some(9902),
+        parent_id: Some(9901),
         properties: fixtures::create_test_instance_properties(),
     };
     instance_manager.create_instance(req).await?;
@@ -137,7 +128,7 @@ async fn test_action_routing_load_from_db() -> Result<()> {
         noop_dispatch(),
     );
 
-    // Setup hierarchy: Station -> ESS (required for Battery)
+    // Create the real Station parent; ESS is a logical catalog node.
     let station_req = CreateInstanceRequest {
         instance_id: Some(9901),
         instance_name: "test_station_root".to_string(),
@@ -147,20 +138,11 @@ async fn test_action_routing_load_from_db() -> Result<()> {
     };
     instance_manager.create_instance(station_req).await?;
 
-    let ess_req = CreateInstanceRequest {
-        instance_id: Some(9902),
-        instance_name: "test_ess_parent".to_string(),
-        product_name: "ESS".to_string(),
-        parent_id: Some(9901),
-        properties: std::collections::HashMap::new(),
-    };
-    instance_manager.create_instance(ess_req).await?;
-
     let req = CreateInstanceRequest {
         instance_id: Some(1001),
         instance_name: "battery_001".to_string(),
         product_name: product_name.to_string(),
-        parent_id: Some(9902),
+        parent_id: Some(9901),
         properties: fixtures::create_test_instance_properties(),
     };
     instance_manager.create_instance(req).await?;
@@ -230,7 +212,7 @@ async fn test_multiple_routing_for_instance() -> Result<()> {
         noop_dispatch(),
     );
 
-    // Setup hierarchy: Station -> ESS (required for Battery)
+    // Create the real Station parent; ESS is a logical catalog node.
     let station_req = CreateInstanceRequest {
         instance_id: Some(9901),
         instance_name: "test_station_root".to_string(),
@@ -240,20 +222,11 @@ async fn test_multiple_routing_for_instance() -> Result<()> {
     };
     instance_manager.create_instance(station_req).await?;
 
-    let ess_req = CreateInstanceRequest {
-        instance_id: Some(9902),
-        instance_name: "test_ess_parent".to_string(),
-        product_name: "ESS".to_string(),
-        parent_id: Some(9901),
-        properties: std::collections::HashMap::new(),
-    };
-    instance_manager.create_instance(ess_req).await?;
-
     let req = CreateInstanceRequest {
         instance_id: Some(1001),
         instance_name: "battery_001".to_string(),
         product_name: product_name.to_string(),
-        parent_id: Some(9902),
+        parent_id: Some(9901),
         properties: fixtures::create_test_instance_properties(),
     };
     instance_manager.create_instance(req).await?;
