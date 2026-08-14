@@ -24,6 +24,54 @@ pub struct PointDef {
     pub value_type: String,
 }
 
+/// Product capability in the visual topology editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TopologyType {
+    TopLevel,
+    Standalone,
+    Composite,
+    Container,
+}
+
+/// A component contained by a composite or container topology product.
+///
+/// Product-backed components set `productName`. Inline components (for example
+/// a distribution-board meter) set `name` and may constrain selectable product
+/// types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TopologyComponent {
+    Product {
+        #[serde(rename = "productName")]
+        product_name: String,
+    },
+    Inline {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
+        #[serde(rename = "selectableProductTypes", default)]
+        selectable_product_types: Vec<String>,
+    },
+}
+
+/// Visual-topology capabilities declared by a product.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyDefinition {
+    pub enabled: bool,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub topology_type: Option<TopologyType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub components: Vec<TopologyComponent>,
+    /// Product names explicitly declared as valid topology connection peers.
+    /// This is the source library's one-sided rule; API consumers receive the
+    /// symmetric closure computed by modsrv.
+    #[serde(rename = "connectableProducts", default)]
+    pub connectable_products: Vec<String>,
+}
+
 /// Built-in product definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuiltinProduct {
@@ -32,6 +80,12 @@ pub struct BuiltinProduct {
     /// Parent product name for hierarchy (e.g., Battery -> ESS -> Station)
     #[serde(rename = "pName")]
     pub parent_name: Option<String>,
+    /// Whether users may create an instance from this product.
+    #[serde(rename = "canCreateInstance")]
+    pub can_create_instance: bool,
+    /// Visual-topology capabilities. `enabled = false` marks catalog-only
+    /// products that cannot be placed in the topology editor.
+    pub topology: TopologyDefinition,
     /// Property definitions (P)
     #[serde(rename = "P", default)]
     pub properties: Vec<PointDef>,
@@ -256,7 +310,60 @@ mod tests {
         let battery = get_builtin_product("Battery").expect("Battery should exist");
         assert_eq!(battery.name, "Battery");
         assert_eq!(battery.parent_name.as_deref(), Some("ESS"));
+        assert!(battery.can_create_instance);
+        assert_eq!(
+            battery.topology.topology_type,
+            Some(TopologyType::Standalone)
+        );
+        assert!(battery.topology.enabled);
+        assert_eq!(
+            battery.topology.connectable_products,
+            ["Hybrid_Inverter", "PCS"]
+        );
         assert!(!battery.measurements.is_empty());
+    }
+
+    #[test]
+    fn test_product_capabilities() {
+        let station = get_builtin_product("Station").expect("Station should exist");
+        let station_topology = &station.topology;
+        assert_eq!(station_topology.topology_type, Some(TopologyType::TopLevel));
+        assert!(station_topology.enabled);
+        assert!(station_topology.image.is_none());
+
+        let ess = get_builtin_product("ESS").expect("ESS should exist");
+        assert!(!ess.can_create_instance);
+        assert!(!ess.topology.enabled);
+        assert!(ess.topology.topology_type.is_none());
+
+        let hybrid = get_builtin_product("Hybrid_Inverter").expect("Hybrid_Inverter");
+        assert!(hybrid.can_create_instance);
+        assert!(hybrid.properties.is_empty());
+        assert!(hybrid.measurements.is_empty());
+        assert!(hybrid.actions.is_empty());
+        let components = &hybrid.topology.components;
+        assert_eq!(components.len(), 2);
+        assert!(matches!(
+            &components[0],
+            TopologyComponent::Product { product_name } if product_name == "Battery"
+        ));
+        assert!(matches!(
+            &components[1],
+            TopologyComponent::Product { product_name } if product_name == "PCS"
+        ));
+
+        let board = get_builtin_product("Distribution_Board").expect("Distribution_Board");
+        assert!(!board.can_create_instance);
+        let meter = &board.topology.components[0];
+        assert!(matches!(
+            meter,
+            TopologyComponent::Inline {
+                name,
+                selectable_product_types,
+                ..
+            } if name == "Meter"
+                && selectable_product_types == &["Single Phase Load", "Three Phase Load"]
+        ));
     }
 
     #[test]
@@ -326,6 +433,8 @@ mod tests {
         let custom_battery = r#"{
             "name": "Battery",
             "pName": "ESS",
+            "canCreateInstance": true,
+            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
             "M": [{"id": 1, "name": "CustomVoltage", "unit": "V"}],
             "A": [],
             "P": []
@@ -350,6 +459,8 @@ mod tests {
         let custom_product = r#"{
             "name": "WindTurbine",
             "pName": "Station",
+            "canCreateInstance": true,
+            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
             "M": [{"id": 1, "name": "WindSpeed", "unit": "m/s"}],
             "A": [],
             "P": []
@@ -388,7 +499,12 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         let dir = temp_dir.path();
 
-        let valid = r#"{"name": "Test", "M": [], "A": [], "P": []}"#;
+        let valid = r#"{
+            "name": "Test",
+            "canCreateInstance": true,
+            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "M": [], "A": [], "P": []
+        }"#;
         std::fs::write(dir.join("Test.json"), valid)?;
 
         let errors = validate_product_dir(dir);
@@ -414,7 +530,12 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         let dir = temp_dir.path();
 
-        let empty_name = r#"{"name": "", "M": [], "A": [], "P": []}"#;
+        let empty_name = r#"{
+            "name": "",
+            "canCreateInstance": true,
+            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "M": [], "A": [], "P": []
+        }"#;
         std::fs::write(dir.join("Empty.json"), empty_name)?;
 
         let errors = validate_product_dir(dir);

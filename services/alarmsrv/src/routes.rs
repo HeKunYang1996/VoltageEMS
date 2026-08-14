@@ -653,9 +653,9 @@ async fn get_alert(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> i
 /// Operator-driven recovery for the case where the underlying condition has
 /// cleared but the polling loop hasn't seen the new value yet (or the rule's
 /// data source is broken). Moves the row from `alert` → `alert_event`,
-/// captures the current value as `recovery_value`, and broadcasts a
-/// `send_alarm_recovery` event with reason "manually resolved" to the
-/// WebSocket so the UI clears.
+/// stores the last observed value in the history row for audit purposes, and
+/// broadcasts a recovery event without presenting that stale value as a live
+/// recovery reading.
 ///
 /// The recovery is permanent for this alert id; if the underlying condition
 /// is still true, the next monitor tick will create a NEW alert with a new
@@ -690,10 +690,11 @@ async fn resolve_alert(
                     .send_alarm_recovery(
                         id,
                         &rule,
-                        Some(recovery_value),
-                        "manually resolved",
+                        None,
+                        "Manually resolved",
                         alert.device_name.as_deref(),
                         alert.point_name.as_deref(),
+                        alert.unit.as_deref(),
                     )
                     .await;
             }

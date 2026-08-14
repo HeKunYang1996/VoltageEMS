@@ -6,19 +6,38 @@
 #![allow(clippy::disallowed_methods)] // json! macro internally uses unwrap (safe for known valid JSON)
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::Json,
 };
 use common::SuccessResponse;
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::app_state::AppState;
+use crate::config::Product;
 use crate::error::ModSrvError;
+
+/// Optional capability filters for the product catalog.
+#[derive(Debug, Default, Deserialize)]
+pub struct ProductListQuery {
+    pub can_create_instance: Option<bool>,
+    pub topology_enabled: Option<bool>,
+}
+
+impl ProductListQuery {
+    fn matches(&self, product: &Product) -> bool {
+        self.can_create_instance
+            .is_none_or(|expected| product.can_create_instance == expected)
+            && self
+                .topology_enabled
+                .is_none_or(|expected| product.topology.enabled == expected)
+    }
+}
 
 /// List all available product templates (lightweight)
 ///
-/// Returns a lightweight list containing only product names and parent relationships.
+/// Returns product names, parent relationships, and instance/topology capabilities.
 /// This endpoint is optimized for frontend dropdown lists and product selection interfaces.
 /// For detailed product information including measurements/actions/properties, use GET /api/products/{product_name}/points.
 ///
@@ -26,6 +45,10 @@ use crate::error::ModSrvError;
     get,
     path = "/api/products",
     tag = "products",
+    params(
+        ("can_create_instance" = Option<bool>, Query, description = "Filter by whether instances can be created"),
+        ("topology_enabled" = Option<bool>, Query, description = "Filter by whether the product is enabled for topology use")
+    ),
     responses(
         (status = 200, description = "Lightweight product list retrieved successfully",
             body = inline(Object),
@@ -34,9 +57,27 @@ use crate::error::ModSrvError;
                 "data": {
                     "count": 9,
                     "products": [
-                        {"product_name": "Station", "parent_name": null},
-                        {"product_name": "ESS", "parent_name": "Station"},
-                        {"product_name": "Battery", "parent_name": "ESS"}
+                        {
+                            "product_name": "Station",
+                            "parent_name": null,
+                            "can_create_instance": true,
+                            "topology": {
+                                "enabled": true,
+                                "type": "top-level",
+                                "components": [],
+                                "connectableProducts": []
+                            }
+                        },
+                        {
+                            "product_name": "ESS",
+                            "parent_name": "Station",
+                            "can_create_instance": false,
+                            "topology": {
+                                "enabled": false,
+                                "components": [],
+                                "connectableProducts": []
+                            }
+                        }
                     ]
                 }
             })
@@ -45,19 +86,20 @@ use crate::error::ModSrvError;
 ))]
 pub async fn list_products(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<ProductListQuery>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
     // Products are compile-time constants, no async needed
-    let product_names = state
-        .instance_manager
-        .product_loader()
-        .get_all_product_names();
+    let product_definitions = state.instance_manager.product_loader().get_all_products();
 
-    let products: Vec<serde_json::Value> = product_names
+    let products: Vec<serde_json::Value> = product_definitions
         .into_iter()
-        .map(|(product_name, parent_name)| {
+        .filter(|product| query.matches(product))
+        .map(|product| {
             json!({
-                "product_name": product_name,
-                "parent_name": parent_name
+                "product_name": product.product_name,
+                "parent_name": product.parent_name,
+                "can_create_instance": product.can_create_instance,
+                "topology": product.topology
             })
         })
         .collect();
@@ -89,6 +131,14 @@ pub async fn list_products(
                     "product": {
                         "product_name": "Battery",
                         "parent_name": "ESS",
+                        "can_create_instance": true,
+                        "topology": {
+                            "enabled": true,
+                            "type": "standalone",
+                            "image": "device-Battery.png",
+                            "components": [],
+                            "connectableProducts": ["Hybrid_Inverter", "PCS"]
+                        },
                         "measurements": [
                             {"measurement_id": 1, "name": "SOC", "unit": "%", "description": null}
                         ],
@@ -120,5 +170,57 @@ pub async fn get_product_points(
             "Not found: Product '{}' not found ({})",
             product_name, e
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{TopologyDefinition, TopologyType};
+
+    fn product(topology_enabled: bool, can_create_instance: bool) -> Product {
+        Product {
+            product_name: "Test".to_string(),
+            parent_name: None,
+            can_create_instance,
+            topology: TopologyDefinition {
+                enabled: topology_enabled,
+                topology_type: topology_enabled.then_some(TopologyType::Standalone),
+                image: None,
+                components: Vec::new(),
+                connectable_products: Vec::new(),
+            },
+            measurements: Vec::new(),
+            actions: Vec::new(),
+            properties: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn product_list_query_without_filters_matches_all() {
+        let query = ProductListQuery::default();
+        assert!(query.matches(&product(false, true)));
+        assert!(query.matches(&product(true, false)));
+    }
+
+    #[test]
+    fn product_list_query_filters_single_capability() {
+        let query = ProductListQuery {
+            can_create_instance: Some(true),
+            topology_enabled: None,
+        };
+        assert!(query.matches(&product(false, true)));
+        assert!(!query.matches(&product(false, false)));
+    }
+
+    #[test]
+    fn product_list_query_combines_filters() {
+        let query = ProductListQuery {
+            can_create_instance: Some(false),
+            topology_enabled: Some(false),
+        };
+        assert!(query.matches(&product(false, false)));
+        assert!(!query.matches(&product(true, false)));
+        assert!(!query.matches(&product(false, true)));
     }
 }

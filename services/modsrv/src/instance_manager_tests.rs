@@ -49,7 +49,8 @@ fn create_test_product_loader(pool: SqlitePool) -> Arc<ProductLoader> {
 
 use voltage_rtdb::helpers::create_test_rtdb;
 
-/// Setup standard hierarchy: Station(1) -> ESS(2), returns ESS instance_id for use as parent
+/// Create the real Station instance used as the parent in tests. Logical
+/// catalog nodes such as ESS are deliberately not instantiated.
 async fn setup_hierarchy(manager: &InstanceManager<voltage_rtdb::MemoryRtdb>) -> u32 {
     manager
         .create_instance(CreateInstanceRequest {
@@ -62,18 +63,7 @@ async fn setup_hierarchy(manager: &InstanceManager<voltage_rtdb::MemoryRtdb>) ->
         .await
         .expect("Failed to create Station");
 
-    manager
-        .create_instance(CreateInstanceRequest {
-            instance_id: Some(2),
-            instance_name: "ess_parent".to_string(),
-            product_name: "ESS".to_string(),
-            parent_id: Some(1),
-            properties: HashMap::new(),
-        })
-        .await
-        .expect("Failed to create ESS");
-
-    2 // ESS instance_id
+    1
 }
 
 // ==================== Phase 1: CRUD Core Tests ====================
@@ -119,6 +109,51 @@ async fn test_create_instance_success() {
     assert_eq!(instance.instance_id(), 1001);
     assert_eq!(instance.instance_name(), "test_battery_01");
     assert_eq!(instance.product_name(), "Battery");
+}
+
+#[tokio::test]
+async fn test_create_instance_rejects_non_creatable_product() {
+    let (_temp_dir, pool) = create_test_database().await;
+    let product_loader = create_test_product_loader(pool.clone());
+    let rtdb = create_test_rtdb();
+    let routing_cache = Arc::new(voltage_routing::RoutingCache::new());
+    let manager = InstanceManager::new(pool, rtdb, routing_cache, product_loader, noop_dispatch());
+
+    let result = manager
+        .create_instance(CreateInstanceRequest {
+            instance_id: Some(1002),
+            instance_name: "logical_ess".to_string(),
+            product_name: "ESS".to_string(),
+            parent_id: None,
+            properties: HashMap::new(),
+        })
+        .await;
+
+    assert!(matches!(result, Err(ModSrvError::InvalidData(_))));
+}
+
+#[tokio::test]
+async fn test_create_hybrid_inverter_as_empty_instance() {
+    let (_temp_dir, pool) = create_test_database().await;
+    let product_loader = create_test_product_loader(pool.clone());
+    let rtdb = create_test_rtdb();
+    let routing_cache = Arc::new(voltage_routing::RoutingCache::new());
+    let manager = InstanceManager::new(pool, rtdb, routing_cache, product_loader, noop_dispatch());
+    let station_id = setup_hierarchy(&manager).await;
+
+    let instance = manager
+        .create_instance(CreateInstanceRequest {
+            instance_id: Some(1003),
+            instance_name: "hybrid_inverter_01".to_string(),
+            product_name: "Hybrid_Inverter".to_string(),
+            parent_id: Some(station_id),
+            properties: HashMap::new(),
+        })
+        .await
+        .expect("Hybrid_Inverter should create an empty instance");
+
+    assert!(instance.measurement_mappings.unwrap().is_empty());
+    assert!(instance.action_mappings.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -445,14 +480,14 @@ async fn test_list_instances_all() {
     };
     manager.create_instance(req2).await.unwrap();
 
-    // List all instances (includes Station + ESS from hierarchy + Battery + PCS)
+    // List all instances (Station + Battery + PCS; logical ESS is not instantiated)
     let instances = manager
         .list_instances_paginated(None, 1, 1000)
         .await
         .unwrap()
         .1;
 
-    assert_eq!(instances.len(), 4);
+    assert_eq!(instances.len(), 3);
 }
 
 #[tokio::test]

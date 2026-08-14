@@ -180,6 +180,14 @@ fn test_product_deserialization() {
     let json_str = r#"{
         "product_name": "BatteryPack",
         "parent_name": null,
+        "can_create_instance": true,
+        "topology": {
+            "enabled": true,
+            "type": "standalone",
+            "image": "battery-pack.svg",
+            "components": [],
+            "connectableProducts": []
+        },
         "measurements": [
             {
                 "measurement_id": 1,
@@ -222,6 +230,8 @@ fn test_product_with_parent() {
     let json_str = r#"{
         "product_name": "BatteryModule",
         "parent_name": "BatteryPack",
+        "can_create_instance": true,
+        "topology": {"enabled": false},
         "measurements": [],
         "actions": [],
         "properties": []
@@ -372,6 +382,8 @@ fn test_product_with_empty_arrays() {
 
     let json_str = r#"{
         "product_name": "EmptyProduct",
+        "can_create_instance": true,
+        "topology": {"enabled": false},
         "measurements": [],
         "actions": [],
         "properties": []

@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use common::test_utils::schema::INSTANCES_TABLE;
 use sqlx::SqlitePool;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::debug;
 use voltage_model::product_lib::{self, BuiltinProduct, PointDef, ProductLibrary};
@@ -13,7 +14,7 @@ use voltage_model::product_lib::{self, BuiltinProduct, PointDef, ProductLibrary}
 // Re-export types from local config for other modules
 pub use crate::config::{
     ActionPoint, CreateInstanceRequest, Instance, MeasurementPoint, Product, ProductHierarchy,
-    PropertyTemplate,
+    PropertyTemplate, TopologyComponent, TopologyDefinition, TopologyType,
 };
 pub use voltage_model::PointRole;
 
@@ -154,23 +155,31 @@ impl ProductLoader {
             let builtin = lib
                 .get(product_name)
                 .context(format!("Product not found: {}", product_name))?;
-            return Ok(convert_builtin_to_product(builtin));
+            return Ok(convert_builtin_to_product(builtin, lib.all()));
         }
 
         let builtin = product_lib::get_builtin_product(product_name)
             .context(format!("Product not found: {}", product_name))?;
-        Ok(convert_builtin_to_product(builtin))
+        Ok(convert_builtin_to_product(
+            builtin,
+            product_lib::get_builtin_products(),
+        ))
     }
 
     /// Get all products
     pub fn get_all_products(&self) -> Vec<Product> {
         if let Some(lib) = &self.library {
-            return lib.all().iter().map(convert_builtin_to_product).collect();
+            return lib
+                .all()
+                .iter()
+                .map(|product| convert_builtin_to_product(product, lib.all()))
+                .collect();
         }
 
-        product_lib::get_builtin_products()
+        let products = product_lib::get_builtin_products();
+        products
             .iter()
-            .map(convert_builtin_to_product)
+            .map(|product| convert_builtin_to_product(product, products))
             .collect()
     }
 
@@ -240,10 +249,77 @@ impl ProductLoader {
 // ============ Type Conversion Functions ============
 
 /// Convert BuiltinProduct to Product
-fn convert_builtin_to_product(builtin: &BuiltinProduct) -> Product {
+fn resolve_connectable_products(product_name: &str, products: &[BuiltinProduct]) -> Vec<String> {
+    let known_names: BTreeSet<&str> = products
+        .iter()
+        .map(|product| product.name.as_str())
+        .collect();
+    let mut resolved = BTreeSet::new();
+
+    if let Some(product) = products.iter().find(|product| product.name == product_name) {
+        for target in &product.topology.connectable_products {
+            if target != product_name && known_names.contains(target.as_str()) {
+                resolved.insert(target.clone());
+            }
+        }
+    }
+
+    for source in products {
+        if source.name != product_name
+            && source
+                .topology
+                .connectable_products
+                .iter()
+                .any(|target| target == product_name)
+        {
+            resolved.insert(source.name.clone());
+        }
+    }
+
+    resolved.into_iter().collect()
+}
+
+fn convert_builtin_to_product(builtin: &BuiltinProduct, products: &[BuiltinProduct]) -> Product {
     Product {
         product_name: builtin.name.clone(),
         parent_name: builtin.parent_name.clone(),
+        can_create_instance: builtin.can_create_instance,
+        topology: {
+            let topology = &builtin.topology;
+            TopologyDefinition {
+                enabled: topology.enabled,
+                topology_type: topology
+                    .topology_type
+                    .map(|topology_type| match topology_type {
+                        product_lib::TopologyType::TopLevel => TopologyType::TopLevel,
+                        product_lib::TopologyType::Standalone => TopologyType::Standalone,
+                        product_lib::TopologyType::Composite => TopologyType::Composite,
+                        product_lib::TopologyType::Container => TopologyType::Container,
+                    }),
+                image: topology.image.clone(),
+                components: topology
+                    .components
+                    .iter()
+                    .map(|component| match component {
+                        product_lib::TopologyComponent::Product { product_name } => {
+                            TopologyComponent::Product {
+                                product_name: product_name.clone(),
+                            }
+                        },
+                        product_lib::TopologyComponent::Inline {
+                            name,
+                            image,
+                            selectable_product_types,
+                        } => TopologyComponent::Inline {
+                            name: name.clone(),
+                            image: image.clone(),
+                            selectable_product_types: selectable_product_types.clone(),
+                        },
+                    })
+                    .collect(),
+                connectable_products: resolve_connectable_products(&builtin.name, products),
+            }
+        },
         measurements: builtin
             .measurements
             .iter()
@@ -317,7 +393,73 @@ mod tests {
             let product = loader.get_product("Battery").expect("Battery should exist");
             assert_eq!(product.product_name, "Battery");
             assert_eq!(product.parent_name, Some("ESS".to_string()));
+            assert!(product.can_create_instance);
+            assert_eq!(
+                product.topology.topology_type,
+                Some(TopologyType::Standalone)
+            );
+            assert_eq!(
+                product.topology.connectable_products,
+                ["Hybrid_Inverter", "PCS"]
+            );
             assert!(!product.measurements.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_get_composite_product() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+            let loader = ProductLoader::new(pool);
+
+            let product = loader
+                .get_product("Hybrid_Inverter")
+                .expect("Hybrid_Inverter should exist");
+            assert!(product.can_create_instance);
+            assert!(product.measurements.is_empty());
+            assert!(product.actions.is_empty());
+
+            let topology = product.topology;
+            assert_eq!(topology.topology_type, Some(TopologyType::Composite));
+            assert_eq!(topology.components.len(), 2);
+            assert!(matches!(
+                &topology.components[0],
+                TopologyComponent::Product { product_name } if product_name == "Battery"
+            ));
+        });
+    }
+
+    #[test]
+    fn test_connectable_products_are_symmetric() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+            let loader = ProductLoader::new(pool);
+
+            // Distribution_Board declares EV_Charging_Load, while the latter
+            // has no declaration of its own. The API-facing model must still
+            // expose the reverse relation.
+            let load = loader
+                .get_product("EV_Charging_Load")
+                .expect("EV_Charging_Load should exist");
+            assert_eq!(load.topology.connectable_products, ["Distribution_Board"]);
+
+            let board = loader
+                .get_product("Distribution_Board")
+                .expect("Distribution_Board should exist");
+            assert!(
+                board
+                    .topology
+                    .connectable_products
+                    .contains(&"EV_Charging_Load".to_string())
+            );
+            assert!(
+                !board
+                    .topology
+                    .connectable_products
+                    .contains(&board.product_name)
+            );
         });
     }
 
