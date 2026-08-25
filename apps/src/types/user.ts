@@ -61,6 +61,7 @@ export interface UpdateUserParams {
   username?: string
   is_active?: boolean
   role_id?: number
+  password?: string
 }
 
 // API 响应格式

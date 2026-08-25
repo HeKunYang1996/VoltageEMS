@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::auth::verify_access_token;
+use crate::auth::validate_access_token;
 use crate::state::AppState;
 
 fn extract_bearer(req: &Request) -> Option<String> {
@@ -47,7 +47,10 @@ pub async fn require_jwt(State(state): State<Arc<AppState>>, req: Request, next:
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
 
-    if verify_access_token(&token, &state.config.jwt_secret).is_none() {
+    if validate_access_token(&token, &state.config.jwt_secret, &state.db)
+        .await
+        .is_none()
+    {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     }
 
@@ -70,7 +73,8 @@ pub async fn require_engineer(
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
 
-    let Some(claims) = verify_access_token(&token, &state.config.jwt_secret) else {
+    let Some(claims) = validate_access_token(&token, &state.config.jwt_secret, &state.db).await
+    else {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     };
 
@@ -98,7 +102,8 @@ pub async fn require_admin_role(
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
 
-    let Some(claims) = verify_access_token(&token, &state.config.jwt_secret) else {
+    let Some(claims) = validate_access_token(&token, &state.config.jwt_secret, &state.db).await
+    else {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     };
 

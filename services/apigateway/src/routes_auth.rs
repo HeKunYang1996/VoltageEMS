@@ -12,8 +12,8 @@ use tracing::error;
 
 use crate::{
     auth::{
-        create_token_pair, hash_password, verify_access_token, verify_password,
-        verify_refresh_token,
+        create_token_pair, hash_password, validate_access_token, validate_refresh_token,
+        verify_password, verify_refresh_token,
     },
     db,
     models::{
@@ -37,7 +37,7 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Validate the Authorization header and return the claims.
-fn require_auth(
+async fn require_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<crate::auth::Claims, (StatusCode, Json<Value>)> {
@@ -48,19 +48,21 @@ fn require_auth(
         )
     })?;
 
-    verify_access_token(&token, &state.config.jwt_secret).ok_or_else(|| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"success": false, "message": "Token is invalid or expired"})),
-        )
-    })
+    validate_access_token(&token, &state.config.jwt_secret, &state.db)
+        .await
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"success": false, "message": "Token is invalid or expired"})),
+            )
+        })
 }
 
-fn require_admin(
+async fn require_admin(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<crate::auth::Claims, (StatusCode, Json<Value>)> {
-    let claims = require_auth(state, headers)?;
+    let claims = require_auth(state, headers).await?;
     if claims.role.as_deref() != Some("Admin") {
         return Err((
             StatusCode::FORBIDDEN,
@@ -70,11 +72,11 @@ fn require_admin(
     Ok(claims)
 }
 
-fn require_engineer(
+async fn require_engineer(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<crate::auth::Claims, (StatusCode, Json<Value>)> {
-    let claims = require_auth(state, headers)?;
+    let claims = require_auth(state, headers).await?;
     let role = claims.role.as_deref().unwrap_or("");
     if role != "Admin" && role != "Engineer" {
         return Err((
@@ -215,6 +217,7 @@ pub async fn login(
     let cfg = &state.config;
     match create_token_pair(
         &user,
+        row.auth_version,
         &cfg.jwt_secret,
         cfg.access_token_expire_minutes,
         cfg.refresh_token_expire_days,
@@ -261,7 +264,13 @@ pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RefreshTokenRequest>,
 ) -> impl IntoResponse {
-    let claims = match verify_refresh_token(&body.refresh_token, &state.config.jwt_secret) {
+    let claims = match validate_refresh_token(
+        &body.refresh_token,
+        &state.config.jwt_secret,
+        &state.db,
+    )
+    .await
+    {
         Some(c) => c,
         None => {
             return (
@@ -326,6 +335,7 @@ pub async fn refresh_token(
     let cfg = &state.config;
     match create_token_pair(
         &user,
+        claims.auth_version,
         &cfg.jwt_secret,
         cfg.access_token_expire_minutes,
         cfg.refresh_token_expire_days,
@@ -373,7 +383,7 @@ pub async fn logout(
     headers: HeaderMap,
     Json(body): Json<RefreshTokenRequest>,
 ) -> impl IntoResponse {
-    let _ = require_auth(&state, &headers);
+    let _ = require_auth(&state, &headers).await;
 
     // Revoke refresh token if valid
     if let Some(claims) = verify_refresh_token(&body.refresh_token, &state.config.jwt_secret)
@@ -398,7 +408,7 @@ pub async fn logout(
     security(("bearer_auth" = [])),
     responses((status = 200, description = "Current user profile", body = UserWithRole), (status = 401, description = "Unauthenticated")))]
 pub async fn get_me(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
-    let claims = match require_auth(&state, &headers) {
+    let claims = match require_auth(&state, &headers).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -443,7 +453,7 @@ pub async fn update_me(
     headers: HeaderMap,
     Json(body): Json<UserUpdate>,
 ) -> impl IntoResponse {
-    let claims = match require_auth(&state, &headers) {
+    let claims = match require_auth(&state, &headers).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -457,7 +467,7 @@ pub async fn update_me(
             .into_response();
     }
 
-    apply_user_update(&state, claims.user_id, &body).await
+    apply_user_update(&state, claims.user_id, &body, false).await
 }
 
 // ── PUT /api/v1/auth/me/password ──────────────────────────────────────────────
@@ -465,10 +475,8 @@ pub async fn update_me(
 /// Change the current user's password.
 ///
 /// Requires `old_password` verified via bcrypt to prevent password changes
-/// after token hijacking. On success, existing refresh tokens are **not**
-/// automatically revoked — other active sessions remain valid. Callers that
-/// need a "sign out everywhere" effect should additionally call
-/// `/cleanup-tokens` or the logout endpoint.
+/// after token hijacking. On success, all previously issued access and refresh
+/// tokens for this account become invalid.
 #[utoipa::path(put, path = "/api/v1/auth/me/password", tag = "Auth",
     security(("bearer_auth" = [])),
     request_body = PasswordChange,
@@ -478,7 +486,7 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(body): Json<PasswordChange>,
 ) -> impl IntoResponse {
-    let claims = match require_auth(&state, &headers) {
+    let claims = match require_auth(&state, &headers).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
@@ -532,7 +540,7 @@ pub async fn get_all_users(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
     match db::get_all_users_with_roles(&state.db).await {
@@ -582,7 +590,7 @@ pub async fn admin_get_user(
     headers: HeaderMap,
     Path(user_id): Path<i64>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
 
@@ -615,9 +623,7 @@ pub async fn admin_get_user(
 ///
 /// Shares the `UserUpdate` schema with `PUT /auth/me`, but here an Admin may
 /// also modify `role_id` and `is_active`; non-admin callers receive 403.
-/// Setting `is_active=false` does **not** immediately revoke existing tokens —
-/// they remain valid until they expire naturally or are cleared via
-/// `/cleanup-tokens`.
+/// Security-sensitive changes invalidate the target user's existing sessions.
 #[utoipa::path(put, path = "/api/v1/auth/users/{id}", tag = "Auth",
     security(("bearer_auth" = [])),
     params(("id" = i64, Path, description = "User ID")),
@@ -629,11 +635,11 @@ pub async fn admin_update_user(
     Path(user_id): Path<i64>,
     Json(body): Json<UserUpdate>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
 
-    apply_user_update(&state, user_id, &body).await
+    apply_user_update(&state, user_id, &body, true).await
 }
 
 // ── DELETE /api/v1/auth/users/:id (admin) ────────────────────────────────────
@@ -653,7 +659,7 @@ pub async fn admin_delete_user(
     headers: HeaderMap,
     Path(user_id): Path<i64>,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
 
@@ -667,12 +673,15 @@ pub async fn admin_delete_user(
                     .into_response();
             }
             match db::delete_user(&state.db, user_id).await {
-                Ok(true) => Json(json!({
-                    "success": true,
-                    "message": "User deleted",
-                    "data": { "user_id": user_id, "username": user.username }
-                }))
-                .into_response(),
+                Ok(true) => {
+                    revoke_user_refresh_tokens(&state, user_id);
+                    Json(json!({
+                        "success": true,
+                        "message": "User deleted",
+                        "data": { "user_id": user_id, "username": user.username }
+                    }))
+                    .into_response()
+                },
                 _ => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"success": false, "message": "Internal server error"})),
@@ -710,7 +719,7 @@ pub async fn get_auth_stats(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
 
@@ -750,7 +759,7 @@ pub async fn cleanup_tokens(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Err(e) = require_admin(&state, &headers) {
+    if let Err(e) = require_admin(&state, &headers).await {
         return e.into_response();
     }
 
@@ -780,27 +789,51 @@ async fn apply_user_update(
     state: &AppState,
     user_id: i64,
     body: &UserUpdate,
+    allow_password_reset: bool,
 ) -> axum::response::Response {
-    if let Some(role_id) = body.role_id
-        && let Err(e) = db::update_user_role(&state.db, user_id, role_id).await
-    {
-        error!("Update role error: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": "Internal server error"})),
-        )
-            .into_response();
+    let mut security_changed = false;
+
+    if let Some(role_id) = body.role_id {
+        match db::update_user_role(&state.db, user_id, role_id).await {
+            Ok(changed) => security_changed |= changed,
+            Err(e) => {
+                error!("Update role error: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": "Internal server error"})),
+                )
+                    .into_response();
+            },
+        }
     }
 
-    if let Some(is_active) = body.is_active
-        && let Err(e) = db::update_user_active(&state.db, user_id, is_active).await
+    if let Some(is_active) = body.is_active {
+        match db::update_user_active(&state.db, user_id, is_active).await {
+            Ok(changed) => security_changed |= changed,
+            Err(e) => {
+                error!("Update active error: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": "Internal server error"})),
+                )
+                    .into_response();
+            },
+        }
+    }
+
+    if let Some(password) = body
+        .password
+        .as_deref()
+        .filter(|password| !password.is_empty())
     {
-        error!("Update active error: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": "Internal server error"})),
-        )
-            .into_response();
+        if !allow_password_reset {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"success": false, "message": "Use the password change endpoint to update your own password"})),
+            )
+                .into_response();
+        }
+        return apply_admin_password_reset(state, user_id, password).await;
     }
 
     if body.old_password.is_some() || body.new_password.is_some() {
@@ -818,6 +851,10 @@ async fn apply_user_update(
         }
     }
 
+    if security_changed {
+        revoke_user_refresh_tokens(state, user_id);
+    }
+
     match db::get_user_with_role(&state.db, user_id).await {
         Ok(Some(user)) => Json(json!({
             "success": true,
@@ -830,6 +867,45 @@ async fn apply_user_update(
             Json(json!({"success": false, "message": "Internal server error"})),
         )
             .into_response(),
+    }
+}
+
+fn revoke_user_refresh_tokens(state: &AppState, user_id: i64) {
+    state
+        .refresh_tokens
+        .retain(|_, token| token.user_id != user_id);
+}
+
+async fn apply_admin_password_reset(
+    state: &AppState,
+    user_id: i64,
+    new_password: &str,
+) -> axum::response::Response {
+    let new_hash = match hash_password(new_password) {
+        Ok(hash) => hash,
+        Err(e) => {
+            error!("bcrypt error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": "Internal server error"})),
+            )
+                .into_response();
+        },
+    };
+
+    match db::update_user_password(&state.db, user_id, &new_hash).await {
+        Ok(_) => {
+            revoke_user_refresh_tokens(state, user_id);
+            Json(json!({"success": true, "message": "User updated successfully"})).into_response()
+        },
+        Err(e) => {
+            error!("Update password error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": "Internal server error"})),
+            )
+                .into_response()
+        },
     }
 }
 
@@ -871,8 +947,11 @@ async fn apply_password_change(
     };
 
     match db::update_user_password(&state.db, user_id, &new_hash).await {
-        Ok(_) => Json(json!({"success": true, "message": "Password changed successfully"}))
-            .into_response(),
+        Ok(_) => {
+            revoke_user_refresh_tokens(state, user_id);
+            Json(json!({"success": true, "message": "Password changed successfully"}))
+                .into_response()
+        },
         Err(e) => {
             error!("Update password error: {}", e);
             (
@@ -897,7 +976,7 @@ pub async fn validate_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    match require_auth(&state, &headers) {
+    match require_auth(&state, &headers).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err((status, _)) => status.into_response(),
     }
@@ -920,7 +999,7 @@ pub async fn validate_engineer_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    match require_engineer(&state, &headers) {
+    match require_engineer(&state, &headers).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err((status, _)) => status.into_response(),
     }
@@ -942,7 +1021,7 @@ pub async fn validate_admin_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    match require_admin(&state, &headers) {
+    match require_admin(&state, &headers).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err((status, _)) => status.into_response(),
     }

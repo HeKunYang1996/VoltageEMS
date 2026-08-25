@@ -80,6 +80,18 @@ describe('User API', () => {
     expect(Request.put).toHaveBeenCalledWith('/api/v1/auth/users/1', userData)
   })
 
+  it('should hash password when an admin resets a user password', async () => {
+    const mockData = { success: true, data: { id: 1 } }
+    const { Request } = await import('@/utils/request')
+    vi.mocked(Request.put).mockResolvedValue(mockData)
+
+    await userApi.updateUser(1, { password: 'newpass1' })
+
+    expect(Request.put).toHaveBeenCalledWith('/api/v1/auth/users/1', {
+      password: 'md5_newpass1',
+    })
+  })
+
   it('should delete user', async () => {
     const mockData = { success: true }
     const { Request } = await import('@/utils/request')

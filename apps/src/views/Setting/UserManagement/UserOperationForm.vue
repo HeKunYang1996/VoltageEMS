@@ -72,6 +72,7 @@
 <script setup lang="ts">
 import type { FormInstance } from 'element-plus'
 import { userApi } from '@/api/user'
+import type { UpdateUserParams } from '@/types/user'
 import type { UserFormModel, DialogExpose } from '@/types/userManagement'
 
 const formRef = ref<FormInstance>()
@@ -220,7 +221,7 @@ async function onSubmit() {
       }
       close()
     } else if (mode.value === 'edit') {
-      const updateData: any = {
+      const updateData: UpdateUserParams = {
         role_id: form.value.role_id,
         is_active: form.value.is_active,
       }

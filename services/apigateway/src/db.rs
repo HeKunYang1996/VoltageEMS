@@ -26,6 +26,7 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
             password_hash VARCHAR(255) NOT NULL,
             role_id INTEGER NOT NULL DEFAULT 3,
             is_active BOOLEAN DEFAULT 1,
+            auth_version INTEGER NOT NULL DEFAULT 0,
             last_login TIMESTAMP NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -34,6 +35,20 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // Existing installations predate auth_version. Keep this runtime migration
+    // next to table creation so upgrades do not require a separate SQL step.
+    let user_columns = sqlx::query("PRAGMA table_info(users)")
+        .fetch_all(pool)
+        .await?;
+    if !user_columns
+        .iter()
+        .any(|column| column.get::<String, _>("name") == "auth_version")
+    {
+        sqlx::query("ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await?;
+    }
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         .execute(pool)
@@ -113,6 +128,15 @@ pub async fn get_user_by_id(pool: &SqlitePool, user_id: i64) -> Result<Option<Us
     )
 }
 
+pub async fn get_user_auth_state(pool: &SqlitePool, user_id: i64) -> Result<Option<(bool, i64)>> {
+    let row = sqlx::query("SELECT is_active, auth_version FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|row| (row.get("is_active"), row.get("auth_version"))))
+}
+
 fn row_to_user_with_role(r: sqlx::sqlite::SqliteRow) -> UserWithRole {
     UserWithRole {
         id: r.get("id"),
@@ -190,22 +214,28 @@ pub async fn update_user_last_login(pool: &SqlitePool, user_id: i64) -> Result<(
     Ok(())
 }
 
-pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role_id: i64) -> Result<()> {
-    sqlx::query("UPDATE users SET role_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role_id: i64) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE users SET role_id = ?, auth_version = auth_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND role_id <> ?",
+    )
         .bind(role_id)
         .bind(user_id)
+        .bind(role_id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
-pub async fn update_user_active(pool: &SqlitePool, user_id: i64, is_active: bool) -> Result<()> {
-    sqlx::query("UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+pub async fn update_user_active(pool: &SqlitePool, user_id: i64, is_active: bool) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE users SET is_active = ?, auth_version = auth_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active <> ?",
+    )
         .bind(is_active)
         .bind(user_id)
+        .bind(is_active)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_user_password(
@@ -213,7 +243,9 @@ pub async fn update_user_password(
     user_id: i64,
     password_hash: &str,
 ) -> Result<()> {
-    sqlx::query("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, auth_version = auth_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
         .bind(password_hash)
         .bind(user_id)
         .execute(pool)

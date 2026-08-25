@@ -2,8 +2,10 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::db;
 use crate::models::{RefreshTokenInfo, TokenResponse, UserWithRole};
 
 // ── JWT Claims ────────────────────────────────────────────────────────────────
@@ -16,6 +18,7 @@ pub struct Claims {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
+    pub auth_version: i64,
     pub exp: usize,
     pub iat: usize,
     #[serde(rename = "type")]
@@ -39,6 +42,7 @@ pub fn verify_password(md5_password: &str, hash: &str) -> bool {
 
 pub fn create_access_token(
     user: &UserWithRole,
+    auth_version: i64,
     secret: &str,
     expire_minutes: i64,
 ) -> Result<String> {
@@ -50,6 +54,7 @@ pub fn create_access_token(
         username: user.username.clone(),
         role: Some(user.role.name_en.clone()),
         token_id: None,
+        auth_version,
         exp,
         iat: now,
         token_type: "access".to_string(),
@@ -66,6 +71,7 @@ pub fn create_access_token(
 /// Creates a refresh token and returns (token_string, token_id, token_info).
 pub fn create_refresh_token(
     user: &UserWithRole,
+    auth_version: i64,
     secret: &str,
     expire_days: i64,
 ) -> Result<(String, String, RefreshTokenInfo)> {
@@ -78,6 +84,7 @@ pub fn create_refresh_token(
         username: user.username.clone(),
         role: None,
         token_id: Some(token_id.clone()),
+        auth_version,
         exp,
         iat: now as usize,
         token_type: "refresh".to_string(),
@@ -101,13 +108,14 @@ pub fn create_refresh_token(
 
 pub fn create_token_pair(
     user: &UserWithRole,
+    auth_version: i64,
     secret: &str,
     access_expire_minutes: i64,
     refresh_expire_days: i64,
 ) -> Result<(TokenResponse, String, RefreshTokenInfo)> {
-    let access_token = create_access_token(user, secret, access_expire_minutes)?;
+    let access_token = create_access_token(user, auth_version, secret, access_expire_minutes)?;
     let (refresh_token, token_id, token_info) =
-        create_refresh_token(user, secret, refresh_expire_days)?;
+        create_refresh_token(user, auth_version, secret, refresh_expire_days)?;
 
     let response = TokenResponse {
         access_token,
@@ -141,6 +149,19 @@ pub fn verify_access_token(token: &str, secret: &str) -> Option<Claims> {
     })
 }
 
+/// Verify the JWT and ensure the account is still active and its authentication
+/// version has not changed since this token was issued.
+pub async fn validate_access_token(token: &str, secret: &str, pool: &SqlitePool) -> Option<Claims> {
+    let claims = verify_access_token(token, secret)?;
+    validate_current_claims(pool, claims).await
+}
+
+async fn validate_current_claims(pool: &SqlitePool, claims: Claims) -> Option<Claims> {
+    let (is_active, auth_version) = db::get_user_auth_state(pool, claims.user_id).await.ok()??;
+
+    (is_active && auth_version == claims.auth_version).then_some(claims)
+}
+
 /// Verifies a refresh token and returns the Claims on success.
 pub fn verify_refresh_token(token: &str, secret: &str) -> Option<Claims> {
     let mut validation = Validation::new(Algorithm::HS256);
@@ -159,4 +180,83 @@ pub fn verify_refresh_token(token: &str, secret: &str) -> Option<Claims> {
             None
         }
     })
+}
+
+pub async fn validate_refresh_token(
+    token: &str,
+    secret: &str,
+    pool: &SqlitePool,
+) -> Option<Claims> {
+    let claims = verify_refresh_token(token, secret)?;
+    validate_current_claims(pool, claims).await
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    const SECRET: &str = "test-secret";
+
+    async fn setup_user() -> (SqlitePool, UserWithRole, i64) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        db::create_tables(&pool).await.unwrap();
+        db::init_roles(&pool).await.unwrap();
+        let user_id = db::create_user(&pool, "test-user", "password-hash", 3)
+            .await
+            .unwrap();
+        let user = db::get_user_with_role(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
+        (pool, user, user_id)
+    }
+
+    #[tokio::test]
+    async fn password_change_invalidates_existing_access_token() {
+        let (pool, user, user_id) = setup_user().await;
+        let access_token = create_access_token(&user, 0, SECRET, 30).unwrap();
+        let (refresh_token, _, _) = create_refresh_token(&user, 0, SECRET, 7).unwrap();
+
+        assert!(
+            validate_access_token(&access_token, SECRET, &pool)
+                .await
+                .is_some()
+        );
+        assert!(
+            validate_refresh_token(&refresh_token, SECRET, &pool)
+                .await
+                .is_some()
+        );
+
+        db::update_user_password(&pool, user_id, "new-password-hash")
+            .await
+            .unwrap();
+
+        assert!(
+            validate_access_token(&access_token, SECRET, &pool)
+                .await
+                .is_none()
+        );
+        assert!(
+            validate_refresh_token(&refresh_token, SECRET, &pool)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_user_invalidates_existing_access_token() {
+        let (pool, user, user_id) = setup_user().await;
+        let token = create_access_token(&user, 0, SECRET, 30).unwrap();
+
+        db::update_user_active(&pool, user_id, false).await.unwrap();
+
+        assert!(validate_access_token(&token, SECRET, &pool).await.is_none());
+    }
 }

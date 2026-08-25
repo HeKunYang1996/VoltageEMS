@@ -85,7 +85,9 @@ export const userApi = {
    * @returns 更新响应
    */
   updateUser(userId: number, params: UpdateUserParams): Promise<ApiResponse<UserInfo>> {
-    return Request.put(`/api/v1/auth/users/${userId}`, params)
+    const encryptedParams: UpdateUserParams = { ...params }
+    if (params.password) encryptedParams.password = MD5(params.password).toString()
+    return Request.put(`/api/v1/auth/users/${userId}`, encryptedParams)
   },
   /**
    * 删除用户

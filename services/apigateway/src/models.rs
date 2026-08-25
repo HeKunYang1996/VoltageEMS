@@ -23,6 +23,7 @@ pub struct UserRow {
     pub password_hash: String,
     pub role_id: i64,
     pub is_active: bool,
+    pub auth_version: i64,
     pub last_login: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -72,6 +73,8 @@ pub struct UserLogin {
 pub struct UserUpdate {
     pub role_id: Option<i64>,
     pub is_active: Option<bool>,
+    /// MD5-hashed new password. Only honored by the admin user-update endpoint.
+    pub password: Option<String>,
     pub old_password: Option<String>,
     pub new_password: Option<String>,
 }
