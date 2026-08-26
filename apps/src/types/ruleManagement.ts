@@ -48,8 +48,8 @@ export interface RuleResponse {
   total: number
 }
 
-/** GET /alarmApi/rules/{id} returns a single RuleInfo, unlike the list endpoint. */
-export type RuleDetailResponse = RuleInfo
+/** GET /alarmApi/rules/{id} keeps the legacy `{ total, list }` response shape. */
+export type RuleDetailResponse = RuleResponse
 
 /** PUT /alarmApi/rules/{id} — all fields optional. */
 export interface UpdateAlarmRulePayload {

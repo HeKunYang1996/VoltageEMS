@@ -163,6 +163,7 @@ import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
+import { watch, onUnmounted } from 'vue'
 
 import alterL1 from '@/assets/icons/home-alter-L1.svg'
 import alterL2 from '@/assets/icons/home-alter-L2.svg'
@@ -503,11 +504,16 @@ const lineChartYAxiosOption = { yUnit: 'kW' }
 const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
 const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3))
 
+let chartRequestToken = 0
+
 const fetchHomeChartData = async () => {
   const range = getRecentHoursRange(6)
+  const myToken = ++chartRequestToken
   try {
     const topoStore = useDeviceTopologyStore()
     if (!topoStore.loaded) await topoStore.load()
+
+    // 选中组就绪前的空态保护：避免 series 为空触发后端 400
     const instanceIds = {
       pv: topoStore.selectedPvGroup?.relatedInstanceIds[0],
       dg: topoStore.getLogicalDeviceInstanceIds('diesel')[0],
@@ -521,6 +527,12 @@ const fetchHomeChartData = async () => {
       { instanceId: instanceIds.dg, pointId: '2' },
       { instanceId: instanceIds.ess, pointId: '9' },
     ].filter((item) => item.instanceId !== undefined)
+
+    if (queryDefinitions.length === 0) {
+      console.warn('[HomeView] no valid series to query, skip chart request')
+      return
+    }
+
     const res = await batchQueryHistory({
       start_time: range.start!,
       end_time: range.end!,
@@ -530,6 +542,9 @@ const fetchHomeChartData = async () => {
         point_id: pointId,
       })),
     })
+
+    // 组件卸载或已有更新的请求发出，丢弃过期结果
+    if (myToken !== chartRequestToken) return
 
     const responses: BatchQueryResponse[] = res.data?.series ?? []
     const find = (instanceId: number | undefined, pointId: string) =>
@@ -564,8 +579,27 @@ const fetchHomeChartData = async () => {
   }
 }
 
-onMounted(() => {
-  fetchHomeChartData()
+// 等拓扑加载完成且选中组就绪后再拉取图表数据，避免 series 为空触发后端 400
+watch(
+  () => {
+    const topoStore = useDeviceTopologyStore()
+    return {
+      loaded: topoStore.loaded,
+      hasPv: !!topoStore.selectedPvGroup,
+      hasEss: !!topoStore.selectedBatteryGroup,
+    }
+  },
+  async (state) => {
+    if (state.loaded && (state.hasPv || state.hasEss)) {
+      await fetchHomeChartData()
+    }
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  // 标记旧请求失效，防止卸载后回调写入已销毁组件
+  chartRequestToken += 1
 })
 
 // Carousel引用
