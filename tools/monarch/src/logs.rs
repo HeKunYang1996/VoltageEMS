@@ -571,54 +571,6 @@ fn handle_list(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn finds_log_in_service_directory() {
-        let temp = TempDir::new().unwrap();
-        let service_dir = temp.path().join("comsrv");
-        std::fs::create_dir_all(&service_dir).unwrap();
-        let expected = service_dir.join("20260831_comsrv.log");
-        std::fs::write(&expected, "hello").unwrap();
-
-        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
-        assert_eq!(found, expected);
-    }
-
-    #[test]
-    fn falls_back_to_legacy_flat_log() {
-        let temp = TempDir::new().unwrap();
-        let expected = temp.path().join("20260831_comsrv.log");
-        std::fs::write(&expected, "hello").unwrap();
-
-        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
-        assert_eq!(found, expected);
-    }
-
-    #[test]
-    fn collects_service_directory_entries() {
-        let temp = TempDir::new().unwrap();
-        let service_dir = temp.path().join("comsrv");
-        std::fs::create_dir_all(&service_dir).unwrap();
-        std::fs::write(service_dir.join("20260831_comsrv.log"), "hello").unwrap();
-
-        let mut entries = Vec::new();
-        append_local_log_entries(
-            &mut entries,
-            &service_dir,
-            Some("comsrv"),
-            Some("comsrv"),
-            "20260831",
-        )
-        .unwrap();
-
-        assert_eq!(entries, vec![("comsrv/20260831_comsrv.log".to_string(), 5)]);
-    }
-}
-
 /// View last N lines of a log file with optional grep filter.
 fn handle_view(
     log_dir: &Path,
@@ -844,4 +796,52 @@ pub async fn handle_command(command: LogCommands, json: bool, host: Option<&str>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn finds_log_in_service_directory() {
+        let temp = TempDir::new().unwrap();
+        let service_dir = temp.path().join("comsrv");
+        std::fs::create_dir_all(&service_dir).unwrap();
+        let expected = service_dir.join("20260831_comsrv.log");
+        std::fs::write(&expected, "hello").unwrap();
+
+        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn falls_back_to_legacy_flat_log() {
+        let temp = TempDir::new().unwrap();
+        let expected = temp.path().join("20260831_comsrv.log");
+        std::fs::write(&expected, "hello").unwrap();
+
+        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn collects_service_directory_entries() {
+        let temp = TempDir::new().unwrap();
+        let service_dir = temp.path().join("comsrv");
+        std::fs::create_dir_all(&service_dir).unwrap();
+        std::fs::write(service_dir.join("20260831_comsrv.log"), "hello").unwrap();
+
+        let mut entries = Vec::new();
+        append_local_log_entries(
+            &mut entries,
+            &service_dir,
+            Some("comsrv"),
+            Some("comsrv"),
+            "20260831",
+        )
+        .unwrap();
+
+        assert_eq!(entries, vec![("comsrv/20260831_comsrv.log".to_string(), 5)]);
+    }
 }
