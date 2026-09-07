@@ -3,7 +3,7 @@
 use chrono::Utc;
 use reqwest::Client;
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::db::AlarmCounts;
 use crate::models::AlertRule;
@@ -179,14 +179,13 @@ impl Broadcaster {
             async move {
                 match client
                     .post(&url)
+                    .header(common::logging::INTERNAL_REQUEST_HEADER, "alarmsrv")
                     .json(&payload)
                     .timeout(std::time::Duration::from_secs(3))
                     .send()
                     .await
                 {
-                    Ok(resp) if resp.status().is_success() => {
-                        debug!("Broadcast ok: {}", url);
-                    },
+                    Ok(resp) if resp.status().is_success() => {},
                     Ok(resp) => {
                         warn!("Broadcast failed: {} status={}", url, resp.status());
                     },
@@ -242,6 +241,7 @@ impl Broadcaster {
                 futures_vec.push(async move {
                     let _ = client
                         .post(&url)
+                        .header(common::logging::INTERNAL_REQUEST_HEADER, "alarmsrv")
                         .json(&payload)
                         .timeout(std::time::Duration::from_secs(3))
                         .send()

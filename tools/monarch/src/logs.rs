@@ -200,7 +200,7 @@ async fn remote_list(
         url.push_str(&format!("date={d}&"));
     }
     if let Some(s) = service {
-        url.push_str(&format!("service={s}&"));
+        url.push_str(&format!("service={}&", encode_query(s)));
     }
 
     let resp: serde_json::Value = reqwest::get(&url)
@@ -259,7 +259,10 @@ async fn remote_view(
     };
 
     let base = admin_logs_url(host);
-    let mut url = format!("{base}/view?file={file_name}&lines={lines}");
+    let mut url = format!(
+        "{base}/view?service={}&file={file_name}&lines={lines}",
+        encode_query(service)
+    );
     if let Some(g) = grep {
         url.push_str(&format!("&grep={}", encode_query(g)));
     }
@@ -318,7 +321,8 @@ async fn remote_tail(host: &str, service: &str, api: bool, grep: &Option<String>
     let mut seen_total: usize = 0;
 
     // Get initial total line count (don't print, just record offset)
-    let init_url = format!("{base}/view?file={file_name}&lines=0");
+    let service_query = encode_query(service);
+    let init_url = format!("{base}/view?service={service_query}&file={file_name}&lines=0");
     if let Ok(resp) = client.get(&init_url).send().await
         && let Ok(body) = resp.json::<serde_json::Value>().await
     {
@@ -333,7 +337,7 @@ async fn remote_tail(host: &str, service: &str, api: bool, grep: &Option<String>
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
                 // Fetch latest lines
-                let mut url = format!("{base}/view?file={file_name}&lines=1000");
+                let mut url = format!("{base}/view?service={service_query}&file={file_name}&lines=1000");
                 if let Some(g) = grep {
                     url.push_str(&format!("&grep={}", encode_query(g)));
                 }
@@ -390,20 +394,27 @@ fn find_log_file_for_date(log_dir: &Path, service: &str, api: bool, date: &str) 
     } else {
         format!("{}_{}", date, service)
     };
-    let candidate = log_dir.join(format!("{stem}.log"));
+    let service_dir = log_dir.join(service);
+    let candidate = service_dir.join(format!("{stem}.log"));
     if candidate.exists() {
         return Ok(candidate);
     }
     // Check size-rotated variants (.1, .2, ...)
     for i in 1..=9 {
-        let rotated = log_dir.join(format!("{stem}.log.{i}"));
+        let rotated = service_dir.join(format!("{stem}.log.{i}"));
         if rotated.exists() {
             return Ok(rotated);
         }
     }
+
+    // Backward compatibility for installations that still have flat log files.
+    let legacy = log_dir.join(format!("{stem}.log"));
+    if legacy.exists() {
+        return Ok(legacy);
+    }
     anyhow::bail!(
         "No log file found: {stem}.log (looked in {})",
-        log_dir.display()
+        service_dir.display()
     )
 }
 
@@ -437,6 +448,42 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+fn append_local_log_entries(
+    entries: &mut Vec<(String, u64)>,
+    dir: &Path,
+    display_prefix: Option<&str>,
+    service: Option<&str>,
+    date_prefix: &str,
+) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(date_prefix) || !name.contains(".log") || name.ends_with(".gz") {
+            continue;
+        }
+        if let Some(service) = service {
+            let after_date = &name[date_prefix.len()..];
+            if !after_date.starts_with(&format!("_{service}")) {
+                continue;
+            }
+        }
+
+        let display_name =
+            display_prefix.map_or_else(|| name.clone(), |prefix| format!("{prefix}/{name}"));
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        entries.push((display_name, size));
+    }
+
+    Ok(())
+}
+
 /// List log files matching optional service/date filter.
 fn handle_list(
     log_dir: &Path,
@@ -455,30 +502,36 @@ fn handle_list(
 
     let mut entries: Vec<(String, u64)> = Vec::new();
 
-    for entry in std::fs::read_dir(log_dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Must start with date prefix and end with .log (or .log.N)
-        if !name.starts_with(&date_prefix) || !name.contains(".log") {
-            continue;
+    if let Some(service) = service.as_deref() {
+        let service_dir = log_dir.join(service);
+        if service_dir.is_dir() {
+            append_local_log_entries(
+                &mut entries,
+                &service_dir,
+                None,
+                Some(service),
+                &date_prefix,
+            )?;
+        } else {
+            append_local_log_entries(&mut entries, log_dir, None, Some(service), &date_prefix)?;
         }
-        // Skip compressed files
-        if name.ends_with(".gz") {
-            continue;
-        }
-
-        // Optional service filter
-        if let Some(svc) = service {
-            // Pattern: {date}_{service}... so check after the date prefix + underscore
-            let after_date = &name[date_prefix.len()..];
-            if !after_date.starts_with(&format!("_{svc}")) {
+    } else {
+        // Keep legacy flat files visible during migration.
+        append_local_log_entries(&mut entries, log_dir, None, None, &date_prefix)?;
+        for entry in std::fs::read_dir(log_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
                 continue;
             }
+            let service = entry.file_name().to_string_lossy().to_string();
+            append_local_log_entries(
+                &mut entries,
+                &entry.path(),
+                Some(&service),
+                Some(&service),
+                &date_prefix,
+            )?;
         }
-
-        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        entries.push((name, size));
     }
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -516,6 +569,54 @@ fn handle_list(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn finds_log_in_service_directory() {
+        let temp = TempDir::new().unwrap();
+        let service_dir = temp.path().join("comsrv");
+        std::fs::create_dir_all(&service_dir).unwrap();
+        let expected = service_dir.join("20260831_comsrv.log");
+        std::fs::write(&expected, "hello").unwrap();
+
+        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn falls_back_to_legacy_flat_log() {
+        let temp = TempDir::new().unwrap();
+        let expected = temp.path().join("20260831_comsrv.log");
+        std::fs::write(&expected, "hello").unwrap();
+
+        let found = find_log_file_for_date(temp.path(), "comsrv", false, "20260831").unwrap();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn collects_service_directory_entries() {
+        let temp = TempDir::new().unwrap();
+        let service_dir = temp.path().join("comsrv");
+        std::fs::create_dir_all(&service_dir).unwrap();
+        std::fs::write(service_dir.join("20260831_comsrv.log"), "hello").unwrap();
+
+        let mut entries = Vec::new();
+        append_local_log_entries(
+            &mut entries,
+            &service_dir,
+            Some("comsrv"),
+            Some("comsrv"),
+            "20260831",
+        )
+        .unwrap();
+
+        assert_eq!(entries, vec![("comsrv/20260831_comsrv.log".to_string(), 5)]);
+    }
 }
 
 /// View last N lines of a log file with optional grep filter.
