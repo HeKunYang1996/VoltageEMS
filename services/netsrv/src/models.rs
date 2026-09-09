@@ -71,7 +71,7 @@ pub struct ReadReply {
 
 /// Incoming single-point write request on `write/{productSN}/{deviceSN}`.
 /// Field name in JSON is `key`; `msgId` is the correlation ID.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WriteRequest {
     pub source: String,
     pub device: String,
@@ -80,17 +80,18 @@ pub struct WriteRequest {
     pub field: String,
     pub value: serde_json::Value,
     #[serde(rename = "msgId")]
-    pub msg_id: Option<String>,
+    pub msg_id: String,
 }
 
 /// Reply to `write-reply/{productSN}/{deviceSN}`.
-/// Format matches Python netsrv: `{ result: "success"|"fail", msgId }`.
+/// Format matches the cloud protocol: `{ timestamp, result, message, msgId }`.
 #[derive(Serialize)]
 pub struct WriteReply {
+    pub timestamp: i64,
     pub result: String,
+    pub message: String,
     #[serde(rename = "msgId")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub msg_id: Option<String>,
+    pub msg_id: String,
 }
 
 // ── inst-sync ─────────────────────────────────────────────────────────────────
@@ -137,6 +138,14 @@ pub struct CommandReply {
     pub error: Option<String>,
 }
 
+/// Gateway function command received on `func/{productSN}/{deviceSN}`.
+#[derive(Debug, Deserialize)]
+pub struct FuncRequest {
+    pub func: String,
+    #[serde(rename = "msgId")]
+    pub msg_id: String,
+}
+
 // ── Dynamic service configuration ────────────────────────────────────────────
 
 /// MQTT gateway service configuration (`POST /netApi/mqtt/config`).
@@ -163,7 +172,8 @@ pub struct CommandReply {
     "subscribe_patterns": ["inst:*:M", "inst:*:A"],
     "exclude_patterns": [],
     "alarmsrv_url": "http://localhost:6007",
-    "modsrv_url": "http://localhost:6002"
+    "modsrv_url": "http://localhost:6002",
+    "apigateway_url": "http://localhost:6005"
 }))]
 pub struct NetConfig {
     // -- Device identity --
@@ -268,6 +278,10 @@ pub struct NetConfig {
     /// modsrv 服务地址，用于设备同步查询
     #[schema(example = "http://localhost:6002")]
     pub modsrv_url: String,
+
+    /// apigateway 服务地址，用于下发宿主机管理指令
+    #[schema(example = "http://localhost:6005")]
+    pub apigateway_url: String,
 }
 
 impl Default for NetConfig {
@@ -292,6 +306,7 @@ impl Default for NetConfig {
             exclude_patterns: vec![],
             alarmsrv_url: "http://localhost:6007".to_string(),
             modsrv_url: "http://localhost:6002".to_string(),
+            apigateway_url: "http://localhost:6005".to_string(),
         }
     }
 }

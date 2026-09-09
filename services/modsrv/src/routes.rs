@@ -21,7 +21,7 @@ use crate::api::product_handlers::{get_product_points, list_products};
 
 use crate::api::instance_management_handlers::{
     create_instance, delete_instance, execute_instance_action, reload_instances_from_db,
-    sync_all_instances, sync_instance_measurement, update_instance,
+    sync_all_instances, sync_instance_measurement, update_instance, write_instance_point,
 };
 use crate::api::instance_query_handlers::{
     get_instance, get_instance_children, get_instance_data, get_instance_points, get_topology_tree,
@@ -71,6 +71,7 @@ use common::admin_api::{get_log_level, list_log_files, set_log_level, view_log_f
         crate::api::instance_query_handlers::get_instance_points,
         crate::api::instance_management_handlers::sync_instance_measurement,
         crate::api::instance_management_handlers::execute_instance_action,
+        crate::api::instance_management_handlers::write_instance_point,
         crate::api::instance_query_handlers::set_instance_measurement,
         // Instance-level routing handlers (refactored for unified database)
         crate::api::routing_query_handlers::get_instance_routing_handler,
@@ -115,6 +116,7 @@ use common::admin_api::{get_log_level, list_log_files, set_log_level, view_log_f
             crate::dto::CreateInstanceDto,
             crate::dto::UpdateInstanceDto,
             crate::dto::ActionRequest,
+            crate::dto::CloudPointWriteRequest,
             crate::dto::RoutingRequest,
             crate::dto::SinglePointRoutingRequest,
             crate::dto::ToggleRoutingRequest,
@@ -155,6 +157,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router {
         .route("/api/instances", get(list_instances).post(create_instance))
         .route("/api/instances/list", get(list_instances_slim))
         .route("/api/instances/search", get(search_instances))
+        .route("/api/instances/write", post(write_instance_point))
         .route(
             "/api/instances/{id}",
             get(get_instance)

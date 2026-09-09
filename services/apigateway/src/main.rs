@@ -36,6 +36,7 @@ mod routes_broadcast;
 mod routes_config;
 mod routes_homepage;
 mod routes_network;
+mod routes_system;
 mod state;
 mod ws;
 
@@ -255,12 +256,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             middleware_auth::require_jwt,
         ));
 
-    // /broadcast is called by internal microservices (alarmsrv) with no JWT.
-    // Guard it with loopback-only access instead — all services share host
-    // networking so 127.0.0.1 is a sufficient internal boundary.
+    // Internal service-to-service routes do not use user JWTs. Guard them with
+    // loopback-only access instead — all services share host networking, so
+    // external clients cannot reach these handlers through the bound port.
     let internal_v1 = Router::new()
         .route("/broadcast", post(routes_broadcast::broadcast_message))
         .route("/broadcast/status", get(routes_broadcast::broadcast_status))
+        .route("/system/reboot", post(routes_system::schedule_reboot))
         .layer(axum::middleware::from_fn(middleware_auth::require_loopback));
 
     let api_v1 = Router::new()

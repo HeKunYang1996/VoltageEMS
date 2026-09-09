@@ -191,6 +191,30 @@ pub struct ActionRequest {
     pub value: f64,
 }
 
+/// Single-point write forwarded by netsrv from the cloud MQTT protocol.
+///
+/// `source` is intentionally treated as metadata rather than an enum so new
+/// cloud-side source names do not require a modsrv release.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct CloudPointWriteRequest {
+    #[schema(example = "inst")]
+    pub source: String,
+    /// Instance ID or instance name.
+    #[schema(example = "Diesel_Generator1")]
+    pub device: String,
+    /// Currently supported point types: `M` (measurement) and `A` (action).
+    #[schema(example = "A")]
+    pub data_type: String,
+    #[serde(rename = "key")]
+    #[schema(example = "101")]
+    pub point_id: String,
+    #[schema(value_type = Object, example = json!(123))]
+    pub value: serde_json::Value,
+    #[serde(rename = "msgId")]
+    #[schema(example = "123456")]
+    pub msg_id: String,
+}
+
 // === Calculation Requests ===
 
 /// Request to execute multiple calculations in batch

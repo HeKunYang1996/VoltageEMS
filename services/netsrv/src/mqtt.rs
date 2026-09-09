@@ -24,8 +24,8 @@ use tracing::{error, info, warn};
 use voltage_rtdb::Rtdb;
 
 use crate::models::{
-    CommandReply, InstSyncItem, InstSyncProperty, InstSyncReply, ReadReply, ReadReplyProperty,
-    ReadRequest, StatusPayload, WriteReply, WriteRequest,
+    CommandReply, FuncRequest, InstSyncItem, InstSyncProperty, InstSyncReply, ReadReply,
+    ReadReplyProperty, ReadRequest, StatusPayload, WriteReply, WriteRequest,
 };
 use crate::state::AppState;
 
@@ -271,6 +271,8 @@ async fn dispatch_message(state: Arc<AppState>, topic: &str, payload: Bytes) {
         handle_call_data(state, payload).await;
     } else if topic == t.call_alarm {
         handle_call_alarm(state, payload).await;
+    } else if topic == t.func {
+        handle_func(state, payload).await;
     } else if topic == t.inst_sync {
         handle_inst_sync(state, payload).await;
     }
@@ -355,59 +357,52 @@ async fn handle_read(state: Arc<AppState>, payload: Bytes) {
 }
 
 async fn handle_write(state: Arc<AppState>, payload: Bytes) {
-    let req: WriteRequest = match serde_json::from_slice(&payload) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Bad write request: {}", e);
-            let err_reply = json!({
-                "result": "fail",
-                "error": "json_parse_error",
-                "message": format!("JSON parse error: {}", e),
-                "msgId": "unknown",
-                "timestamp": Utc::now().timestamp()
-            });
-            let _ = publish_json(&state, &state.topics.write_reply, &err_reply).await;
+    let fallback_msg_id = extract_msg_id(&payload).unwrap_or_else(|| "unknown".to_string());
+    let req: WriteRequest = match serde_json::from_slice::<WriteRequest>(&payload) {
+        Ok(req)
+            if !req.source.trim().is_empty()
+                && !req.device.trim().is_empty()
+                && !req.data_type.trim().is_empty()
+                && !req.field.trim().is_empty()
+                && !req.msg_id.trim().is_empty() =>
+        {
+            req
+        },
+        Ok(_) | Err(_) => {
+            warn!(msg_id = %fallback_msg_id, "Invalid single-point write request");
+            publish_write_reply(&state, "fail", "单点写入下发失败", fallback_msg_id).await;
             return;
         },
     };
 
-    let WriteRequest {
-        source,
-        device,
-        data_type,
-        field,
-        value,
-        msg_id,
-    } = req;
+    let modsrv_url = state.config.read().await.modsrv_url.clone();
+    let url = format!("{}/api/instances/write", modsrv_url.trim_end_matches('/'));
+    let response = state.http_client.post(url).json(&req).send().await;
 
-    // Convert underscores to spaces for Redis key lookup.
-    let device_for_redis = device.replace('_', " ");
-    let redis_key = format!("{}:{}:{}", source, device_for_redis, data_type);
-
-    let value_str = match value {
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
-    };
-
-    let result_str = match state
-        .rtdb
-        .hash_set(&redis_key, &field, Bytes::from(value_str))
-        .await
-    {
-        Ok(_) => "success",
-        Err(e) => {
-            error!("Redis HSET '{}': {}", redis_key, e);
-            "fail"
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            info!(msg_id = %req.msg_id, "Cloud single-point write dispatched");
+            publish_write_reply(&state, "success", "单点写入下发成功", req.msg_id).await;
         },
-    };
+        Ok(resp) => {
+            warn!(status = %resp.status(), msg_id = %req.msg_id, "modsrv rejected single-point write");
+            publish_write_reply(&state, "fail", "单点写入下发失败", req.msg_id).await;
+        },
+        Err(e) => {
+            warn!(error = %e, msg_id = %req.msg_id, "modsrv single-point write request failed");
+            publish_write_reply(&state, "fail", "单点写入下发失败", req.msg_id).await;
+        },
+    }
+}
 
+async fn publish_write_reply(state: &AppState, result: &str, message: &str, msg_id: String) {
     let reply = WriteReply {
-        result: result_str.to_string(),
+        timestamp: Utc::now().timestamp(),
+        result: result.to_string(),
+        message: message.to_string(),
         msg_id,
     };
-
-    if let Err(e) = publish_json(&state, &state.topics.write_reply, &reply).await {
+    if let Err(e) = publish_json(state, &state.topics.write_reply, &reply).await {
         error!("Failed to publish write-reply: {}", e);
     }
 }
@@ -479,6 +474,64 @@ async fn handle_call_alarm(state: Arc<AppState>, payload: Bytes) {
     };
     if let Err(e) = publish_json(&state, &state.topics.call_alarm_reply, &reply).await {
         error!("Failed to publish call-alarm-reply: {}", e);
+    }
+}
+
+async fn publish_func_reply(state: &AppState, result: &str, message: &str, msg_id: String) {
+    let reply = CommandReply {
+        result: result.to_string(),
+        message: message.to_string(),
+        timestamp: Utc::now().timestamp(),
+        msg_id: Some(msg_id),
+        error: None,
+    };
+    if let Err(e) = publish_json(state, &state.topics.func_reply, &reply).await {
+        error!("Failed to publish func-reply: {}", e);
+    }
+}
+
+async fn handle_func(state: Arc<AppState>, payload: Bytes) {
+    let fallback_msg_id = extract_msg_id(&payload).unwrap_or_else(|| "unknown".to_string());
+    let req: FuncRequest = match serde_json::from_slice::<FuncRequest>(&payload) {
+        Ok(req) if !req.func.is_empty() && !req.msg_id.is_empty() => req,
+        Ok(_) | Err(_) => {
+            warn!("Invalid gateway function request");
+            publish_func_reply(&state, "fail", "指令格式错误", fallback_msg_id).await;
+            return;
+        },
+    };
+
+    if req.func != "reboot" {
+        warn!(func = %req.func, msg_id = %req.msg_id, "Unsupported gateway function");
+        publish_func_reply(&state, "fail", "指令不支持", req.msg_id).await;
+        return;
+    }
+
+    let apigateway_url = state.config.read().await.apigateway_url.clone();
+    let url = format!(
+        "{}/api/v1/system/reboot",
+        apigateway_url.trim_end_matches('/')
+    );
+    let response = state
+        .http_client
+        .post(url)
+        .json(&json!({ "msgId": req.msg_id }))
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            info!(msg_id = %req.msg_id, "Host reboot scheduled");
+            publish_func_reply(&state, "success", "指令下发成功", req.msg_id).await;
+        },
+        Ok(resp) => {
+            warn!(status = %resp.status(), msg_id = %req.msg_id, "Host reboot request rejected");
+            publish_func_reply(&state, "fail", "指令下发失败", req.msg_id).await;
+        },
+        Err(e) => {
+            warn!(error = %e, msg_id = %req.msg_id, "Host reboot request failed");
+            publish_func_reply(&state, "fail", "指令下发失败", req.msg_id).await;
+        },
     }
 }
 
@@ -577,4 +630,61 @@ fn parse_redis_value(bytes: &Bytes) -> serde_json::Value {
         return serde_json::Value::String(s.to_string());
     }
     serde_json::Value::Null
+}
+
+fn extract_msg_id(payload: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .ok()?
+        .get("msgId")?
+        .as_str()
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_reboot_function_request() {
+        let req: FuncRequest =
+            serde_json::from_str(r#"{"func":"reboot","msgId":"123456"}"#).unwrap();
+        assert_eq!(req.func, "reboot");
+        assert_eq!(req.msg_id, "123456");
+    }
+
+    #[test]
+    fn extracts_message_id_from_invalid_request() {
+        assert_eq!(
+            extract_msg_id(br#"{"func":7,"msgId":"123456"}"#).as_deref(),
+            Some("123456")
+        );
+        assert_eq!(extract_msg_id(b"not-json"), None);
+    }
+
+    #[test]
+    fn parses_single_point_write_without_restricting_source() {
+        let req: WriteRequest = serde_json::from_str(
+            r#"{"source":"future-source","device":"1","data_type":"A","key":"101","value":"123","msgId":"123456"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(req.source, "future-source");
+        assert_eq!(req.msg_id, "123456");
+    }
+
+    #[test]
+    fn serializes_complete_single_point_write_reply() {
+        let reply = WriteReply {
+            timestamp: 1_762_395_700,
+            result: "success".to_string(),
+            message: "单点写入下发成功".to_string(),
+            msg_id: "123456".to_string(),
+        };
+        let value = serde_json::to_value(reply).unwrap();
+
+        assert_eq!(value["timestamp"], 1_762_395_700);
+        assert_eq!(value["result"], "success");
+        assert_eq!(value["message"], "单点写入下发成功");
+        assert_eq!(value["msgId"], "123456");
+    }
 }

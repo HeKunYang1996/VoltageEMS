@@ -69,6 +69,11 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
         "http://localhost:6002",
         "modsrv base URL for inst-sync queries",
     ),
+    (
+        "apigateway_url",
+        "http://localhost:6005",
+        "apigateway base URL for host commands",
+    ),
 ];
 
 pub async fn create_config_table(pool: &SqlitePool) -> anyhow::Result<()> {
@@ -140,6 +145,7 @@ pub async fn load_config(pool: &SqlitePool) -> anyhow::Result<NetConfig> {
         exclude_patterns: serde_json::from_str(&get("exclude_patterns", "[]")).unwrap_or_default(),
         alarmsrv_url: get("alarmsrv_url", "http://localhost:6007"),
         modsrv_url: get("modsrv_url", "http://localhost:6002"),
+        apigateway_url: get("apigateway_url", "http://localhost:6005"),
     };
     cfg.normalize();
     Ok(cfg)
@@ -203,6 +209,7 @@ pub async fn save_config(pool: &SqlitePool, cfg: &NetConfig) -> anyhow::Result<(
         ),
         ("alarmsrv_url", Cow::Borrowed(cfg.alarmsrv_url.as_str())),
         ("modsrv_url", Cow::Borrowed(cfg.modsrv_url.as_str())),
+        ("apigateway_url", Cow::Borrowed(cfg.apigateway_url.as_str())),
     ];
 
     let mut tx = pool.begin().await?;

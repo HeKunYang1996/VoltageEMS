@@ -86,6 +86,10 @@ pub struct Topics {
     pub call_alarm: String,
     pub call_alarm_reply: String,
     pub alarm: String,
+    /// Incoming gateway function command from the cloud.
+    pub func: String,
+    /// Reply topic for gateway function commands.
+    pub func_reply: String,
     /// Incoming device-list sync request from the cloud.
     pub inst_sync: String,
     /// Reply topic for the device-list sync response.
@@ -111,6 +115,8 @@ impl Topics {
             call_alarm: f("call-alarm/{productSN}/{deviceSN}"),
             call_alarm_reply: f("call-alarm-reply/{productSN}/{deviceSN}"),
             alarm: f("alarm/{productSN}/{deviceSN}"),
+            func: f("func/{productSN}/{deviceSN}"),
+            func_reply: f("func-reply/{productSN}/{deviceSN}"),
             inst_sync: f("inst-sync/{productSN}/{deviceSN}"),
             inst_sync_reply: f("inst-sync-reply/{productSN}/{deviceSN}"),
         }
@@ -123,7 +129,27 @@ impl Topics {
             (self.write.as_str(), rumqttc::QoS::AtLeastOnce),
             (self.call_data.as_str(), rumqttc::QoS::AtLeastOnce),
             (self.call_alarm.as_str(), rumqttc::QoS::AtLeastOnce),
+            (self.func.as_str(), rumqttc::QoS::AtLeastOnce),
             (self.inst_sync.as_str(), rumqttc::QoS::AtLeastOnce),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_function_topics_and_subscription() {
+        let topics = Topics::new("MonarchHub", "gateway-001");
+
+        assert_eq!(topics.func, "func/MonarchHub/gateway-001");
+        assert_eq!(topics.func_reply, "func-reply/MonarchHub/gateway-001");
+        assert!(
+            topics
+                .subscriptions()
+                .iter()
+                .any(|(topic, qos)| *topic == topics.func && *qos == rumqttc::QoS::AtLeastOnce)
+        );
     }
 }

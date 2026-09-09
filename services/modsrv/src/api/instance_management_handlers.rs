@@ -9,6 +9,7 @@ use axum::{
     extract::{Path, State},
     response::Json,
 };
+use bytes::Bytes;
 use common::SuccessResponse;
 use serde_json::json;
 use std::collections::HashMap;
@@ -16,8 +17,10 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::app_state::AppState;
-use crate::dto::{ActionRequest, CreateInstanceDto, UpdateInstanceDto};
+use crate::dto::{ActionRequest, CloudPointWriteRequest, CreateInstanceDto, UpdateInstanceDto};
 use crate::error::ModSrvError;
+use voltage_model::KeySpaceConfig;
+use voltage_rtdb::Rtdb;
 
 /// Create a new model instance
 ///
@@ -417,4 +420,190 @@ pub async fn execute_instance_action(
         "point_id": req.point_id,
         "value": req.value
     }))))
+}
+
+/// Write one instance point from the cloud protocol.
+///
+/// The source name is carried as metadata and deliberately not restricted.
+/// M points update the instance measurement mirror; A points use the normal
+/// SHM/UDS action path and therefore reach comsrv and the target device.
+#[utoipa::path(
+    post,
+    path = "/api/instances/write",
+    request_body = crate::dto::CloudPointWriteRequest,
+    responses(
+        (status = 200, description = "Point written", body = serde_json::Value),
+        (status = 400, description = "Invalid point write request"),
+        (status = 404, description = "Instance not found"),
+        (status = 502, description = "Device dispatch failed"),
+        (status = 503, description = "Target channel is offline")
+    ),
+    tag = "modsrv"
+)]
+pub async fn write_instance_point(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CloudPointWriteRequest>,
+) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
+    validate_cloud_write_fields(&req)?;
+
+    let instance_id = resolve_cloud_device(&state, &req.device).await?;
+    let point_id = req
+        .point_id
+        .parse::<u32>()
+        .map_err(|_| ModSrvError::InvalidData("key must be a numeric point ID".to_string()))?;
+    let value = parse_cloud_numeric_value(&req.value)?;
+    let data_type = req.data_type.trim().to_ascii_uppercase();
+
+    match data_type.as_str() {
+        "M" => {
+            state
+                .instance_manager
+                .load_single_measurement_point(instance_id, point_id)
+                .await
+                .map_err(|e| ModSrvError::InvalidData(e.to_string()))?;
+
+            let keyspace = KeySpaceConfig::production_cached();
+            let value_key = keyspace.instance_measurement_key(instance_id);
+            let timestamp_key = keyspace.instance_measurement_ts_key(instance_id);
+            let timestamp_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or(0);
+
+            state
+                .instance_manager
+                .rtdb
+                .hash_set(&value_key, &req.point_id, Bytes::from(value.to_string()))
+                .await
+                .map_err(|e| ModSrvError::RedisError(e.to_string()))?;
+            state
+                .instance_manager
+                .rtdb
+                .hash_set(
+                    &timestamp_key,
+                    &req.point_id,
+                    Bytes::from(timestamp_ms.to_string()),
+                )
+                .await
+                .map_err(|e| ModSrvError::RedisError(e.to_string()))?;
+        },
+        "A" => {
+            let action_point = state
+                .instance_manager
+                .load_single_action_point(instance_id, point_id)
+                .await
+                .map_err(|e| ModSrvError::InvalidData(e.to_string()))?;
+            let routing = action_point.routing.ok_or_else(|| {
+                ModSrvError::InvalidRouting(format!(
+                    "Action point {} of instance {} is not routed",
+                    point_id, instance_id
+                ))
+            })?;
+            if !routing.enabled
+                || routing.channel_id.is_none()
+                || routing.channel_point_id.is_none()
+                || routing.channel_type.is_none()
+            {
+                return Err(ModSrvError::InvalidRouting(format!(
+                    "Action point {} of instance {} has no enabled target",
+                    point_id, instance_id
+                )));
+            }
+
+            state
+                .instance_manager
+                .execute_action(instance_id, &req.point_id, value)
+                .await?;
+        },
+        _ => {
+            return Err(ModSrvError::InvalidData(format!(
+                "Unsupported data_type '{}'; expected M or A",
+                req.data_type
+            )));
+        },
+    }
+
+    info!(
+        source = %req.source,
+        device = %req.device,
+        instance_id,
+        data_type = %data_type,
+        point_id,
+        msg_id = %req.msg_id,
+        "Cloud single-point write completed"
+    );
+
+    Ok(Json(SuccessResponse::new(json!({
+        "source": req.source,
+        "device": req.device,
+        "data_type": data_type,
+        "key": req.point_id,
+        "value": value,
+        "msgId": req.msg_id
+    }))))
+}
+
+fn validate_cloud_write_fields(req: &CloudPointWriteRequest) -> Result<(), ModSrvError> {
+    if req.source.trim().is_empty()
+        || req.device.trim().is_empty()
+        || req.data_type.trim().is_empty()
+        || req.point_id.trim().is_empty()
+        || req.msg_id.trim().is_empty()
+    {
+        return Err(ModSrvError::InvalidData(
+            "source, device, data_type, key and msgId must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn resolve_cloud_device(state: &AppState, device: &str) -> Result<u32, ModSrvError> {
+    if let Ok(instance_id) = device.parse::<u32>() {
+        return Ok(instance_id);
+    }
+
+    match state.get_instance_id(device).await {
+        Ok(instance_id) => Ok(u32::from(instance_id)),
+        Err(exact_error) if device.contains('_') => state
+            .get_instance_id(&device.replace('_', " "))
+            .await
+            .map(u32::from)
+            .map_err(|_| exact_error),
+        Err(error) => Err(error),
+    }
+}
+
+fn parse_cloud_numeric_value(value: &serde_json::Value) -> Result<f64, ModSrvError> {
+    let parsed = match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+    .ok_or_else(|| ModSrvError::InvalidData("value must be a finite number".to_string()))?;
+
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod cloud_write_tests {
+    use super::parse_cloud_numeric_value;
+
+    #[test]
+    fn accepts_number_and_numeric_string_values() {
+        assert_eq!(
+            parse_cloud_numeric_value(&serde_json::json!(123)).unwrap(),
+            123.0
+        );
+        assert_eq!(
+            parse_cloud_numeric_value(&serde_json::json!("12.5")).unwrap(),
+            12.5
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_values() {
+        assert!(parse_cloud_numeric_value(&serde_json::json!("on")).is_err());
+        assert!(parse_cloud_numeric_value(&serde_json::json!(true)).is_err());
+    }
 }
