@@ -29,6 +29,8 @@ use crate::models::{
 };
 use crate::state::AppState;
 
+const MQTT_MAX_PACKET_SIZE_BYTES: usize = 1024 * 1024;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 pub async fn run_mqtt_loop(state: Arc<AppState>, shutdown: CancellationToken) {
@@ -93,6 +95,7 @@ async fn connect_and_run(state: Arc<AppState>, shutdown: CancellationToken) -> a
     };
 
     let mut options = MqttOptions::new(&client_id, &cfg.broker_host, cfg.broker_port);
+    apply_packet_size_limit(&mut options);
     options.set_keep_alive(Duration::from_secs(cfg.broker_keepalive_secs));
     options.set_clean_session(true);
 
@@ -549,14 +552,15 @@ async fn handle_inst_sync(state: Arc<AppState>, payload: Bytes) {
     }
 }
 
-/// Fetch instance list from modsrv and publish an `inst-sync-reply`.
+/// Fetch the instance list and station topology from modsrv, then publish an
+/// `inst-sync-reply`.
 /// `msg_id` is echoed back verbatim; pass the ms-timestamp string for
 /// HTTP-triggered calls.
 pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyhow::Result<()> {
     let modsrv_url = state.config.read().await.modsrv_url.clone();
-    let url = format!("{}/api/instances/properties", modsrv_url);
+    let instances_url = format!("{}/api/instances/properties", modsrv_url);
 
-    let list = match state.http_client.get(&url).send().await {
+    let list = match state.http_client.get(&instances_url).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(body) => {
                 let raw_list = body
@@ -611,13 +615,50 @@ pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyho
         },
     };
 
+    let topology_url = format!("{}/api/station/topology", modsrv_url);
+    let flow_json = match state.http_client.get(&topology_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let body = resp
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| anyhow::anyhow!("parse modsrv topology response: {}", e))?;
+            let flow_json = body
+                .get("data")
+                .and_then(|data| data.get("flow_json"))
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("modsrv topology response missing data.flow_json")
+                })?;
+            if !flow_json.is_object() {
+                return Err(anyhow::anyhow!(
+                    "modsrv topology data.flow_json must be an object"
+                ));
+            }
+            flow_json
+        },
+        Ok(resp) => {
+            return Err(anyhow::anyhow!(
+                "modsrv topology returned status {}",
+                resp.status()
+            ));
+        },
+        Err(e) => {
+            return Err(anyhow::anyhow!("HTTP request to modsrv topology: {}", e));
+        },
+    };
+
     let reply = InstSyncReply {
         msg_id,
         timestamp: Utc::now().timestamp(),
         list,
+        flow_json,
     };
 
     publish_json(&state, &state.topics.inst_sync_reply, &reply).await
+}
+
+fn apply_packet_size_limit(options: &mut MqttOptions) {
+    options.set_max_packet_size(MQTT_MAX_PACKET_SIZE_BYTES, MQTT_MAX_PACKET_SIZE_BYTES);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -686,5 +727,13 @@ mod tests {
         assert_eq!(value["result"], "success");
         assert_eq!(value["message"], "单点写入下发成功");
         assert_eq!(value["msgId"], "123456");
+    }
+
+    #[test]
+    fn mqtt_options_allow_large_sync_payloads() {
+        let mut options = MqttOptions::new("test", "localhost", 1883);
+        apply_packet_size_limit(&mut options);
+
+        assert_eq!(options.max_packet_size(), MQTT_MAX_PACKET_SIZE_BYTES);
     }
 }

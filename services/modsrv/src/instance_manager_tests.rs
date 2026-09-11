@@ -112,7 +112,35 @@ async fn test_create_instance_success() {
 }
 
 #[tokio::test]
-async fn test_create_instance_rejects_non_creatable_product() {
+async fn test_create_instance_rejects_second_station_type() {
+    let (_temp_dir, pool) = create_test_database().await;
+    let product_loader = create_test_product_loader(pool.clone());
+    let rtdb = create_test_rtdb();
+    let routing_cache = Arc::new(voltage_routing::RoutingCache::new());
+    let manager = InstanceManager::new(pool, rtdb, routing_cache, product_loader, noop_dispatch());
+
+    setup_hierarchy(&manager).await;
+    let result = manager
+        .create_instance(CreateInstanceRequest {
+            instance_id: Some(2),
+            instance_name: "station_backup".to_string(),
+            product_name: "Station".to_string(),
+            parent_id: None,
+            properties: HashMap::new(),
+        })
+        .await;
+
+    assert!(matches!(result, Err(ModSrvError::InstanceExists(_))));
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM instances WHERE product_name = 'Station'")
+            .fetch_one(&manager.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn test_create_instance_rejects_removed_placeholder_product() {
     let (_temp_dir, pool) = create_test_database().await;
     let product_loader = create_test_product_loader(pool.clone());
     let rtdb = create_test_rtdb();
@@ -133,7 +161,7 @@ async fn test_create_instance_rejects_non_creatable_product() {
 }
 
 #[tokio::test]
-async fn test_create_hybrid_inverter_as_empty_instance() {
+async fn test_create_hybrid_inverter_with_own_points() {
     let (_temp_dir, pool) = create_test_database().await;
     let product_loader = create_test_product_loader(pool.clone());
     let rtdb = create_test_rtdb();
@@ -150,10 +178,10 @@ async fn test_create_hybrid_inverter_as_empty_instance() {
             properties: HashMap::new(),
         })
         .await
-        .expect("Hybrid_Inverter should create an empty instance");
+        .expect("Hybrid_Inverter should create an instance");
 
-    assert!(instance.measurement_mappings.unwrap().is_empty());
-    assert!(instance.action_mappings.unwrap().is_empty());
+    assert_eq!(instance.measurement_mappings.unwrap().len(), 15);
+    assert_eq!(instance.action_mappings.unwrap().len(), 4);
 }
 
 #[tokio::test]

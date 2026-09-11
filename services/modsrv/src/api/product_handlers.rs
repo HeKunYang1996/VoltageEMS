@@ -21,23 +21,20 @@ use crate::error::ModSrvError;
 /// Optional capability filters for the product catalog.
 #[derive(Debug, Default, Deserialize)]
 pub struct ProductListQuery {
-    pub can_create_instance: Option<bool>,
     pub topology_enabled: Option<bool>,
 }
 
 impl ProductListQuery {
     fn matches(&self, product: &Product) -> bool {
-        self.can_create_instance
-            .is_none_or(|expected| product.can_create_instance == expected)
-            && self
-                .topology_enabled
-                .is_none_or(|expected| product.topology.enabled == expected)
+        self.topology_enabled
+            .is_none_or(|expected| product.topology.is_some() == expected)
     }
 }
 
 /// List all available product templates (lightweight)
 ///
-/// Returns product names, parent relationships, and instance/topology capabilities.
+/// Returns product names, classifications, descriptions, display defaults,
+/// and topology capabilities.
 /// This endpoint is optimized for frontend dropdown lists and product selection interfaces.
 /// For detailed product information including measurements/actions/properties, use GET /api/products/{product_name}/points.
 ///
@@ -46,8 +43,7 @@ impl ProductListQuery {
     path = "/api/products",
     tag = "products",
     params(
-        ("can_create_instance" = Option<bool>, Query, description = "Filter by whether instances can be created"),
-        ("topology_enabled" = Option<bool>, Query, description = "Filter by whether the product is enabled for topology use")
+        ("topology_enabled" = Option<bool>, Query, description = "Filter by whether the product participates in the energy topology")
     ),
     responses(
         (status = 200, description = "Lightweight product list retrieved successfully",
@@ -55,28 +51,14 @@ impl ProductListQuery {
             example = json!({
                 "success": true,
                 "data": {
-                    "count": 9,
+                "count": 13,
                     "products": [
                         {
                             "product_name": "Station",
-                            "parent_name": null,
-                            "can_create_instance": true,
-                            "topology": {
-                                "enabled": true,
-                                "type": "top-level",
-                                "components": [],
-                                "connectableProducts": []
-                            }
-                        },
-                        {
-                            "product_name": "ESS",
-                            "parent_name": "Station",
-                            "can_create_instance": false,
-                            "topology": {
-                                "enabled": false,
-                                "components": [],
-                                "connectableProducts": []
-                            }
+                            "type": "Station",
+                            "description": "Station profile",
+                            "topology": null,
+                            "defaultDisplayMeasureIds": [1, 2]
                         }
                     ]
                 }
@@ -97,9 +79,10 @@ pub async fn list_products(
         .map(|product| {
             json!({
                 "product_name": product.product_name,
-                "parent_name": product.parent_name,
-                "can_create_instance": product.can_create_instance,
-                "topology": product.topology
+                "type": product.product_type,
+                "description": product.description,
+                "topology": product.topology,
+                "defaultDisplayMeasureIds": product.default_display_measure_ids
             })
         })
         .collect();
@@ -130,14 +113,12 @@ pub async fn list_products(
                 "data": {
                     "product": {
                         "product_name": "Battery",
-                        "parent_name": "ESS",
-                        "can_create_instance": true,
+                        "type": "ESS",
+                        "description": "Battery energy storage device.",
+                        "defaultDisplayMeasureIds": [1, 3, 4],
                         "topology": {
-                            "enabled": true,
-                            "type": "standalone",
                             "image": "device-Battery.png",
-                            "components": [],
-                            "connectableProducts": ["Hybrid_Inverter", "PCS"]
+                            "connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": 1}]
                         },
                         "measurements": [
                             {"measurement_id": 1, "name": "SOC", "unit": "%", "description": null}
@@ -176,20 +157,19 @@ pub async fn get_product_points(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{TopologyDefinition, TopologyType};
+    use crate::config::TopologyDefinition;
 
-    fn product(topology_enabled: bool, can_create_instance: bool) -> Product {
+    fn product(topology_enabled: bool) -> Product {
         Product {
             product_name: "Test".to_string(),
-            parent_name: None,
-            can_create_instance,
-            topology: TopologyDefinition {
-                enabled: topology_enabled,
-                topology_type: topology_enabled.then_some(TopologyType::Standalone),
+            product_type: "Test".to_string(),
+            description: None,
+            default_display_measure_ids: Vec::new(),
+            topology: topology_enabled.then_some(TopologyDefinition {
                 image: None,
-                components: Vec::new(),
-                connectable_products: Vec::new(),
-            },
+                connections: Vec::new(),
+                description: None,
+            }),
             measurements: Vec::new(),
             actions: Vec::new(),
             properties: Vec::new(),
@@ -199,28 +179,16 @@ mod tests {
     #[test]
     fn product_list_query_without_filters_matches_all() {
         let query = ProductListQuery::default();
-        assert!(query.matches(&product(false, true)));
-        assert!(query.matches(&product(true, false)));
+        assert!(query.matches(&product(false)));
+        assert!(query.matches(&product(true)));
     }
 
     #[test]
     fn product_list_query_filters_single_capability() {
         let query = ProductListQuery {
-            can_create_instance: Some(true),
-            topology_enabled: None,
+            topology_enabled: Some(true),
         };
-        assert!(query.matches(&product(false, true)));
-        assert!(!query.matches(&product(false, false)));
-    }
-
-    #[test]
-    fn product_list_query_combines_filters() {
-        let query = ProductListQuery {
-            can_create_instance: Some(false),
-            topology_enabled: Some(false),
-        };
-        assert!(query.matches(&product(false, false)));
-        assert!(!query.matches(&product(true, false)));
-        assert!(!query.matches(&product(false, true)));
+        assert!(query.matches(&product(true)));
+        assert!(!query.matches(&product(false)));
     }
 }

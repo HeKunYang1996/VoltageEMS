@@ -68,7 +68,8 @@ async fn test_product_detail_complete() -> Result<()> {
 
     // 4. Verify complete response structure
     assert_eq!(product.product_name, "Battery");
-    assert_eq!(product.parent_name, Some("ESS".to_string()));
+    assert_eq!(product.product_type, "ESS");
+    assert!(product.topology.is_some());
 
     // 5. Verify measurements exist
     assert!(
@@ -98,7 +99,7 @@ async fn test_product_closed_loop() -> Result<()> {
     let product_names = product_loader.get_all_product_names();
 
     // 4. STEP 2: For each product, fetch detailed information
-    for (product_name, parent_name) in &product_names {
+    for (product_name, _) in &product_names {
         // Fetch detail
         let product = product_loader
             .get_product(product_name)
@@ -109,21 +110,15 @@ async fn test_product_closed_loop() -> Result<()> {
             &product.product_name, product_name,
             "Product name should match"
         );
-        assert_eq!(
-            &product.parent_name, parent_name,
-            "Parent name should match"
-        );
-
-        // Note: Container products (ESS, Generator) may have empty measurements
-        // They aggregate data from child products rather than having their own points
+        assert!(!product.product_type.is_empty());
     }
 
     // 5. Verify specific products
     let battery = product_loader.get_product("Battery")?;
-    assert_eq!(battery.parent_name, Some("ESS".to_string()));
+    assert_eq!(battery.product_type, "ESS");
 
     let pcs = product_loader.get_product("PCS")?;
-    assert_eq!(pcs.parent_name, Some("ESS".to_string()));
+    assert_eq!(pcs.product_type, "ESS");
 
     // 6. Cleanup
     env.cleanup().await?;

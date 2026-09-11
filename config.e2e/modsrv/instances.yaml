@@ -22,6 +22,6 @@ instances:
 
   - instance_id: 4
     instance_name: "e2e_load"
-    product_name: "Load"
+    product_name: "Three_Phase_Load"
     channel_id: 1004
     enabled: true

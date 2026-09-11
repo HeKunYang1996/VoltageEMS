@@ -762,12 +762,16 @@ mod tests {
                 name: "voltage".to_string(),
                 unit: Some("V".to_string()),
                 description: None,
+                value_type: "number".to_string(),
+                options: Vec::new(),
             },
             MeasurementPoint {
                 measurement_id: 2,
                 name: "current".to_string(),
                 unit: Some("A".to_string()),
                 description: None,
+                value_type: "number".to_string(),
+                options: Vec::new(),
             },
         ];
 
@@ -778,18 +782,24 @@ mod tests {
                 name: "set_power".to_string(),
                 unit: Some("kW".to_string()),
                 description: None,
+                value_type: "number".to_string(),
+                options: Vec::new(),
             },
             ActionPoint {
                 action_id: 2,
                 name: "set_voltage".to_string(),
                 unit: Some("V".to_string()),
                 description: None,
+                value_type: "number".to_string(),
+                options: Vec::new(),
             },
             ActionPoint {
                 action_id: 3,
                 name: "enable".to_string(),
                 unit: None,
                 description: None,
+                value_type: "number".to_string(),
+                options: Vec::new(),
             },
         ];
 
@@ -883,6 +893,8 @@ mod tests {
             name: "power".to_string(),
             unit: Some("kW".to_string()),
             description: None,
+            value_type: "number".to_string(),
+            options: Vec::new(),
         }];
 
         // Empty actions (like Load device)

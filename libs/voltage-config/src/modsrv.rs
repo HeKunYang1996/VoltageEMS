@@ -108,15 +108,18 @@ pub struct Product {
     /// Product name (unique identifier)
     pub product_name: String,
 
-    /// Parent product name for hierarchy
-    pub parent_name: Option<String>,
+    /// Product classification used by catalogs and cloud routing.
+    #[serde(rename = "type", default)]
+    pub product_type: String,
 
-    /// Whether users may create an instance from this product
-    pub can_create_instance: bool,
+    pub description: Option<String>,
+
+    #[serde(rename = "defaultDisplayMeasureIds", default)]
+    pub default_display_measure_ids: Vec<u32>,
 
     /// Visual-topology capabilities; None means the product cannot be placed
     /// in the topology editor
-    pub topology: TopologyDefinition,
+    pub topology: Option<TopologyDefinition>,
 
     /// Measurement points (includes physical and virtual)
     #[serde(default)]
@@ -131,47 +134,22 @@ pub struct Product {
     pub properties: Vec<PropertyTemplate>,
 }
 
-/// Product capability in the visual topology editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum TopologyType {
-    TopLevel,
-    Standalone,
-    Composite,
-    Container,
-}
-
-/// A product-backed or inline component of a topology product.
+/// One product-level topology connection group.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(untagged)]
-pub enum TopologyComponent {
-    Product {
-        #[serde(rename = "productName")]
-        product_name: String,
-    },
-    Inline {
-        name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        image: Option<String>,
-        #[serde(rename = "selectableProductTypes", default)]
-        selectable_product_types: Vec<String>,
-    },
+pub struct ConnectionRule {
+    pub products: Vec<String>,
+    pub min: u32,
+    pub max: Option<u32>,
 }
 
 /// Visual-topology definition attached to a product.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TopologyDefinition {
-    pub enabled: bool,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub topology_type: Option<TopologyType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     #[serde(default)]
-    pub components: Vec<TopologyComponent>,
-    /// Concrete product names that may connect to this product. Modsrv expands
-    /// the source library's one-sided declarations into an undirected relation.
-    #[serde(rename = "connectableProducts", default)]
-    pub connectable_products: Vec<String>,
+    pub connections: Vec<ConnectionRule>,
+    pub description: Option<String>,
 }
 
 /// Measurement point definition (M type)
@@ -189,6 +167,12 @@ pub struct MeasurementPoint {
 
     /// Point description
     pub description: Option<String>,
+
+    #[serde(rename = "type", default)]
+    pub value_type: String,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 /// Action point definition (A type)
@@ -206,6 +190,12 @@ pub struct ActionPoint {
 
     /// Point description
     pub description: Option<String>,
+
+    #[serde(rename = "type", default)]
+    pub value_type: String,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 /// Property template for instance configuration
@@ -223,6 +213,12 @@ pub struct PropertyTemplate {
 
     /// Property description
     pub description: Option<String>,
+
+    #[serde(rename = "type", default)]
+    pub value_type: String,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 // ============================================================================

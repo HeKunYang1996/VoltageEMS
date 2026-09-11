@@ -45,7 +45,8 @@ use voltage_rtdb::Rtdb;
                     "updated_at": "2025-10-15T10:30:00Z"
                 }
             })
-        )
+        ),
+        (status = 409, description = "Instance already exists, including the single Station limit")
     ),
     tag = "modsrv"
 )]

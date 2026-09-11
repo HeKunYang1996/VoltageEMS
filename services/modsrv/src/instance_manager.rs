@@ -532,52 +532,20 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
             .get_product(&req.product_name)
             .map_err(|e| ModSrvError::InvalidData(format!("Unknown product: {}", e)))?;
 
-        if !product.can_create_instance {
-            return Err(ModSrvError::InvalidData(format!(
-                "Product '{}' does not allow instance creation",
-                req.product_name
-            )));
-        }
-
-        // 3. Hierarchy validation: soft check on pName (warn only, never block)
-        //    Product JSON defines pName for documentation, but we don't enforce it
-        //    since real-world topologies may differ from the product library defaults.
-        let parent_name = self
-            .product_loader
-            .get_product_parent_name(&req.product_name);
-        match (&parent_name, req.parent_id) {
-            (None, Some(_)) => {
-                warn!(
-                    "Root product '{}' typically has no parent, but parent_id was provided",
-                    req.product_name
-                );
-            },
-            (None, None) => {},
-            (Some(expected_parent), None) => {
-                warn!(
-                    "Product '{}' has pName='{}' but no parent_id provided — creating as standalone",
-                    req.product_name, expected_parent
-                );
-            },
-            (Some(expected_parent), Some(pid)) => {
-                // Validate parent exists (hard check — referential integrity)
-                let parent_product: Option<String> =
-                    sqlx::query_scalar("SELECT product_name FROM instances WHERE instance_id = ?")
-                        .bind(pid as i64)
-                        .fetch_optional(&self.pool)
-                        .await?;
-
-                let parent_product = parent_product.ok_or_else(|| {
-                    ModSrvError::InstanceNotFound(format!("Parent instance {}", pid))
-                })?;
-
-                if parent_product != *expected_parent {
-                    warn!(
-                        "Parent instance {} is '{}', but '{}' pName suggests '{}' — allowing anyway",
-                        pid, parent_product, req.product_name, expected_parent
-                    );
-                }
-            },
+        // 3. Product-level hierarchy was removed. `parent_id` remains an
+        // instance relationship, so only referential integrity is checked.
+        if let Some(parent_id) = req.parent_id {
+            let parent_exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM instances WHERE instance_id = ?)")
+                    .bind(parent_id as i64)
+                    .fetch_one(&self.pool)
+                    .await?;
+            if !parent_exists {
+                return Err(ModSrvError::InstanceNotFound(format!(
+                    "Parent instance {}",
+                    parent_id
+                )));
+            }
         }
 
         // 4. Begin transaction for atomic creation
@@ -599,20 +567,59 @@ impl<R: Rtdb + 'static> InstanceManager<R> {
         // Bind instance_id as Option: NULL lets SQLite auto-assign via INTEGER PRIMARY KEY.
         // Property values are written to `instance_properties` below — the
         // `instances` table no longer carries them.
-        let insert_result = sqlx::query(
-            r#"
-            INSERT INTO instances (instance_id, instance_name, product_name, parent_id)
-            VALUES (?, ?, ?, ?)
-            "#,
-        )
-        .bind(req.instance_id.map(|id| id as i64))
-        .bind(&req.instance_name)
-        .bind(&req.product_name)
-        .bind(req.parent_id.map(|id| id as i64))
-        .execute(&mut *tx)
-        .await;
+        let is_station = product.product_type == "Station";
+        let insert_result = if is_station {
+            let station_products = self
+                .product_loader
+                .get_all_products()
+                .into_iter()
+                .filter(|candidate| candidate.product_type == "Station")
+                .map(|candidate| candidate.product_name)
+                .collect::<Vec<_>>();
+            let placeholders = station_products
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "INSERT INTO instances (instance_id, instance_name, product_name, parent_id) \
+                 SELECT ?, ?, ?, ? WHERE NOT EXISTS (\
+                     SELECT 1 FROM instances WHERE product_name IN ({placeholders})\
+                 )"
+            );
+            let mut query = sqlx::query(&sql)
+                .bind(req.instance_id.map(|id| id as i64))
+                .bind(&req.instance_name)
+                .bind(&req.product_name)
+                .bind(req.parent_id.map(|id| id as i64));
+            for station_product in &station_products {
+                query = query.bind(station_product);
+            }
+            query.execute(&mut *tx).await
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO instances (instance_id, instance_name, product_name, parent_id)
+                VALUES (?, ?, ?, ?)
+                "#,
+            )
+            .bind(req.instance_id.map(|id| id as i64))
+            .bind(&req.instance_name)
+            .bind(&req.product_name)
+            .bind(req.parent_id.map(|id| id as i64))
+            .execute(&mut *tx)
+            .await
+        };
 
         let instance_id = match insert_result {
+            Ok(r) if is_station && r.rows_affected() == 0 => {
+                if let Err(rb_err) = tx.rollback().await {
+                    error!("Transaction rollback failed: {}", rb_err);
+                }
+                return Err(ModSrvError::InstanceExists(
+                    "only one Station instance is allowed".to_string(),
+                ));
+            },
             Ok(r) => r.last_insert_rowid() as u32,
             Err(e) => {
                 error!("Failed to insert instance {}: {}", req.instance_name, e);

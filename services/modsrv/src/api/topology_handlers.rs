@@ -19,7 +19,7 @@ use axum::{
 use common::SuccessResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
@@ -32,13 +32,296 @@ use crate::error::ModSrvError;
 
 /// Request body for PUT /api/station/topology
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveTopologyRequest {
-    pub station_name: Option<String>,
-    pub description: Option<String>,
-    pub gateway_id: Option<String>,
-    /// Full Vue-Flow canvas JSON. Must contain at least `nodes` and `edges` array keys.
-    #[schema(value_type = Object)]
-    pub flow_json: Value,
+    pub station_id: String,
+    pub station_name: String,
+    pub flow_json: TopologyFlow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TopologyFlow {
+    pub nodes: Vec<TopologyNode>,
+    pub edges: Vec<TopologyEdge>,
+    #[serde(rename = "fixedBindings")]
+    pub fixed_bindings: FixedBindings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TopologyNode {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub position: NodePosition,
+    pub data: TopologyNodeData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NodePosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TopologyNodeData {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    pub product_name: String,
+    pub instance_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TopologyEdge {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub edge_type: String,
+    pub source: String,
+    pub target: String,
+    pub source_handle: String,
+    pub target_handle: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FixedBindings {
+    pub station_instance_id: Option<i64>,
+    pub environment_instance_id: Option<i64>,
+}
+
+async fn validate_final_topology(state: &AppState, flow: &TopologyFlow) -> Result<(), ModSrvError> {
+    let mut node_ids = HashSet::new();
+    let mut bound_instance_ids = HashSet::new();
+    let mut node_products = HashMap::new();
+
+    for node in &flow.nodes {
+        if node.id.is_empty() || !node_ids.insert(node.id.as_str()) {
+            return Err(ModSrvError::InvalidData(format!(
+                "topology node id '{}' is empty or duplicated",
+                node.id
+            )));
+        }
+        if node.node_type != "product" {
+            return Err(ModSrvError::InvalidData(format!(
+                "node '{}' type must be 'product'",
+                node.id
+            )));
+        }
+        if !node.position.x.is_finite() || !node.position.y.is_finite() {
+            return Err(ModSrvError::InvalidData(format!(
+                "node '{}' position must be finite",
+                node.id
+            )));
+        }
+        if node.data.instance_id <= 0 || !bound_instance_ids.insert(node.data.instance_id) {
+            return Err(ModSrvError::InvalidData(format!(
+                "node '{}' instanceId must be positive and unique",
+                node.id
+            )));
+        }
+        let product = state
+            .instance_manager
+            .product_loader()
+            .get_product(&node.data.product_name)
+            .map_err(|_| {
+                ModSrvError::InvalidData(format!(
+                    "node '{}' references unknown product '{}'",
+                    node.id, node.data.product_name
+                ))
+            })?;
+        if product.topology.is_none() {
+            return Err(ModSrvError::InvalidData(format!(
+                "product '{}' does not participate in the energy topology",
+                node.data.product_name
+            )));
+        }
+        node_products.insert(node.id.as_str(), product);
+    }
+
+    let fixed = [
+        (flow.fixed_bindings.station_instance_id, "Station"),
+        (flow.fixed_bindings.environment_instance_id, "Env"),
+    ];
+    for (instance_id, product_name) in fixed {
+        if let Some(instance_id) = instance_id
+            && (instance_id <= 0 || !bound_instance_ids.insert(instance_id))
+        {
+            return Err(ModSrvError::InvalidData(format!(
+                "fixed binding for '{}' must be positive and unique",
+                product_name
+            )));
+        }
+    }
+
+    if !bound_instance_ids.is_empty() {
+        let id_list = bound_instance_ids
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+            "SELECT instance_id, product_name FROM instances WHERE instance_id IN ({id_list})"
+        ))
+        .fetch_all(&state.instance_manager.pool)
+        .await
+        .map_err(|e| ModSrvError::DatabaseError(e.to_string()))?;
+        let actual: HashMap<i64, String> = rows.into_iter().collect();
+
+        for node in &flow.nodes {
+            match actual.get(&node.data.instance_id) {
+                Some(product_name) if product_name == &node.data.product_name => {},
+                Some(product_name) => {
+                    return Err(ModSrvError::InvalidData(format!(
+                        "instance {} is product '{}', not '{}'",
+                        node.data.instance_id, product_name, node.data.product_name
+                    )));
+                },
+                None => {
+                    return Err(ModSrvError::InvalidData(format!(
+                        "instance {} does not exist",
+                        node.data.instance_id
+                    )));
+                },
+            }
+        }
+        for (instance_id, expected_product) in fixed {
+            if let Some(instance_id) = instance_id {
+                match actual.get(&instance_id) {
+                    Some(product_name) if product_name == expected_product => {},
+                    Some(product_name) => {
+                        return Err(ModSrvError::InvalidData(format!(
+                            "fixed binding {} is product '{}', not '{}'",
+                            instance_id, product_name, expected_product
+                        )));
+                    },
+                    None => {
+                        return Err(ModSrvError::InvalidData(format!(
+                            "fixed binding instance {} does not exist",
+                            instance_id
+                        )));
+                    },
+                }
+            }
+        }
+    }
+
+    let mut edge_ids = HashSet::new();
+    let mut node_pairs = HashSet::new();
+    let mut rule_counts: HashMap<(&str, usize), u32> = HashMap::new();
+
+    for edge in &flow.edges {
+        if edge.id.is_empty() || !edge_ids.insert(edge.id.as_str()) {
+            return Err(ModSrvError::InvalidData(format!(
+                "topology edge id '{}' is empty or duplicated",
+                edge.id
+            )));
+        }
+        if edge.edge_type != "deletable-smoothstep"
+            || !is_valid_handle(&edge.source_handle)
+            || !is_valid_handle(&edge.target_handle)
+        {
+            return Err(ModSrvError::InvalidData(format!(
+                "edge '{}' has an invalid type or handle",
+                edge.id
+            )));
+        }
+        if edge.source == edge.target {
+            return Err(ModSrvError::InvalidData(format!(
+                "edge '{}' cannot be a self-loop",
+                edge.id
+            )));
+        }
+        let source_product = node_products.get(edge.source.as_str()).ok_or_else(|| {
+            ModSrvError::InvalidData(format!(
+                "edge '{}' references missing source node '{}'",
+                edge.id, edge.source
+            ))
+        })?;
+        let target_product = node_products.get(edge.target.as_str()).ok_or_else(|| {
+            ModSrvError::InvalidData(format!(
+                "edge '{}' references missing target node '{}'",
+                edge.id, edge.target
+            ))
+        })?;
+        let pair = if edge.source < edge.target {
+            (edge.source.as_str(), edge.target.as_str())
+        } else {
+            (edge.target.as_str(), edge.source.as_str())
+        };
+        if !node_pairs.insert(pair) {
+            return Err(ModSrvError::InvalidData(format!(
+                "edge '{}' duplicates an existing node pair",
+                edge.id
+            )));
+        }
+
+        let source_rule =
+            matching_rule(source_product, &target_product.product_name).ok_or_else(|| {
+                ModSrvError::InvalidData(format!(
+                    "product '{}' does not allow connection to '{}'",
+                    source_product.product_name, target_product.product_name
+                ))
+            })?;
+        let target_rule =
+            matching_rule(target_product, &source_product.product_name).ok_or_else(|| {
+                ModSrvError::InvalidData(format!(
+                    "product '{}' does not allow connection to '{}'",
+                    target_product.product_name, source_product.product_name
+                ))
+            })?;
+        *rule_counts
+            .entry((edge.source.as_str(), source_rule))
+            .or_default() += 1;
+        *rule_counts
+            .entry((edge.target.as_str(), target_rule))
+            .or_default() += 1;
+    }
+
+    for node in &flow.nodes {
+        let product = &node_products[node.id.as_str()];
+        let Some(topology) = product.topology.as_ref() else {
+            return Err(ModSrvError::InvalidData(format!(
+                "product '{}' does not participate in the energy topology",
+                product.product_name
+            )));
+        };
+        for (index, rule) in topology.connections.iter().enumerate() {
+            let count = rule_counts
+                .get(&(node.id.as_str(), index))
+                .copied()
+                .unwrap_or(0);
+            if count < rule.min || rule.max.is_some_and(|max| count > max) {
+                return Err(ModSrvError::InvalidData(format!(
+                    "node '{}' connection group {:?} requires min {} and max {:?}, got {}",
+                    node.id, rule.products, rule.min, rule.max, count
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_valid_handle(handle: &str) -> bool {
+    matches!(handle, "top" | "bottom" | "left" | "right")
+}
+
+fn matching_rule(product: &crate::config::Product, peer_name: &str) -> Option<usize> {
+    product
+        .topology
+        .as_ref()?
+        .connections
+        .iter()
+        .position(|rule| {
+            rule.products
+                .iter()
+                .any(|product_name| product_name == peer_name)
+        })
 }
 
 /// A single channel binding for one product node returned by channel-bindings.
@@ -77,12 +360,15 @@ pub struct InstanceChannelInfo {
         (status = 200, description = "Station topology (empty nodes/edges if not configured yet)", body = serde_json::Value,
             example = json!({
                 "station_id": "station",
-                "station_name": "Edge Station #1",
-                "description": null,
-                "gateway_id": null,
-                "flow_json": { "nodes": [], "edges": [] },
-                "created_at": "2026-06-01 08:00:00",
-                "updated_at": "2026-06-09 10:30:00"
+                "station_name": "Station",
+                "flow_json": {
+                    "nodes": [],
+                    "edges": [],
+                    "fixedBindings": {
+                        "stationInstanceId": null,
+                        "environmentInstanceId": null
+                    }
+                }
             })
         ),
         (status = 500, description = "Database error")
@@ -94,8 +380,8 @@ pub async fn get_station_topology(
 ) -> Result<Json<SuccessResponse<Value>>, ModSrvError> {
     let pool = &state.instance_manager.pool;
 
-    let row = sqlx::query_as::<_, (i64, String, String, Option<String>, Option<String>, String, String, String)>(
-        r#"SELECT id, station_id, station_name, description, gateway_id, flow_json, created_at, updated_at
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        r#"SELECT station_id, station_name, flow_json
            FROM station_topology WHERE station_id = 'station'"#,
     )
     .fetch_optional(pool)
@@ -103,37 +389,27 @@ pub async fn get_station_topology(
     .map_err(|e| ModSrvError::DatabaseError(e.to_string()))?;
 
     let resp = match row {
-        Some((
-            _,
-            station_id,
-            station_name,
-            description,
-            gateway_id,
-            flow_json_str,
-            created_at,
-            updated_at,
-        )) => {
-            let flow_json: Value = serde_json::from_str(&flow_json_str).map_err(|e| {
+        Some((station_id, station_name, flow_json_str)) => {
+            let flow_json: TopologyFlow = serde_json::from_str(&flow_json_str).map_err(|e| {
                 ModSrvError::SerializationError(format!("Invalid flow_json in DB: {}", e))
             })?;
             json!({
                 "station_id": station_id,
                 "station_name": station_name,
-                "description": description,
-                "gateway_id": gateway_id,
-                "flow_json": flow_json,
-                "created_at": created_at,
-                "updated_at": updated_at
+                "flow_json": flow_json
             })
         },
         None => json!({
             "station_id": "station",
-            "station_name": "Edge Station",
-            "description": null,
-            "gateway_id": null,
-            "flow_json": { "nodes": [], "edges": [] },
-            "created_at": null,
-            "updated_at": null
+            "station_name": "Station",
+            "flow_json": {
+                "nodes": [],
+                "edges": [],
+                "fixedBindings": {
+                    "stationInstanceId": null,
+                    "environmentInstanceId": null
+                }
+            }
         }),
     };
 
@@ -147,15 +423,16 @@ pub async fn get_station_topology(
 /// Save (upsert) station topology
 ///
 /// Overwrites the current topology. Uses upsert semantics — there is exactly
-/// one topology record per station. Validates that `flow_json` contains
-/// `nodes` and `edges` arrays before persisting.
+/// one topology record. Drafts remain frontend-only, so all canvas nodes must
+/// have valid unique instance bindings and every connection group must satisfy
+/// its `min`/`max` constraints before persistence.
 #[utoipa::path(
     put,
     path = "/api/station/topology",
     request_body = SaveTopologyRequest,
     responses(
         (status = 200, description = "Saved topology (same shape as GET response)", body = serde_json::Value),
-        (status = 400, description = "flow_json missing nodes/edges keys"),
+        (status = 400, description = "Invalid final topology"),
         (status = 500, description = "Database error")
     ),
     tag = "topology"
@@ -164,39 +441,33 @@ pub async fn put_station_topology(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SaveTopologyRequest>,
 ) -> Result<Json<SuccessResponse<Value>>, ModSrvError> {
-    // Validate flow_json structure
-    if req.flow_json.get("nodes").is_none() || req.flow_json.get("edges").is_none() {
+    if req.station_id != "station" {
         return Err(ModSrvError::InvalidData(
-            "flow_json must contain 'nodes' and 'edges' keys".to_string(),
+            "station_id must be 'station'".to_string(),
         ));
     }
-    let nodes = req.flow_json["nodes"]
-        .as_array()
-        .ok_or_else(|| ModSrvError::InvalidData("flow_json.nodes must be an array".to_string()))?;
-    let edges = req.flow_json["edges"]
-        .as_array()
-        .ok_or_else(|| ModSrvError::InvalidData("flow_json.edges must be an array".to_string()))?;
-    let _ = (nodes, edges); // validation only
+    if req.station_name != "Station" {
+        return Err(ModSrvError::InvalidData(
+            "station_name must be 'Station'".to_string(),
+        ));
+    }
+    validate_final_topology(&state, &req.flow_json).await?;
 
     let flow_json_str = serde_json::to_string(&req.flow_json)
         .map_err(|e| ModSrvError::SerializationError(e.to_string()))?;
 
-    let station_name = req.station_name.as_deref().unwrap_or("Edge Station");
     let pool = &state.instance_manager.pool;
 
     sqlx::query(
         r#"INSERT INTO station_topology (station_id, station_name, description, gateway_id, flow_json, updated_at)
-           VALUES ('station', ?, ?, ?, ?, datetime('now'))
+           VALUES ('station', 'Station', NULL, NULL, ?, datetime('now'))
            ON CONFLICT(station_id) DO UPDATE SET
-               station_name = excluded.station_name,
-               description  = excluded.description,
-               gateway_id   = excluded.gateway_id,
+               station_name = 'Station',
+               description  = NULL,
+               gateway_id   = NULL,
                flow_json    = excluded.flow_json,
                updated_at   = excluded.updated_at"#,
     )
-    .bind(station_name)
-    .bind(&req.description)
-    .bind(&req.gateway_id)
     .bind(&flow_json_str)
     .execute(pool)
     .await
@@ -217,7 +488,8 @@ pub async fn put_station_topology(
 /// from stale values stored in `flow_json` — so the result always reflects the
 /// current routing configuration even if channels changed after the last save.
 ///
-/// Nodes without any bound instances are omitted from the response.
+/// Every persisted node has exactly one instance. Instance names and channel
+/// IDs are resolved live and are never duplicated into `flow_json`.
 #[utoipa::path(
     get,
     path = "/api/station/topology/channel-bindings",
@@ -259,64 +531,26 @@ pub async fn get_channel_bindings(
         None => return Ok(Json(SuccessResponse::new(json!({ "bindings": [] })))),
     };
 
-    let flow: Value = serde_json::from_str(&flow_json_str)
+    let flow: TopologyFlow = serde_json::from_str(&flow_json_str)
         .map_err(|e| ModSrvError::SerializationError(format!("Invalid flow_json in DB: {}", e)))?;
 
-    let nodes = match flow.get("nodes").and_then(|n| n.as_array()) {
-        Some(n) => n,
-        None => return Ok(Json(SuccessResponse::new(json!({ "bindings": [] })))),
-    };
-
-    // 2. Extract (nodeId, productName, [(instanceId, instanceName)]) for nodes that have instances
+    // 2. Extract the final one-instance-per-node bindings.
     struct NodeMeta {
         node_id: String,
         product_name: String,
-        instances: Vec<(i64, String)>,
+        instance_id: i64,
     }
 
     let mut node_metas: Vec<NodeMeta> = Vec::new();
     let mut all_instance_ids: Vec<i64> = Vec::new();
 
-    for node in nodes {
-        let node_id = match node.get("id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
-        };
-        let data = match node.get("data") {
-            Some(d) => d,
-            None => continue,
-        };
-        let product_name = match data.get("productName").and_then(|v| v.as_str()) {
-            Some(p) => p.to_string(),
-            None => continue,
-        };
-        let instances_arr = match data.get("instances").and_then(|v| v.as_array()) {
-            Some(arr) if !arr.is_empty() => arr,
-            _ => continue,
-        };
-
-        let mut inst_pairs: Vec<(i64, String)> = Vec::new();
-        for inst in instances_arr {
-            let iid = match inst.get("instanceId").and_then(|v| v.as_i64()) {
-                Some(id) => id,
-                None => continue,
-            };
-            let iname = inst
-                .get("instanceName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            inst_pairs.push((iid, iname));
-            all_instance_ids.push(iid);
-        }
-
-        if !inst_pairs.is_empty() {
-            node_metas.push(NodeMeta {
-                node_id,
-                product_name,
-                instances: inst_pairs,
-            });
-        }
+    for node in flow.nodes {
+        all_instance_ids.push(node.data.instance_id);
+        node_metas.push(NodeMeta {
+            node_id: node.id,
+            product_name: node.data.product_name,
+            instance_id: node.data.instance_id,
+        });
     }
 
     if node_metas.is_empty() {
@@ -347,27 +581,35 @@ pub async fn get_channel_bindings(
     for (inst_id, ch_id) in routing_rows {
         channel_map.entry(inst_id).or_default().push(ch_id);
     }
+    let instance_rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+        "SELECT instance_id, instance_name FROM instances WHERE instance_id IN ({})",
+        id_list
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ModSrvError::DatabaseError(e.to_string()))?;
+    let instance_names: HashMap<i64, String> = instance_rows.into_iter().collect();
 
     // 4. Build response
     let bindings: Vec<Value> = node_metas
         .into_iter()
         .map(|meta| {
-            let instances: Vec<Value> = meta
-                .instances
-                .into_iter()
-                .map(|(iid, iname)| {
-                    let channel_ids = channel_map.get(&iid).cloned().unwrap_or_default();
-                    json!({
-                        "instanceId": iid,
-                        "instanceName": iname,
-                        "channelIds": channel_ids
-                    })
-                })
-                .collect();
+            let channel_ids = channel_map
+                .get(&meta.instance_id)
+                .cloned()
+                .unwrap_or_default();
+            let instance_name = instance_names
+                .get(&meta.instance_id)
+                .cloned()
+                .unwrap_or_default();
             json!({
                 "nodeId": meta.node_id,
                 "productName": meta.product_name,
-                "instances": instances
+                "instances": [{
+                    "instanceId": meta.instance_id,
+                    "instanceName": instance_name,
+                    "channelIds": channel_ids
+                }]
             })
         })
         .collect();
@@ -454,4 +696,63 @@ pub async fn get_instance_channel_summary(
         "channelNames": channel_names,
         "routingCount": routing_count
     }))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_FLOW: &str = r#"{
+        "nodes": [{
+            "id": "vm_node_meter_01",
+            "type": "product",
+            "position": {"x": 10, "y": 20},
+            "data": {
+                "label": "Meter",
+                "description": "",
+                "productName": "Meter",
+                "instanceId": 201
+            }
+        }],
+        "edges": [],
+        "fixedBindings": {
+            "stationInstanceId": 1,
+            "environmentInstanceId": null
+        }
+    }"#;
+
+    #[test]
+    fn final_topology_contract_deserializes() {
+        let flow: TopologyFlow = serde_json::from_str(VALID_FLOW).unwrap();
+        assert_eq!(flow.nodes[0].data.instance_id, 201);
+        assert_eq!(flow.fixed_bindings.station_instance_id, Some(1));
+        let encoded = serde_json::to_value(flow).unwrap();
+        assert_eq!(encoded["nodes"][0]["data"]["productName"], "Meter");
+        assert_eq!(
+            encoded["fixedBindings"]["environmentInstanceId"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn final_topology_rejects_null_instance_and_legacy_fields() {
+        let null_instance = VALID_FLOW.replace("\"instanceId\": 201", "\"instanceId\": null");
+        assert!(serde_json::from_str::<TopologyFlow>(&null_instance).is_err());
+
+        let legacy = VALID_FLOW.replace(
+            "\"instanceId\": 201",
+            "\"instanceId\": 201, \"instances\": []",
+        );
+        assert!(serde_json::from_str::<TopologyFlow>(&legacy).is_err());
+    }
+
+    #[test]
+    fn topology_handles_use_plain_directions() {
+        for handle in ["top", "bottom", "left", "right"] {
+            assert!(is_valid_handle(handle));
+        }
+        for legacy in ["top-source", "bottom-source", "left-target", "right-target"] {
+            assert!(!is_valid_handle(legacy));
+        }
+    }
 }

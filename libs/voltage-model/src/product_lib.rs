@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -22,54 +23,31 @@ pub struct PointDef {
     /// Value type (number, string, etc.)
     #[serde(rename = "type", default)]
     pub value_type: String,
+    /// Human-readable point description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Enumerated values, when the point uses a closed string vocabulary.
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
-/// Product capability in the visual topology editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TopologyType {
-    TopLevel,
-    Standalone,
-    Composite,
-    Container,
-}
-
-/// A component contained by a composite or container topology product.
-///
-/// Product-backed components set `productName`. Inline components (for example
-/// a distribution-board meter) set `name` and may constrain selectable product
-/// types.
+/// One product-level topology connection group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum TopologyComponent {
-    Product {
-        #[serde(rename = "productName")]
-        product_name: String,
-    },
-    Inline {
-        name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        image: Option<String>,
-        #[serde(rename = "selectableProductTypes", default)]
-        selectable_product_types: Vec<String>,
-    },
+pub struct ConnectionRule {
+    pub products: Vec<String>,
+    pub min: u32,
+    pub max: Option<u32>,
 }
 
 /// Visual-topology capabilities declared by a product.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopologyDefinition {
-    pub enabled: bool,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub topology_type: Option<TopologyType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     #[serde(default)]
-    pub components: Vec<TopologyComponent>,
-    /// Product names explicitly declared as valid topology connection peers.
-    /// This is the source library's one-sided rule; API consumers receive the
-    /// symmetric closure computed by modsrv.
-    #[serde(rename = "connectableProducts", default)]
-    pub connectable_products: Vec<String>,
+    pub connections: Vec<ConnectionRule>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Built-in product definition
@@ -77,15 +55,17 @@ pub struct TopologyDefinition {
 pub struct BuiltinProduct {
     /// Product name (unique identifier)
     pub name: String,
-    /// Parent product name for hierarchy (e.g., Battery -> ESS -> Station)
-    #[serde(rename = "pName")]
-    pub parent_name: Option<String>,
-    /// Whether users may create an instance from this product.
-    #[serde(rename = "canCreateInstance")]
-    pub can_create_instance: bool,
-    /// Visual-topology capabilities. `enabled = false` marks catalog-only
-    /// products that cannot be placed in the topology editor.
-    pub topology: TopologyDefinition,
+    /// Product classification used for catalog grouping and cloud routing.
+    #[serde(rename = "type")]
+    pub product_type: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Products without topology are available to device management but are
+    /// not draggable energy-topology nodes (for example Station and Env).
+    #[serde(default)]
+    pub topology: Option<TopologyDefinition>,
+    #[serde(rename = "defaultDisplayMeasureIds", default)]
+    pub default_display_measure_ids: Vec<u32>,
     /// Property definitions (P)
     #[serde(rename = "P", default)]
     pub properties: Vec<PointDef>,
@@ -97,15 +77,141 @@ pub struct BuiltinProduct {
     pub actions: Vec<PointDef>,
 }
 
+fn validate_products(products: &[BuiltinProduct]) -> Result<()> {
+    let mut names = HashSet::new();
+    for product in products {
+        if product.name.is_empty() {
+            anyhow::bail!("product name is empty");
+        }
+        if product.product_type.is_empty() {
+            anyhow::bail!("product '{}' type is empty", product.name);
+        }
+        if !names.insert(product.name.as_str()) {
+            anyhow::bail!("duplicate product name '{}'", product.name);
+        }
+
+        let measurement_ids: HashSet<u32> = product.measurements.iter().map(|p| p.id).collect();
+        if measurement_ids.len() != product.measurements.len() {
+            anyhow::bail!("product '{}' has duplicate measurement IDs", product.name);
+        }
+        if product
+            .properties
+            .iter()
+            .map(|p| p.id)
+            .collect::<HashSet<_>>()
+            .len()
+            != product.properties.len()
+        {
+            anyhow::bail!("product '{}' has duplicate property IDs", product.name);
+        }
+        if product
+            .actions
+            .iter()
+            .map(|p| p.id)
+            .collect::<HashSet<_>>()
+            .len()
+            != product.actions.len()
+        {
+            anyhow::bail!("product '{}' has duplicate action IDs", product.name);
+        }
+        if product
+            .default_display_measure_ids
+            .iter()
+            .collect::<HashSet<_>>()
+            .len()
+            != product.default_display_measure_ids.len()
+        {
+            anyhow::bail!(
+                "product '{}' has duplicate default display measurement IDs",
+                product.name
+            );
+        }
+        for id in &product.default_display_measure_ids {
+            if !measurement_ids.contains(id) {
+                anyhow::bail!(
+                    "product '{}' default display measurement {} does not exist",
+                    product.name,
+                    id
+                );
+            }
+        }
+    }
+
+    let by_name: HashMap<&str, &BuiltinProduct> =
+        products.iter().map(|p| (p.name.as_str(), p)).collect();
+    for product in products {
+        let Some(topology) = &product.topology else {
+            continue;
+        };
+        let mut targets = HashSet::new();
+        for rule in &topology.connections {
+            if rule.products.is_empty() {
+                anyhow::bail!("product '{}' has an empty connection group", product.name);
+            }
+            if let Some(max) = rule.max
+                && rule.min > max
+            {
+                anyhow::bail!(
+                    "product '{}' connection rule has min {} greater than max {}",
+                    product.name,
+                    rule.min,
+                    max
+                );
+            }
+            for target in &rule.products {
+                if target == &product.name {
+                    anyhow::bail!("product '{}' cannot connect to itself", product.name);
+                }
+                if !targets.insert(target.as_str()) {
+                    anyhow::bail!(
+                        "product '{}' repeats connection target '{}'",
+                        product.name,
+                        target
+                    );
+                }
+                let peer = by_name.get(target.as_str()).with_context(|| {
+                    format!(
+                        "product '{}' references unknown connection target '{}'",
+                        product.name, target
+                    )
+                })?;
+                let reciprocal = peer.topology.as_ref().is_some_and(|peer_topology| {
+                    peer_topology
+                        .connections
+                        .iter()
+                        .any(|peer_rule| peer_rule.products.contains(&product.name))
+                });
+                if !reciprocal {
+                    anyhow::bail!(
+                        "connection '{}'-'{}' is not reciprocal",
+                        product.name,
+                        target
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // Embed all product JSON files at compile time (auto-discovered by build.rs)
 // Note: products/ is a git submodule (voltage-product-lib)
 static BUILTIN_PRODUCTS: LazyLock<Vec<BuiltinProduct>> = LazyLock::new(|| {
     let jsons: &[&str] = include!(concat!(env!("OUT_DIR"), "/product_includes.rs"));
 
-    jsons
+    let products = jsons
         .iter()
-        .filter_map(|s| serde_json::from_str(s).ok())
-        .collect()
+        .enumerate()
+        .map(|(index, json)| {
+            serde_json::from_str(json).unwrap_or_else(|error| {
+                panic!("invalid built-in product JSON at index {index}: {error}")
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Err(error) = validate_products(&products) {
+        panic!("invalid built-in product library: {error}");
+    }
+    products
 });
 
 /// Get all built-in products
@@ -126,14 +232,6 @@ pub fn get_product_names() -> Vec<&'static str> {
 /// Check if a product exists in the built-in library
 pub fn product_exists(name: &str) -> bool {
     BUILTIN_PRODUCTS.iter().any(|p| p.name == name)
-}
-
-/// Get child products of a given parent
-pub fn get_child_products(parent_name: &str) -> Vec<&'static BuiltinProduct> {
-    BUILTIN_PRODUCTS
-        .iter()
-        .filter(|p| p.parent_name.as_deref() == Some(parent_name))
-        .collect()
 }
 
 /// Runtime product library with external override support
@@ -196,6 +294,8 @@ impl ProductLibrary {
             }
         }
 
+        validate_products(&products)?;
+
         Ok(Self { products })
     }
 
@@ -234,14 +334,6 @@ impl ProductLibrary {
     /// Check if library is empty
     pub fn is_empty(&self) -> bool {
         self.products.is_empty()
-    }
-
-    /// Get child products of a given parent
-    pub fn children(&self, parent_name: &str) -> Vec<&BuiltinProduct> {
-        self.products
-            .iter()
-            .filter(|p| p.parent_name.as_deref() == Some(parent_name))
-            .collect()
     }
 }
 
@@ -309,86 +401,48 @@ mod tests {
     fn test_get_product_by_name() {
         let battery = get_builtin_product("Battery").expect("Battery should exist");
         assert_eq!(battery.name, "Battery");
-        assert_eq!(battery.parent_name.as_deref(), Some("ESS"));
-        assert!(battery.can_create_instance);
-        assert_eq!(
-            battery.topology.topology_type,
-            Some(TopologyType::Standalone)
-        );
-        assert!(battery.topology.enabled);
-        assert_eq!(
-            battery.topology.connectable_products,
-            ["Hybrid_Inverter", "PCS"]
-        );
+        assert_eq!(battery.product_type, "ESS");
+        let topology = battery.topology.as_ref().expect("Battery topology");
+        assert_eq!(topology.connections[0].products, ["Hybrid_Inverter", "PCS"]);
+        assert_eq!(topology.connections[0].min, 1);
+        assert_eq!(topology.connections[0].max, Some(1));
         assert!(!battery.measurements.is_empty());
+        assert!(!battery.default_display_measure_ids.is_empty());
     }
 
     #[test]
     fn test_product_capabilities() {
         let station = get_builtin_product("Station").expect("Station should exist");
-        let station_topology = &station.topology;
-        assert_eq!(station_topology.topology_type, Some(TopologyType::TopLevel));
-        assert!(station_topology.enabled);
-        assert!(station_topology.image.is_none());
-
-        let ess = get_builtin_product("ESS").expect("ESS should exist");
-        assert!(!ess.can_create_instance);
-        assert!(!ess.topology.enabled);
-        assert!(ess.topology.topology_type.is_none());
+        assert!(station.topology.is_none());
+        assert!(get_builtin_product("ESS").is_none());
+        assert!(get_builtin_product("Distribution_Board").is_none());
 
         let hybrid = get_builtin_product("Hybrid_Inverter").expect("Hybrid_Inverter");
-        assert!(hybrid.can_create_instance);
-        assert!(hybrid.properties.is_empty());
-        assert!(hybrid.measurements.is_empty());
-        assert!(hybrid.actions.is_empty());
-        let components = &hybrid.topology.components;
-        assert_eq!(components.len(), 2);
-        assert!(matches!(
-            &components[0],
-            TopologyComponent::Product { product_name } if product_name == "AC_Inverter"
-        ));
-        assert!(matches!(
-            &components[1],
-            TopologyComponent::Product { product_name } if product_name == "PCS"
-        ));
+        assert_eq!(hybrid.properties.len(), 9);
+        assert_eq!(hybrid.measurements.len(), 15);
+        assert_eq!(hybrid.actions.len(), 4);
+        assert_eq!(hybrid.topology.as_ref().unwrap().connections.len(), 3);
 
-        let board = get_builtin_product("Distribution_Board").expect("Distribution_Board");
-        assert!(!board.can_create_instance);
-        let meter = &board.topology.components[0];
-        assert!(matches!(
-            meter,
-            TopologyComponent::Inline {
-                name,
-                selectable_product_types,
-                ..
-            } if name == "Meter"
-                && selectable_product_types == &["Single_Phase_Load", "Three_Phase_Load"]
-        ));
+        let meter = get_builtin_product("Meter").expect("Meter");
+        assert!(meter.topology.is_some());
     }
 
     #[test]
-    fn test_product_hierarchy() {
-        // Station is root
-        let station = get_builtin_product("Station").expect("Station should exist");
-        assert!(station.parent_name.is_none());
-
-        // ESS -> Station
-        let ess = get_builtin_product("ESS").expect("ESS should exist");
-        assert_eq!(ess.parent_name.as_deref(), Some("Station"));
-
-        // Battery -> ESS
-        let battery = get_builtin_product("Battery").expect("Battery should exist");
-        assert_eq!(battery.parent_name.as_deref(), Some("ESS"));
+    fn test_product_catalog_types() {
+        assert_eq!(
+            get_builtin_product("Station").unwrap().product_type,
+            "Station"
+        );
+        assert_eq!(get_builtin_product("Battery").unwrap().product_type, "ESS");
+        assert_eq!(get_builtin_product("Meter").unwrap().product_type, "Meter");
     }
 
     #[test]
-    fn test_get_child_products() {
-        let station_children = get_child_products("Station");
-        let names: Vec<_> = station_children.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"ESS"));
-        assert!(names.contains(&"Generator"));
-        assert!(names.contains(&"Env"));
-        assert!(names.contains(&"Load"));
+    fn test_product_count_and_removed_placeholders() {
+        assert_eq!(get_builtin_products().len(), 13);
+        for removed in ["ESS", "Load", "Generator", "Inverter", "Distribution_Board"] {
+            assert!(!product_exists(removed));
+        }
     }
 
     #[test]
@@ -432,9 +486,9 @@ mod tests {
         // Write a custom product that overrides Battery
         let custom_battery = r#"{
             "name": "Battery",
-            "pName": "ESS",
-            "canCreateInstance": true,
-            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "type": "ESS",
+            "topology": {"connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": 1}]},
+            "defaultDisplayMeasureIds": [1],
             "M": [{"id": 1, "name": "CustomVoltage", "unit": "V"}],
             "A": [],
             "P": []
@@ -458,9 +512,9 @@ mod tests {
         // Write a brand new product
         let custom_product = r#"{
             "name": "WindTurbine",
-            "pName": "Station",
-            "canCreateInstance": true,
-            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "type": "Generator",
+            "topology": {"connections": []},
+            "defaultDisplayMeasureIds": [1],
             "M": [{"id": 1, "name": "WindSpeed", "unit": "m/s"}],
             "A": [],
             "P": []
@@ -473,7 +527,7 @@ mod tests {
         assert!(lib.exists("WindTurbine"));
 
         let wind = lib.get("WindTurbine").context("WindTurbine not found")?;
-        assert_eq!(wind.parent_name.as_deref(), Some("Station"));
+        assert_eq!(wind.product_type, "Generator");
         Ok(())
     }
 
@@ -486,12 +540,16 @@ mod tests {
     }
 
     #[test]
-    fn test_product_library_children() {
+    fn test_product_library_topology_filter() {
         let lib = ProductLibrary::builtin_only();
-        let station_children = lib.children("Station");
-        let names: Vec<&str> = station_children.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"ESS"));
-        assert!(names.contains(&"Generator"));
+        let topology_names: Vec<&str> = lib
+            .all()
+            .iter()
+            .filter(|product| product.topology.is_some())
+            .map(|product| product.name.as_str())
+            .collect();
+        assert!(topology_names.contains(&"Battery"));
+        assert!(!topology_names.contains(&"Station"));
     }
 
     #[test]
@@ -501,8 +559,8 @@ mod tests {
 
         let valid = r#"{
             "name": "Test",
-            "canCreateInstance": true,
-            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "type": "Test",
+            "topology": {"connections": []},
             "M": [], "A": [], "P": []
         }"#;
         std::fs::write(dir.join("Test.json"), valid)?;
@@ -532,8 +590,8 @@ mod tests {
 
         let empty_name = r#"{
             "name": "",
-            "canCreateInstance": true,
-            "topology": {"enabled": true, "type": "standalone", "connectableProducts": []},
+            "type": "Test",
+            "topology": {"connections": []},
             "M": [], "A": [], "P": []
         }"#;
         std::fs::write(dir.join("Empty.json"), empty_name)?;

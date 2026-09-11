@@ -121,6 +121,35 @@ pub struct InstSyncReply {
     pub msg_id: Option<String>,
     pub timestamp: i64,
     pub list: Vec<InstSyncItem>,
+    /// Saved station topology, forwarded as a JSON object rather than an encoded string.
+    pub flow_json: serde_json::Value,
+}
+
+#[cfg(test)]
+mod inst_sync_tests {
+    use super::*;
+
+    #[test]
+    fn reply_serializes_flow_json_as_root_object() {
+        let reply = InstSyncReply {
+            msg_id: Some("123456".to_string()),
+            timestamp: 1_756_256_162,
+            list: Vec::new(),
+            flow_json: serde_json::json!({
+                "nodes": [],
+                "edges": [],
+                "fixedBindings": {
+                    "stationInstanceId": null,
+                    "environmentInstanceId": null
+                }
+            }),
+        };
+
+        let value = serde_json::to_value(reply).unwrap();
+        assert_eq!(value["msgId"], "123456");
+        assert!(value["flow_json"].is_object());
+        assert!(value["flow_json"]["nodes"].is_array());
+    }
 }
 
 /// Generic command-acknowledgement reply (call-data-reply, call-alarm-reply).

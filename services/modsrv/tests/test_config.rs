@@ -179,14 +179,13 @@ fn test_product_deserialization() {
 
     let json_str = r#"{
         "product_name": "BatteryPack",
-        "parent_name": null,
-        "can_create_instance": true,
+        "type": "ESS",
+        "description": "Battery pack",
+        "defaultDisplayMeasureIds": [1],
         "topology": {
-            "enabled": true,
-            "type": "standalone",
             "image": "battery-pack.svg",
-            "components": [],
-            "connectableProducts": []
+            "connections": [],
+            "description": "Test topology"
         },
         "measurements": [
             {
@@ -214,7 +213,7 @@ fn test_product_deserialization() {
     let product: Product = serde_json::from_str(json_str).expect("Failed to parse product");
 
     assert_eq!(product.product_name, "BatteryPack");
-    assert!(product.parent_name.is_none());
+    assert_eq!(product.product_type, "ESS");
     assert_eq!(product.measurements.len(), 2);
     assert_eq!(product.measurements[0].measurement_id, 1);
     assert_eq!(product.measurements[0].name, "Voltage");
@@ -224,14 +223,13 @@ fn test_product_deserialization() {
 }
 
 #[test]
-fn test_product_with_parent() {
+fn test_product_without_topology() {
     use modsrv::config::Product;
 
     let json_str = r#"{
         "product_name": "BatteryModule",
-        "parent_name": "BatteryPack",
-        "can_create_instance": true,
-        "topology": {"enabled": false},
+        "type": "ESS",
+        "topology": null,
         "measurements": [],
         "actions": [],
         "properties": []
@@ -239,7 +237,7 @@ fn test_product_with_parent() {
 
     let product: Product = serde_json::from_str(json_str).expect("Failed to parse product");
 
-    assert_eq!(product.parent_name, Some("BatteryPack".to_string()));
+    assert!(product.topology.is_none());
 }
 
 #[test]
@@ -382,8 +380,8 @@ fn test_product_with_empty_arrays() {
 
     let json_str = r#"{
         "product_name": "EmptyProduct",
-        "can_create_instance": true,
-        "topology": {"enabled": false},
+        "type": "Test",
+        "topology": null,
         "measurements": [],
         "actions": [],
         "properties": []
