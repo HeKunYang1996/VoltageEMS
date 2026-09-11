@@ -32,7 +32,7 @@ async fn test_product_list_lightweight() -> Result<()> {
         .iter()
         .find(|(name, _)| name == "Battery")
         .expect("Should find Battery");
-    assert_eq!(battery.1, Some("ESS".to_string()));
+    assert_eq!(battery.1, None);
 
     let station = product_names
         .iter()
@@ -40,11 +40,10 @@ async fn test_product_list_lightweight() -> Result<()> {
         .expect("Should find Station");
     assert_eq!(station.1, None, "Station should be a root product");
 
-    let ess = product_names
-        .iter()
-        .find(|(name, _)| name == "ESS")
-        .expect("Should find ESS");
-    assert_eq!(ess.1, Some("Station".to_string()));
+    assert!(
+        product_names.iter().all(|(name, _)| name != "ESS"),
+        "ESS is a product classification, not a built-in product"
+    );
 
     // 6. Cleanup
     env.cleanup().await?;
@@ -158,7 +157,7 @@ async fn test_product_not_found() -> Result<()> {
 
 #[tokio::test]
 #[ignore] // requires Redis
-async fn test_product_hierarchy() -> Result<()> {
+async fn test_product_names_have_no_legacy_hierarchy() -> Result<()> {
     // 1. Create test environment
     let env = TestEnv::create().await?;
 
@@ -168,34 +167,15 @@ async fn test_product_hierarchy() -> Result<()> {
     // 3. Get product list
     let product_names = product_loader.get_all_product_names();
 
-    // 4. Verify hierarchy relationships for built-in products
-    // Station is root
-    let station = product_names
-        .iter()
-        .find(|(name, _)| name == "Station")
-        .expect("Should find Station");
-    assert_eq!(station.1, None);
-
-    // ESS -> Station
-    let ess = product_names
-        .iter()
-        .find(|(name, _)| name == "ESS")
-        .expect("Should find ESS");
-    assert_eq!(ess.1, Some("Station".to_string()));
-
-    // Battery -> ESS
-    let battery = product_names
-        .iter()
-        .find(|(name, _)| name == "Battery")
-        .expect("Should find Battery");
-    assert_eq!(battery.1, Some("ESS".to_string()));
-
-    // PCS -> ESS
-    let pcs = product_names
-        .iter()
-        .find(|(name, _)| name == "PCS")
-        .expect("Should find PCS");
-    assert_eq!(pcs.1, Some("ESS".to_string()));
+    // 4. The legacy parent relationship was removed from the product contract.
+    assert!(
+        product_names.iter().all(|(_, parent)| parent.is_none()),
+        "All products should be reported as roots"
+    );
+    assert!(product_names.iter().any(|(name, _)| name == "Station"));
+    assert!(product_names.iter().any(|(name, _)| name == "Battery"));
+    assert!(product_names.iter().any(|(name, _)| name == "PCS"));
+    assert!(product_names.iter().all(|(name, _)| name != "ESS"));
 
     // 5. Cleanup
     env.cleanup().await?;
@@ -216,10 +196,10 @@ async fn test_product_exists() -> Result<()> {
     assert!(product_loader.product_exists("Battery"));
     assert!(product_loader.product_exists("PCS"));
     assert!(product_loader.product_exists("Station"));
-    assert!(product_loader.product_exists("ESS"));
-    assert!(product_loader.product_exists("Generator"));
 
-    // 4. Verify non-existent products don't exist
+    // 4. Verify classifications, removed placeholders, and unknown products don't exist
+    assert!(!product_loader.product_exists("ESS"));
+    assert!(!product_loader.product_exists("Generator"));
     assert!(!product_loader.product_exists("NonExistentProduct"));
     assert!(!product_loader.product_exists("FakeProduct"));
 
