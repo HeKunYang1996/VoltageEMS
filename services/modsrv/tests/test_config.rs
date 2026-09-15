@@ -181,7 +181,6 @@ fn test_product_deserialization() {
         "product_name": "BatteryPack",
         "type": "ESS",
         "description": "Battery pack",
-        "defaultDisplayMeasureIds": [1],
         "topology": {
             "image": "battery-pack.svg",
             "connections": [],
@@ -192,7 +191,8 @@ fn test_product_deserialization() {
                 "measurement_id": 1,
                 "name": "Voltage",
                 "unit": "V",
-                "description": "Battery voltage"
+                "description": "Battery voltage",
+                "attr": {"isDisplay": "true"}
             },
             {
                 "measurement_id": 2,
@@ -218,6 +218,13 @@ fn test_product_deserialization() {
     assert_eq!(product.measurements[0].measurement_id, 1);
     assert_eq!(product.measurements[0].name, "Voltage");
     assert_eq!(product.measurements[0].unit, Some("V".to_string()));
+    assert_eq!(
+        product.measurements[0]
+            .attr
+            .as_ref()
+            .and_then(|attr| attr.is_display.as_deref()),
+        Some("true")
+    );
     assert_eq!(product.actions.len(), 1);
     assert_eq!(product.actions[0].action_id, 1);
 }

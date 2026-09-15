@@ -764,6 +764,7 @@ mod tests {
                 description: None,
                 value_type: "number".to_string(),
                 options: Vec::new(),
+                attr: None,
             },
             MeasurementPoint {
                 measurement_id: 2,
@@ -772,6 +773,7 @@ mod tests {
                 description: None,
                 value_type: "number".to_string(),
                 options: Vec::new(),
+                attr: None,
             },
         ];
 
@@ -895,6 +897,7 @@ mod tests {
             description: None,
             value_type: "number".to_string(),
             options: Vec::new(),
+            attr: None,
         }];
 
         // Empty actions (like Load device)

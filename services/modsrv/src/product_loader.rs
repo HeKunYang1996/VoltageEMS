@@ -12,8 +12,8 @@ use voltage_model::product_lib::{self, BuiltinProduct, PointDef, ProductLibrary}
 
 // Re-export types from local config for other modules
 pub use crate::config::{
-    ActionPoint, ConnectionRule, CreateInstanceRequest, Instance, MeasurementPoint, Product,
-    ProductHierarchy, PropertyTemplate, TopologyDefinition,
+    ActionPoint, ConnectionRule, CreateInstanceRequest, Instance, MeasurementPoint,
+    PointAttributes, Product, ProductHierarchy, PropertyTemplate, TopologyDefinition,
 };
 pub use voltage_model::PointRole;
 
@@ -235,7 +235,6 @@ fn convert_builtin_to_product(builtin: &BuiltinProduct, _products: &[BuiltinProd
         product_name: builtin.name.clone(),
         product_type: builtin.product_type.clone(),
         description: builtin.description.clone(),
-        default_display_measure_ids: builtin.default_display_measure_ids.clone(),
         topology: builtin
             .topology
             .as_ref()
@@ -282,6 +281,9 @@ fn convert_point_to_measurement(point: &PointDef) -> MeasurementPoint {
         description: point.description.clone(),
         value_type: point.value_type.clone(),
         options: point.options.clone(),
+        attr: point.attr.as_ref().map(|attr| PointAttributes {
+            is_display: attr.is_display.clone(),
+        }),
     }
 }
 
@@ -336,6 +338,19 @@ mod tests {
             assert_eq!(topology.connections[0].min, 1);
             assert_eq!(topology.connections[0].max, Some(1));
             assert!(!product.measurements.is_empty());
+            assert_eq!(
+                product.measurements[0]
+                    .attr
+                    .as_ref()
+                    .and_then(|attr| attr.is_display.as_deref()),
+                Some("true")
+            );
+            let json = serde_json::to_value(&product).unwrap();
+            assert!(json.get("defaultDisplayMeasureIds").is_none());
+            assert_eq!(
+                json["measurements"][0]["attr"]["isDisplay"],
+                serde_json::json!("true")
+            );
         });
     }
 

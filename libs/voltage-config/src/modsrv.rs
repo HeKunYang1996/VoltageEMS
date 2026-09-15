@@ -114,9 +114,6 @@ pub struct Product {
 
     pub description: Option<String>,
 
-    #[serde(rename = "defaultDisplayMeasureIds", default)]
-    pub default_display_measure_ids: Vec<u32>,
-
     /// Visual-topology capabilities; None means the product cannot be placed
     /// in the topology editor
     pub topology: Option<TopologyDefinition>,
@@ -173,6 +170,17 @@ pub struct MeasurementPoint {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attr: Option<PointAttributes>,
+}
+
+/// Point-local display metadata from the product library.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct PointAttributes {
+    /// The string value `"true"` marks a Measure point for default display.
+    #[serde(rename = "isDisplay", default, skip_serializing_if = "Option::is_none")]
+    pub is_display: Option<String>,
 }
 
 /// Action point definition (A type)

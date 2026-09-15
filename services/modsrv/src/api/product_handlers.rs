@@ -33,8 +33,7 @@ impl ProductListQuery {
 
 /// List all available product templates (lightweight)
 ///
-/// Returns product names, classifications, descriptions, display defaults,
-/// and topology capabilities.
+/// Returns product names, classifications, descriptions, and topology capabilities.
 /// This endpoint is optimized for frontend dropdown lists and product selection interfaces.
 /// For detailed product information including measurements/actions/properties, use GET /api/products/{product_name}/points.
 ///
@@ -57,8 +56,7 @@ impl ProductListQuery {
                             "product_name": "Station",
                             "type": "Station",
                             "description": "Station profile",
-                            "topology": null,
-                            "defaultDisplayMeasureIds": [1, 2]
+                            "topology": null
                         }
                     ]
                 }
@@ -81,8 +79,7 @@ pub async fn list_products(
                 "product_name": product.product_name,
                 "type": product.product_type,
                 "description": product.description,
-                "topology": product.topology,
-                "defaultDisplayMeasureIds": product.default_display_measure_ids
+                "topology": product.topology
             })
         })
         .collect();
@@ -115,13 +112,12 @@ pub async fn list_products(
                         "product_name": "Battery",
                         "type": "ESS",
                         "description": "Battery energy storage device.",
-                        "defaultDisplayMeasureIds": [1, 3, 4],
                         "topology": {
                             "image": "device-Battery.png",
                             "connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": 1}]
                         },
                         "measurements": [
-                            {"measurement_id": 1, "name": "SOC", "unit": "%", "description": null}
+                            {"measurement_id": 1, "name": "SOC", "unit": "%", "description": null, "attr": {"isDisplay": "true"}}
                         ],
                         "actions": [
                             {"action_id": 1, "name": "Charge", "unit": null, "description": null}
@@ -164,7 +160,6 @@ mod tests {
             product_name: "Test".to_string(),
             product_type: "Test".to_string(),
             description: None,
-            default_display_measure_ids: Vec::new(),
             topology: topology_enabled.then_some(TopologyDefinition {
                 image: None,
                 connections: Vec::new(),

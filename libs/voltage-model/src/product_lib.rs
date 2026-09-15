@@ -29,6 +29,17 @@ pub struct PointDef {
     /// Enumerated values, when the point uses a closed string vocabulary.
     #[serde(default)]
     pub options: Vec<String>,
+    /// Optional point-local presentation metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attr: Option<PointAttributes>,
+}
+
+/// Point-local metadata defined by the product contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PointAttributes {
+    /// The string value `"true"` marks a Measure point for default display.
+    #[serde(rename = "isDisplay", default, skip_serializing_if = "Option::is_none")]
+    pub is_display: Option<String>,
 }
 
 /// One product-level topology connection group.
@@ -64,8 +75,6 @@ pub struct BuiltinProduct {
     /// not draggable energy-topology nodes (for example Station and Env).
     #[serde(default)]
     pub topology: Option<TopologyDefinition>,
-    #[serde(rename = "defaultDisplayMeasureIds", default)]
-    pub default_display_measure_ids: Vec<u32>,
     /// Property definitions (P)
     #[serde(rename = "P", default)]
     pub properties: Vec<PointDef>,
@@ -113,27 +122,6 @@ fn validate_products(products: &[BuiltinProduct]) -> Result<()> {
             != product.actions.len()
         {
             anyhow::bail!("product '{}' has duplicate action IDs", product.name);
-        }
-        if product
-            .default_display_measure_ids
-            .iter()
-            .collect::<HashSet<_>>()
-            .len()
-            != product.default_display_measure_ids.len()
-        {
-            anyhow::bail!(
-                "product '{}' has duplicate default display measurement IDs",
-                product.name
-            );
-        }
-        for id in &product.default_display_measure_ids {
-            if !measurement_ids.contains(id) {
-                anyhow::bail!(
-                    "product '{}' default display measurement {} does not exist",
-                    product.name,
-                    id
-                );
-            }
         }
     }
 
@@ -407,7 +395,13 @@ mod tests {
         assert_eq!(topology.connections[0].min, 1);
         assert_eq!(topology.connections[0].max, Some(1));
         assert!(!battery.measurements.is_empty());
-        assert!(!battery.default_display_measure_ids.is_empty());
+        assert!(battery.measurements.iter().any(|point| {
+            point
+                .attr
+                .as_ref()
+                .and_then(|attr| attr.is_display.as_deref())
+                == Some("true")
+        }));
     }
 
     #[test]
@@ -488,8 +482,7 @@ mod tests {
             "name": "Battery",
             "type": "ESS",
             "topology": {"connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": 1}]},
-            "defaultDisplayMeasureIds": [1],
-            "M": [{"id": 1, "name": "CustomVoltage", "unit": "V"}],
+            "M": [{"id": 1, "name": "CustomVoltage", "unit": "V", "attr": {"isDisplay": "true"}}],
             "A": [],
             "P": []
         }"#;
@@ -514,8 +507,7 @@ mod tests {
             "name": "WindTurbine",
             "type": "Generator",
             "topology": {"connections": []},
-            "defaultDisplayMeasureIds": [1],
-            "M": [{"id": 1, "name": "WindSpeed", "unit": "m/s"}],
+            "M": [{"id": 1, "name": "WindSpeed", "unit": "m/s", "attr": {"isDisplay": "true"}}],
             "A": [],
             "P": []
         }"#;
