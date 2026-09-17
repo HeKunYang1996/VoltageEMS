@@ -41,7 +41,7 @@
     </div>
     <div class="home-right">
       <div class="home-station">
-        <ModuleCard title="Station infomation">
+        <ModuleCard title="Station Information">
           <div class="home-stationList">
             <div v-for="item in stationInfoList" :key="item.id" class="home-stationItem">
               <EnergyCard
@@ -55,7 +55,7 @@
         </ModuleCard>
       </div>
       <div class="home-device">
-        <ModuleCard title="Device infomation">
+        <ModuleCard title="Device Information">
           <!-- <div class="home-deviceValue">
               <div class="home-deviceValue-item" v-for="item in deviceInfoList" :key="item.title">
                 <span class="deviceValue-item-title">{{ item.title }}:</span>
@@ -108,37 +108,37 @@
           </div>
         </ModuleCard>
       </div>
-      <div class="home-alters">
-        <ModuleCard title="Alters infomation">
+      <div class="home-alarms">
+        <ModuleCard title="Alarm Information">
           <div
-            class="home-altersList"
+            class="home-alarmsList"
             @touchstart="handleAlarmTouchStart"
             @touchmove="handleAlarmTouchMove"
             @touchend="handleAlarmTouchEnd"
           >
-            <div v-if="alarmPullDistance > 0" class="home-altersRefreshHint">
+            <div v-if="alarmPullDistance > 0" class="home-alarmsRefreshHint">
               {{ refreshingAlarms ? 'Refreshing...' : alarmPullDistance >= ALARM_PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh' }}
             </div>
-            <div class="home-altersItem" v-for="item in alterInfoList" :key="item.id">
-              <div class="alters__item-name" :title="item.deviceName">{{ item.deviceName }}</div>
+            <div class="home-alarmsItem" v-for="item in alarmInfoList" :key="item.id">
+              <div class="alarms__item-name" :title="item.deviceName">{{ item.deviceName }}</div>
               <img
-                v-if="item.alterLevel == 'Critical Alarm'"
-                :src="alterL1"
-                class="alters__item-icon"
+                v-if="item.alarmLevel == 'Critical Alarm'"
+                :src="alarmL1"
+                class="alarms__item-icon"
               />
               <img
-                v-else-if="item.alterLevel == 'Warning Alarm'"
-                :src="alterL2"
-                class="alters__item-icon"
+                v-else-if="item.alarmLevel == 'Warning Alarm'"
+                :src="alarmL2"
+                class="alarms__item-icon"
               />
               <img
-                v-else-if="item.alterLevel == 'Info Alarm'"
-                :src="alterL3"
-                class="alters__item-icon"
+                v-else-if="item.alarmLevel == 'Info Alarm'"
+                :src="alarmL3"
+                class="alarms__item-icon"
               />
-              <div class="alters__item-msg" :title="item.alterMsg">{{ item.alterMsg }}</div>
+              <div class="alarms__item-msg" :title="item.alarmMsg">{{ item.alarmMsg }}</div>
             </div>
-            <div v-if="!alterInfoList.length && !refreshingAlarms" class="home-altersEmpty">No current alarms</div>
+            <div v-if="!alarmInfoList.length && !refreshingAlarms" class="home-alarmsEmpty">No current alarms</div>
           </div>
         </ModuleCard>
       </div>
@@ -165,9 +165,9 @@ import type { AlarmMessage } from '@/types/websocket'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { watch, onUnmounted } from 'vue'
 
-import alterL1 from '@/assets/icons/home-alter-L1.svg'
-import alterL2 from '@/assets/icons/home-alter-L2.svg'
-import alterL3 from '@/assets/icons/home-alter-L3.svg'
+import alarmL1 from '@/assets/icons/home-alarm-L1.svg'
+import alarmL2 from '@/assets/icons/home-alarm-L2.svg'
+import alarmL3 from '@/assets/icons/home-alarm-L3.svg'
 
 import arrowLeftImg from '@/assets/icons/arrow-left.svg'
 import arrowRightImg from '@/assets/icons/arrow-right.svg'
@@ -392,13 +392,13 @@ useWebSocket(
 interface HomeAlarmItem {
   id: number | string
   deviceName: string
-  alterLevel: string
-  alterMsg: string
+  alarmLevel: string
+  alarmMsg: string
 }
 
 type HomeAlarmSource = CurrentAlarmData | AlarmMessage['data']
 
-const alterInfoList = ref<HomeAlarmItem[]>([])
+const alarmInfoList = ref<HomeAlarmItem[]>([])
 const refreshingAlarms = ref(false)
 const alarmPullDistance = ref(0)
 const alarmTouchStartY = ref<number | null>(null)
@@ -421,16 +421,16 @@ const toHomeAlarm = (alarm: HomeAlarmSource): HomeAlarmItem => {
     return {
       id: alarm.id,
       deviceName: alarm.device_name || alarm.channel_id.toString() || '-',
-      alterLevel: alarmLevelText[alarm.warning_level] || 'Alarm',
-      alterMsg: fallbackMessage,
+      alarmLevel: alarmLevelText[alarm.warning_level] || 'Alarm',
+      alarmMsg: fallbackMessage,
     }
   }
 
   return {
     id: alarm.alarm_id,
     deviceName: alarm.device_name || alarm.device || alarm.channel_id?.toString() || '-',
-    alterLevel: alarmLevelText[alarm.level] || 'Alarm',
-    alterMsg: alarm.message.trim() || 'Alarm',
+    alarmLevel: alarmLevelText[alarm.level] || 'Alarm',
+    alarmMsg: alarm.message.trim() || 'Alarm',
   }
 }
 
@@ -440,7 +440,7 @@ const fetchHomeAlarms = async () => {
   try {
     const response = await getCurrentAlarms({ page: 1, page_size: 8 })
     if (response.success && requestVersion === alarmListVersion) {
-      alterInfoList.value = (response.data?.list ?? []).map(toHomeAlarm)
+      alarmInfoList.value = (response.data?.list ?? []).map(toHomeAlarm)
     }
   } catch (error) {
     console.error('Failed to fetch current alarms:', error)
@@ -454,12 +454,12 @@ function handleHomeAlarm(alarm: AlarmMessage['data']) {
   alarmListVersion += 1
   const id = alarm.alarm_id
   if (alarm.status === 0) {
-    alterInfoList.value = alterInfoList.value.filter((item) => String(item.id) !== String(id))
+    alarmInfoList.value = alarmInfoList.value.filter((item) => String(item.id) !== String(id))
     return
   }
-  alterInfoList.value = [
+  alarmInfoList.value = [
     toHomeAlarm(alarm),
-    ...alterInfoList.value.filter((item) => String(item.id) !== String(id)),
+    ...alarmInfoList.value.filter((item) => String(item.id) !== String(id)),
   ].slice(0, 8)
 }
 
@@ -801,11 +801,11 @@ const handleNext = () => {
       }
     }
 
-    .home-alters {
+    .home-alarms {
       height: 30.89%;
       width: 100%;
 
-      .home-altersList {
+      .home-alarmsList {
         height: 100%;
         overflow-y: scroll;
         touch-action: pan-y;
@@ -821,8 +821,8 @@ const handleNext = () => {
           height: 0;
         }
 
-        .home-altersRefreshHint,
-        .home-altersEmpty {
+        .home-alarmsRefreshHint,
+        .home-alarmsEmpty {
           padding: 0.12rem 0;
           color: rgba(255, 255, 255, 0.55);
           font-size: 0.13rem;
@@ -846,7 +846,7 @@ const handleNext = () => {
           }
         }
 
-        .home-altersItem {
+        .home-alarmsItem {
           min-height: 0.6rem;
           border-bottom: 0.01rem solid rgba(255, 255, 255, 0.2);
           display: grid;
@@ -854,7 +854,7 @@ const handleNext = () => {
           column-gap: 0.1rem;
           align-items: center;
 
-          .alters__item-name {
+          .alarms__item-name {
             font-size: 0.16rem;
             font-weight: 700;
             line-height: 0.16rem;
@@ -865,13 +865,13 @@ const handleNext = () => {
             -webkit-line-clamp: 2;
           }
 
-          .alters__item-icon {
+          .alarms__item-icon {
             width: 0.46rem;
             height: 0.2rem;
             object-fit: contain;
           }
 
-          .alters__item-msg {
+          .alarms__item-msg {
             min-width: 0;
             font-size: 0.14rem;
             line-height: 0.16rem;

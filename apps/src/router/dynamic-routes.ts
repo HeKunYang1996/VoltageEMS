@@ -256,26 +256,6 @@ export const dynamicRoutes: RouteItem[] = [
           roles: ['Admin', 'Viewer', 'Engineer'],
         },
       },
-      // {
-      //   path: 'operationLog',
-      //   name: 'statisticsOperationLog',
-      //   component: () => import('@/views/Statistics/OperationLog.vue'),
-      //   meta: {
-      //     title: 'Operation Log',
-      //     activeNav: '/statistics/operationLog',
-      //     roles: ['Admin', 'Viewer', 'Engineer'],
-      //   },
-      // },
-      // {
-      //   path: 'runingLog',
-      //   name: 'statisticsRuningLog',
-      //   component: () => import('@/views/Statistics/RuningLog.vue'),
-      //   meta: {
-      //     title: 'Runing Log',
-      //     activeNav: '/statistics/runingLog',
-      //     roles: ['Admin', 'Viewer', 'Engineer'],
-      //   },
-      // },
     ],
   },
   {
