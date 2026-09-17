@@ -686,10 +686,14 @@ impl<R: Rtdb + 'static> ChannelManager<R> {
             .and_then(|v| v.as_u64())
             .unwrap_or(1_000);
 
-        let reports: Vec<crate::protocols::adapters::iec61850::ReportConfig> = params
+        let reports: Vec<crate::protocols::adapters::iec61850::ReportConfig> = match params
             .get("reports")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        {
+            Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+                ComSrvError::ConfigError(format!("Invalid IEC 61850 reports configuration: {e}"))
+            })?,
+            None => Vec::new(),
+        };
 
         let iec61850_params = Iec61850ParamsConfig {
             address,

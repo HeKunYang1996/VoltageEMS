@@ -133,6 +133,16 @@ struct CanMappingValidator {
     offset: Option<f64>,
 }
 
+/// IEC 61850 MMS point mapping validator.
+#[derive(Debug, Deserialize)]
+struct Iec61850MappingValidator {
+    /// MMS path in `domain/item` or `domain:item` form.
+    address: String,
+    /// 1=direct-normal, 2=SBO-normal, 3=direct-enhanced, 4=SBO-enhanced.
+    #[serde(default)]
+    ctrl_model: Option<u8>,
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -490,6 +500,47 @@ pub async fn get_channel_mappings_handler<R: Rtdb>(
                                 "data_type": "int16",
                                 "scale": 0.1,
                                 "offset": 0.0
+                            }
+                        }
+                    ],
+                    "validate_only": false,
+                    "reload_channel": true,
+                    "mode": "replace"
+                })
+            )),
+            ("IEC 61850 MMS - Mixed Points" = (
+                summary = "IEC 61850 MMS telemetry, signal, control, and adjustment mappings",
+                description = "Use the MMS domain/item path as address. Laboratory-safe control support is SPC ctrl_model 1/2 and APC adjustment ctrl_model 1; enhanced-security models are rejected until CommandTermination handling is implemented.",
+                value = json!({
+                    "mappings": [
+                        {
+                            "point_id": 101,
+                            "four_remote": "T",
+                            "protocol_data": {
+                                "address": "simpleIOGenericIO/GGIO1$MX$AnIn1$mag$f"
+                            }
+                        },
+                        {
+                            "point_id": 151,
+                            "four_remote": "S",
+                            "protocol_data": {
+                                "address": "simpleIOGenericIO/GGIO1$ST$SPCSO1$stVal"
+                            }
+                        },
+                        {
+                            "point_id": 201,
+                            "four_remote": "C",
+                            "protocol_data": {
+                                "address": "simpleIOGenericIO/GGIO1$CO$SPCSO1$Oper$ctlVal",
+                                "ctrl_model": 1
+                            }
+                        },
+                        {
+                            "point_id": 301,
+                            "four_remote": "A",
+                            "protocol_data": {
+                                "address": "simpleIOGenericIO/GGIO1$CO$APCSO1$Oper$setMag$f",
+                                "ctrl_model": 1
                             }
                         }
                     ],
@@ -953,6 +1004,58 @@ fn validate_mappings(protocol: &str, mappings: &[crate::dto::PointMappingItem]) 
                     },
                 }
             },
+            "iec61850" => {
+                match serde_json::from_value::<Iec61850MappingValidator>(
+                    mapping.protocol_data.clone(),
+                ) {
+                    Ok(validated) => {
+                        let address = validated.address.trim();
+                        let valid_address = address
+                            .split_once('/')
+                            .or_else(|| address.split_once(':'))
+                            .is_some_and(|(domain, item)| {
+                                !domain.trim().is_empty() && !item.trim().is_empty()
+                            });
+                        if !valid_address {
+                            errors.push(format!(
+                                "Point {}: IEC 61850 address must be 'domain/item' or 'domain:item'",
+                                mapping.point_id
+                            ));
+                        }
+
+                        if let Some(ctrl_model) = validated.ctrl_model
+                            && !(1..=4).contains(&ctrl_model)
+                        {
+                            errors.push(format!(
+                                "Point {}: ctrl_model {} invalid (must be 1-4)",
+                                mapping.point_id, ctrl_model
+                            ));
+                        }
+                        if mapping.four_remote.eq_ignore_ascii_case("C")
+                            && validated.ctrl_model.is_some_and(|model| model > 2)
+                        {
+                            errors.push(format!(
+                                "Point {}: control ctrl_model must be 1 or 2; enhanced-security models are not yet supported",
+                                mapping.point_id
+                            ));
+                        }
+                        if mapping.four_remote.eq_ignore_ascii_case("A")
+                            && validated.ctrl_model.is_some_and(|model| model != 1)
+                        {
+                            errors.push(format!(
+                                "Point {}: adjustment ctrl_model must be 1 (direct-normal)",
+                                mapping.point_id
+                            ));
+                        }
+                    },
+                    Err(e) => {
+                        errors.push(format!(
+                            "Point {}: IEC 61850 mapping validation failed - {}",
+                            mapping.point_id, e
+                        ));
+                    },
+                }
+            },
             other => {
                 errors.push(format!("Unsupported protocol: {}", other));
                 break; // Protocol error affects all mappings
@@ -1039,6 +1142,7 @@ fn normalize_protocol_data(protocol: &str, value: &serde_json::Value) -> serde_j
                 "scale",
                 "offset",
             ],
+            "iec61850" => &["ctrl_model"],
             _ => {
                 // Virtual or unknown protocol: no normalization needed
                 return value.clone();
@@ -1121,4 +1225,76 @@ fn validate_modbus_function_code_match(
     }
 
     None // Validation passed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dto::PointMappingItem;
+
+    #[test]
+    fn validates_iec61850_mapping() {
+        let mappings = [PointMappingItem {
+            point_id: 101,
+            four_remote: "T".to_string(),
+            protocol_data: json!({
+                "address": "simpleIOGenericIO/GGIO1$MX$AnIn1$mag$f"
+            }),
+        }];
+
+        assert!(validate_mappings("iec61850", &mappings).is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_iec61850_mapping() {
+        let mappings = [PointMappingItem {
+            point_id: 201,
+            four_remote: "C".to_string(),
+            protocol_data: json!({
+                "address": "missing-domain-separator",
+                "ctrl_model": 5
+            }),
+        }];
+
+        let errors = validate_mappings("iec61850", &mappings);
+        assert!(errors.len() >= 2);
+        assert!(errors.iter().any(|error| error.contains("address")));
+        assert!(errors.iter().any(|error| error.contains("ctrl_model")));
+    }
+
+    #[test]
+    fn normalizes_iec61850_ctrl_model() {
+        let normalized = normalize_protocol_data(
+            "iec61850",
+            &json!({
+                "address": "LD0/GGIO1$CO$SPCSO1$Oper$ctlVal",
+                "ctrl_model": "2"
+            }),
+        );
+
+        assert_eq!(normalized["ctrl_model"], 2);
+    }
+
+    #[test]
+    fn rejects_unimplemented_iec61850_control_models() {
+        let control = PointMappingItem {
+            point_id: 201,
+            four_remote: "C".to_string(),
+            protocol_data: json!({
+                "address": "LD0/GGIO1$CO$SPCSO1$Oper$ctlVal",
+                "ctrl_model": 3
+            }),
+        };
+        let adjustment = PointMappingItem {
+            point_id: 301,
+            four_remote: "A".to_string(),
+            protocol_data: json!({
+                "address": "LD0/GGIO1$CO$APCSO1$Oper$setMag$f",
+                "ctrl_model": 2
+            }),
+        };
+
+        assert_eq!(validate_mappings("iec61850", &[control]).len(), 1);
+        assert_eq!(validate_mappings("iec61850", &[adjustment]).len(), 1);
+    }
 }

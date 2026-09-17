@@ -34,8 +34,8 @@ use voltage_rtdb::Rtdb;
 /// Writes to the `channels` table, registers the channel with the channel manager, and
 /// starts the protocol adapter (connects to the device and begins polling). **SHM layout
 /// expands** and `routing_hash` is recomputed — modsrv detects the generation mismatch
-/// and automatically rebuilds its SHM writer. The protocol is determined by the `driver`
-/// field in the request body (modbus_tcp / iec104 / dlt645 / mqtt, 13 protocols total);
+/// and automatically rebuilds its SHM writer. The protocol is determined by the `protocol`
+/// field in the request body (for example modbus_tcp, iec104, iec61850, dlt645, or mqtt);
 /// parameter schema varies by protocol. Common failure causes: channel_id conflict,
 /// misspelled driver name, missing connection parameters.
 #[utoipa::path(
@@ -111,6 +111,31 @@ use voltage_rtdb::Rtdb;
                         "connect_timeout_ms": 3000,
                         "read_timeout_ms": 3000,
                         "poll_interval_ms": 1000
+                    }
+                })
+            )),
+            ("IEC 61850 MMS" = (
+                summary = "IEC 61850 MMS channel",
+                description = "Connect to an IED over TCP port 102. Reports are optional; points not listed in a report dataset are polled.",
+                value = json!({
+                    "name": "Substation IED 01",
+                    "description": "IEC 61850 laboratory IED",
+                    "protocol": "iec61850",
+                    "enabled": true,
+                    "parameters": {
+                        "address": "192.168.1.10:102",
+                        "connect_timeout_ms": 10000,
+                        "request_timeout_ms": 5000,
+                        "poll_interval_ms": 1000,
+                        "reports": [
+                            {
+                                "rcb_ref": "simpleIOGenericIO/LLN0$BR$EventsBRCB",
+                                "rpt_id": "simpleIOGenericIO/LLN0$BR$EventsBRCB01",
+                                "dataset_members": [
+                                    "simpleIOGenericIO/GGIO1$ST$SPCSO1$stVal"
+                                ]
+                            }
+                        ]
                     }
                 })
             )),
