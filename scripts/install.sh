@@ -1039,6 +1039,7 @@ fi
 # Create all necessary directories
 echo "Creating installation directories..."
 $SUDO mkdir -p "$INSTALL_DIR"/data
+$SUDO mkdir -p "$INSTALL_DIR"/config-history
 $SUDO mkdir -p "$INSTALL_DIR"/upgrade  # 升级目录（用于在线升级功能）
 
 # Create log directories (permissions will be set after user detection)
@@ -1241,6 +1242,7 @@ fi
 # Set permissions: 755 for dirs, 777 for logs (container write access)
 $SUDO chmod 755 "$INSTALL_DIR" 2>/dev/null || true
 $SUDO chmod -R 775 "$INSTALL_DIR/data" 2>/dev/null || true
+$SUDO chmod -R 775 "$INSTALL_DIR/config-history" 2>/dev/null || true
 $SUDO chmod -R 775 "$INSTALL_DIR/config" 2>/dev/null || true
 $SUDO chmod -R 775 "$INSTALL_DIR/config.template" 2>/dev/null || true
 $SUDO chmod -R 775 "$INSTALL_DIR/upgrade" 2>/dev/null || true  # 升级目录需要容器写入权限
@@ -1288,6 +1290,7 @@ if [[ -f "$ENV_FILE" ]]; then
     $SUDO sed -i '/^HOST_GID=/d' "$ENV_FILE" 2>/dev/null || true
     $SUDO sed -i '/^DEVICE_SN=/d' "$ENV_FILE" 2>/dev/null || true
     $SUDO sed -i '/^VOLTAGE_LOG_PATH=/d' "$ENV_FILE" 2>/dev/null || true
+    $SUDO sed -i '/^VOLTAGE_CONFIG_HISTORY_PATH=/d' "$ENV_FILE" 2>/dev/null || true
 
     # Append new values
     $SUDO tee -a "$ENV_FILE" > /dev/null << EOF
@@ -1297,6 +1300,7 @@ HOST_UID=$ACTUAL_UID
 HOST_GID=$ACTUAL_GID
 DEVICE_SN=$DEVICE_SN
 VOLTAGE_LOG_PATH=$LOG_DIR
+VOLTAGE_CONFIG_HISTORY_PATH=$INSTALL_DIR/config-history
 EOF
 else
     # Create new .env file
@@ -1308,6 +1312,7 @@ HOST_UID=$ACTUAL_UID
 HOST_GID=$ACTUAL_GID
 DEVICE_SN=$DEVICE_SN
 VOLTAGE_LOG_PATH=$LOG_DIR
+VOLTAGE_CONFIG_HISTORY_PATH=$INSTALL_DIR/config-history
 EOF
 fi
 
