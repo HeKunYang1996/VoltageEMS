@@ -74,35 +74,20 @@
 
       <!-- 琛ㄦ牸 -->
       <div class="alarm-records__table vt-table-shell">
-        <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
+        <el-table
+          :data="tableData"
+          class="alarm-records__table-content vt-table-content"
+          table-layout="fixed"
+          align="left"
+        >
           <el-table-column
             prop="rule_name"
-            label="Name"
-            :min-width="160"
+            label="Rule Name"
+            min-width="160"
             class-name="table-ellipsis"
+            show-overflow-tooltip
           />
-          <el-table-column
-            prop="channel_id"
-            label="Channel ID"
-            :min-width="140"
-            class-name="table-ellipsis"
-          />
-          <el-table-column
-            prop="device_name"
-            label="Device Name"
-            :min-width="180"
-            class-name="table-ellipsis"
-          >
-            <template #default="{ row }">{{ row.device_name || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="point_id" label="Point ID" :min-width="120" class-name="table-ellipsis" />
-          <el-table-column prop="point_name" label="Point Name" :min-width="160" class-name="table-ellipsis">
-            <template #default="{ row }">{{ row.point_name || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="unit" label="Unit" :min-width="100" class-name="table-ellipsis">
-            <template #default="{ row }">{{ row.unit || '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="warning_level" label="Level" :width="160">
+          <el-table-column prop="warning_level" label="Alarm Level" :min-width="160">
             <template #default="scope">
               <span
                 class="alarm-records__table-level-text"
@@ -113,23 +98,51 @@
             </template>
           </el-table-column>
           <el-table-column
-            prop="triggered_at"
-            label="Start Time"
-            :min-width="180"
+            prop="device_name"
+            label="Device Name"
+            min-width="180"
             class-name="table-ellipsis"
+            show-overflow-tooltip
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatDateTime(row.triggered_at) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{ row.device_name || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="point_name"
+            label="Point Name"
+            min-width="160"
+            class-name="table-ellipsis"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span class="table-ellipsis__text vt-ellipsis">{{ row.point_name || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Trigger Value" :min-width="140">
+            <template #default="{ row }">{{ formatValue(row.trigger_value, row.unit) }}</template>
+          </el-table-column>
+
+          <el-table-column
+            prop="triggered_at"
+            label="Start Time"
+            min-width="180"
+            class-name="table-ellipsis"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span class="table-ellipsis__text vt-ellipsis">{{ formatDateTime(row.triggered_at) }}</span>
             </template>
           </el-table-column>
           <el-table-column
             prop="recovered_at"
             label="End Time"
-            :min-width="180"
+            min-width="180"
             class-name="table-ellipsis"
+            show-overflow-tooltip
           >
             <template #default="{ row }">
-              <span class="table-ellipsis__text">{{ formatDateTime(row.recovered_at) }}</span>
+              <span class="table-ellipsis__text vt-ellipsis">{{ formatDateTime(row.recovered_at) }}</span>
             </template>
           </el-table-column>
         </el-table>
@@ -171,6 +184,13 @@ const warningLevelText = {
 const startTimeDisplay = ref<Date | null>(null)
 const endTimeDisplay = ref<Date | null>(null)
 
+// format trigger value with unit
+const formatValue = (value: number | string | null | undefined, unit?: string | null): string => {
+  if (value === null || value === undefined || value === '') return '-'
+  const v = typeof value === 'number' ? value : Number(value)
+  const num = Number.isFinite(v) ? v : value
+  return unit ? `${num} ${unit}` : String(num)
+}
 // 浣跨敤 useTableData composable
 const {
   loading,
@@ -362,7 +382,6 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 
   :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
-    margin-right: 0.2rem;
   }
 
   .alarm-level--1 {
