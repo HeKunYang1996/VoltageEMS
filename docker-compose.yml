@@ -163,6 +163,8 @@ services:
       - API_PORT=6005
       - REDIS_URL=unix:///run/redis/redis.sock
       - VOLTAGE_DB_PATH=/app/data/voltage.db
+      - VOLTAGE_CONFIG_DATA_DIR=/app/data
+      - VOLTAGE_CONFIG_HISTORY_DIR=/app/config-history
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
@@ -172,6 +174,7 @@ services:
       - no_proxy="*"
     volumes:
       - ${VOLTAGE_BASE_PATH:-./data}:/app/data:rw
+      - ${VOLTAGE_CONFIG_HISTORY_PATH:-./config-history}:/app/config-history:rw
       - ${VOLTAGE_LOG_PATH:-./logs}:/app/logs
       - redis-socket:/run/redis:ro
       - /opt/MonarchEdge:/opt/MonarchEdge  # 持久化目录（用于升级）

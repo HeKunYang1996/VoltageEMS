@@ -210,6 +210,20 @@ fn build_registry() -> ProtocolRegistry {
         });
     }
 
+    // Register IEC 61850 MMS protocol
+    #[cfg(feature = "iec61850")]
+    {
+        use crate::protocols::adapters::iec61850::Iec61850Channel;
+        registry.register(ProtocolMetadata {
+            name: "iec61850",
+            display_name: "IEC 61850 MMS",
+            description: "IEC 61850 MMS client over TCP/ISO",
+            protocol_type: "iec61850",
+            drivers: vec![Iec61850Channel::metadata()],
+            supports_points: true,
+        });
+    }
+
     // Register OPC UA protocol
     #[cfg(feature = "opcua")]
     {
@@ -319,5 +333,19 @@ mod tests {
         let registry = get_protocol_registry();
         // Should have at least one protocol (virtual is always available)
         assert!(!registry.protocols().is_empty());
+    }
+
+    #[cfg(feature = "iec61850")]
+    #[test]
+    fn test_registry_contains_iec61850() {
+        let protocol = get_protocol_registry()
+            .protocols()
+            .iter()
+            .find(|protocol| protocol.name == "iec61850")
+            .expect("IEC 61850 must be discoverable when its feature is enabled");
+
+        assert_eq!(protocol.protocol_type, "iec61850");
+        assert_eq!(protocol.drivers.len(), 1);
+        assert_eq!(protocol.drivers[0].name, "iec61850");
     }
 }

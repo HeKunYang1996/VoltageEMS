@@ -40,20 +40,23 @@ fn extract_query_token(req: &Request) -> Option<String> {
         .find_map(|kv| kv.strip_prefix("token=").map(|s| s.to_string()))
 }
 
-pub async fn require_jwt(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+pub async fn require_jwt(
+    State(state): State<Arc<AppState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let token = extract_bearer(&req).or_else(|| extract_query_token(&req));
 
     let Some(token) = token else {
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
 
-    if validate_access_token(&token, &state.config.jwt_secret, &state.db)
-        .await
-        .is_none()
-    {
+    let Some(claims) = validate_access_token(&token, &state.config.jwt_secret, &state.db).await
+    else {
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
-    }
+    };
 
+    req.extensions_mut().insert(claims);
     next.run(req).await
 }
 
@@ -64,7 +67,7 @@ pub async fn require_jwt(State(state): State<Arc<AppState>>, req: Request, next:
 /// equivalent is `GET /api/v1/auth/validate/engineer`.
 pub async fn require_engineer(
     State(state): State<Arc<AppState>>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     let token = extract_bearer(&req).or_else(|| extract_query_token(&req));
@@ -83,6 +86,7 @@ pub async fn require_engineer(
         return (StatusCode::FORBIDDEN, "Engineer or Admin role required").into_response();
     }
 
+    req.extensions_mut().insert(claims);
     next.run(req).await
 }
 

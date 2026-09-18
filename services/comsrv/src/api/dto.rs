@@ -266,7 +266,7 @@ pub struct ChannelCreateRequest {
     #[schema(example = "Primary PV inverter communication channel")]
     pub description: Option<String>,
 
-    /// Protocol type: modbus_tcp, modbus_rtu, can, virtual
+    /// Protocol type, for example: modbus_tcp, modbus_rtu, iec61850, can, virtual
     #[schema(example = "modbus_tcp", value_type = String)]
     pub protocol: String,
 
@@ -500,7 +500,9 @@ pub struct PointMappingDetail {
     pub point_id: u32,
     #[schema(example = "DC_Voltage")]
     pub signal_name: String,
-    /// Protocol-specific mapping data (JSON)
+    /// Protocol-specific mapping data (JSON). IEC 61850 uses
+    /// `{ "address": "domain/LN$FC$DO$DA", "ctrl_model": 1 }`;
+    /// `ctrl_model` is only relevant to control/adjustment points.
     #[schema(value_type = Object)]
     pub protocol_data: serde_json::Value,
 }
@@ -536,7 +538,9 @@ pub struct PointMappingItem {
     #[schema(value_type = String, example = "T")]
     pub four_remote: String,
 
-    /// Protocol-specific mapping data (JSON)
+    /// Protocol-specific mapping data (JSON). IEC 61850 uses
+    /// `{ "address": "domain/LN$FC$DO$DA", "ctrl_model": 1 }`;
+    /// `ctrl_model` is only relevant to control/adjustment points.
     #[schema(value_type = Object, example = json!({"slave_id": 1, "register_address": 100}))]
     pub protocol_data: serde_json::Value,
 }

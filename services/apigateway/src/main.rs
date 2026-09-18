@@ -21,13 +21,14 @@ use dashmap::DashMap;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 use utoipa::OpenApi;
 #[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::{Config, SwaggerUi};
 
 mod auth;
 mod config;
+mod config_versions;
 mod db;
 mod middleware_auth;
 mod models;
@@ -36,6 +37,7 @@ mod routes_broadcast;
 mod routes_config;
 mod routes_homepage;
 mod routes_network;
+mod routes_system;
 mod state;
 mod ws;
 
@@ -80,8 +82,15 @@ use crate::ws::WsHub;
         routes_network::update_network_config,
         routes_network::apply_network_config,
         routes_config::check_config,
-        routes_config::export_config,
-        routes_config::import_config,
+        config_versions::export_current,
+        config_versions::import_compat,
+        config_versions::get_current,
+        config_versions::backup_current,
+        config_versions::list_versions,
+        config_versions::export_version,
+        config_versions::validate_import,
+        config_versions::apply_import,
+        config_versions::restore_version,
         routes_config::restart_services,
         routes_config::start_upgrade,
         routes_config::abort_upgrade,
@@ -219,16 +228,35 @@ fn build_router(state: Arc<AppState>) -> Router {
     let network_routes = Router::new().merge(network_viewer).merge(network_admin);
 
     // ── Config routes ─────────────────────────────────────────────────────────
-    // GET (check/export/status) → Viewer+; all write ops → Engineer+
+    // Metadata/status → Viewer+; archives contain credentials, so export and writes → Engineer+
     let config_viewer = Router::new()
         .route("/check", get(routes_config::check_config))
-        .route("/export", get(routes_config::export_config))
+        .route("/current", get(config_versions::get_current))
+        .route("/versions", get(config_versions::list_versions))
         .route("/upgrade/status", get(routes_config::upgrade_status));
 
     let config_admin = Router::new()
+        .route("/export", get(config_versions::export_current))
+        .route(
+            "/versions/{version_id}/export",
+            get(config_versions::export_version),
+        )
         .route(
             "/import",
-            post(routes_config::import_config).layer(DefaultBodyLimit::max(64 * 1024 * 1024)), // 64 MB for config ZIP
+            post(config_versions::import_compat).layer(DefaultBodyLimit::max(64 * 1024 * 1024)), // 64 MB for config ZIP
+        )
+        .route("/backups", post(config_versions::backup_current))
+        .route(
+            "/imports/validate",
+            post(config_versions::validate_import).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route(
+            "/imports/{import_id}/apply",
+            post(config_versions::apply_import),
+        )
+        .route(
+            "/versions/{version_id}/restore",
+            post(config_versions::restore_version),
         )
         .route("/restart-services", post(routes_config::restart_services))
         .route(
@@ -255,12 +283,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             middleware_auth::require_jwt,
         ));
 
-    // /broadcast is called by internal microservices (alarmsrv) with no JWT.
-    // Guard it with loopback-only access instead — all services share host
-    // networking so 127.0.0.1 is a sufficient internal boundary.
+    // Internal service-to-service routes do not use user JWTs. Guard them with
+    // loopback-only access instead — all services share host networking, so
+    // external clients cannot reach these handlers through the bound port.
     let internal_v1 = Router::new()
         .route("/broadcast", post(routes_broadcast::broadcast_message))
         .route("/broadcast/status", get(routes_broadcast::broadcast_status))
+        .route("/system/reboot", post(routes_system::schedule_reboot))
         .layer(axum::middleware::from_fn(middleware_auth::require_loopback));
 
     let api_v1 = Router::new()
@@ -372,6 +401,13 @@ async fn main() -> anyhow::Result<()> {
         let hash = auth::hash_password(default_md5)?;
         db::create_user(&db_pool, "admin", &hash, 1).await?;
         info!("Created default admin user (password: admin123)");
+    }
+
+    if let Err(e) = config_versions::initialize(&db_pool).await {
+        warn!(
+            "Configuration version repository initialization failed: {}",
+            e
+        );
     }
 
     // ── Redis ─────────────────────────────────────────────────────────────────

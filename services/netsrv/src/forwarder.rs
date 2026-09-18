@@ -1,4 +1,4 @@
-/// Periodic data forwarding: Redis → MQTT property topic.
+/// Periodic data forwarding: SQLite/Redis → MQTT property topic.
 ///
 /// Two background tasks:
 /// - `run_data_forwarder` – scans Redis every `report_interval_secs` and
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use regex::Regex;
 use rumqttc::QoS;
+use sqlx::SqlitePool;
 use tokio::time::{self, Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -91,23 +92,108 @@ pub async fn upload_once(state: Arc<AppState>) {
 
     let entries = collect_redis_data(state.rtdb.as_ref(), &patterns, &exclude_res).await;
     if entries.is_empty() {
-        debug!("No data to upload");
-        return;
+        debug!("No instance data to upload");
+    } else {
+        // Publish instance data in batches.
+        for chunk in entries.chunks(batch_size) {
+            let payload = PropertyPayload {
+                timestamp: Utc::now().timestamp(),
+                property: chunk.to_vec(),
+            };
+            if let Err(e) = publish_payload(&state, payload).await {
+                error!("Data upload failed: {}", e);
+            }
+        }
     }
 
-    // Publish in batches
-    for chunk in entries.chunks(batch_size) {
-        let payload = PropertyPayload {
-            timestamp: Utc::now().timestamp(),
-            property: chunk.to_vec(),
-        };
-        if let Err(e) = publish_payload(&state, payload).await {
-            error!("Data upload failed: {}", e);
-        }
+    // Homepage data uses the same MQTT topic but is a separate message, like
+    // the independently published `source: gateway` system-monitor payload.
+    // The SQLite query completes before Redis lookups or MQTT publishing, so
+    // no SQLite connection is held across network I/O.
+    match collect_homepage_data(&state.sqlite, state.rtdb.as_ref(), &state.device.device_sn).await {
+        Ok(Some(entry)) => {
+            let payload = PropertyPayload {
+                timestamp: Utc::now().timestamp(),
+                property: vec![entry],
+            };
+            if let Err(e) = publish_payload(&state, payload).await {
+                error!("Homepage data upload failed: {}", e);
+            }
+        },
+        Ok(None) => debug!("No homepage data to upload"),
+        Err(e) => warn!("Failed to collect homepage data: {}", e),
     }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+struct CalculatedPointRow {
+    id: i64,
+    formula: Option<String>,
+}
+
+/// Build a homepage virtual-device entry for the existing property protocol.
+///
+/// This is equivalent to a logical `homepage:{gatewaySN}:M` hash. Point IDs are
+/// used as stable field names because display names are not unique.
+async fn collect_homepage_data<R: Rtdb>(
+    sqlite: &SqlitePool,
+    rtdb: &R,
+    gateway_sn: &str,
+) -> anyhow::Result<Option<PropertyEntry>> {
+    let points = sqlx::query_as::<_, CalculatedPointRow>(
+        "SELECT id, formula FROM calculated_points ORDER BY id",
+    )
+    .fetch_all(sqlite)
+    .await?;
+
+    if points.is_empty() {
+        return Ok(None);
+    }
+
+    // fetch_all has returned the pooled SQLite connection before Redis I/O.
+    let mut value = HashMap::with_capacity(points.len());
+    for point in points {
+        let resolved = match point.formula.as_deref().map(str::trim) {
+            Some(formula) if !formula.is_empty() => resolve_calculated_value(rtdb, formula).await,
+            _ => serde_json::Value::Null,
+        };
+        value.insert(point.id.to_string(), resolved);
+    }
+
+    Ok(Some(PropertyEntry {
+        source: "homepage".to_string(),
+        device: gateway_sn.to_string(),
+        data_type: "M".to_string(),
+        value,
+    }))
+}
+
+/// Formula syntax is `hash_key:field_id`; split at the final colon because
+/// Redis hash keys themselves contain colons (for example `inst:200:M`).
+async fn resolve_calculated_value<R: Rtdb>(rtdb: &R, formula: &str) -> serde_json::Value {
+    let Some((hash_key, field_id)) = formula.rsplit_once(':') else {
+        return serde_json::Value::Null;
+    };
+    if hash_key.is_empty() || field_id.is_empty() {
+        return serde_json::Value::Null;
+    }
+
+    match rtdb.hash_get(hash_key, field_id).await {
+        Ok(Some(bytes)) => std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|raw| raw.parse::<f64>().ok())
+            .and_then(serde_json::Number::from_f64)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Ok(None) => serde_json::Value::Null,
+        Err(e) => {
+            warn!("Failed to resolve homepage formula '{}': {}", formula, e);
+            serde_json::Value::Null
+        },
+    }
+}
 
 async fn collect_redis_data<R: Rtdb>(
     rtdb: &R,
@@ -189,4 +275,76 @@ async fn publish_payload(state: &AppState, payload: PropertyPayload) -> anyhow::
         .publish(&state.topics.property, QoS::AtLeastOnce, false, json)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use sqlx::SqlitePool;
+    use voltage_rtdb::Rtdb;
+    use voltage_rtdb::helpers::create_test_rtdb;
+
+    use super::collect_homepage_data;
+
+    #[tokio::test]
+    async fn homepage_data_uses_point_ids_and_resolves_redis_formulas() {
+        let sqlite = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE calculated_points (
+                id INTEGER PRIMARY KEY,
+                formula TEXT
+            )",
+        )
+        .execute(&sqlite)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO calculated_points (id, formula) VALUES
+                (1, 'inst:200:M:active_power'),
+                (2, ''),
+                (3, 'invalid'),
+                (4, 'inst:200:M:missing')",
+        )
+        .execute(&sqlite)
+        .await
+        .unwrap();
+
+        let rtdb = create_test_rtdb();
+        rtdb.hash_set("inst:200:M", "active_power", Bytes::from("12.5"))
+            .await
+            .unwrap();
+
+        let entry = collect_homepage_data(&sqlite, rtdb.as_ref(), "20f0bcc6c1a8cddf")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(entry.source, "homepage");
+        assert_eq!(entry.device, "20f0bcc6c1a8cddf");
+        assert_eq!(entry.data_type, "M");
+        assert_eq!(entry.value["1"], serde_json::json!(12.5));
+        assert!(entry.value["2"].is_null());
+        assert!(entry.value["3"].is_null());
+        assert!(entry.value["4"].is_null());
+    }
+
+    #[tokio::test]
+    async fn homepage_data_is_absent_when_no_points_are_configured() {
+        let sqlite = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE calculated_points (
+                id INTEGER PRIMARY KEY,
+                formula TEXT
+            )",
+        )
+        .execute(&sqlite)
+        .await
+        .unwrap();
+
+        let rtdb = create_test_rtdb();
+        let entry = collect_homepage_data(&sqlite, rtdb.as_ref(), "gateway-sn")
+            .await
+            .unwrap();
+        assert!(entry.is_none());
+    }
 }

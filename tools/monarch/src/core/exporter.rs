@@ -536,12 +536,12 @@ impl ConfigExporter {
         Ok(config)
     }
 
-    /// Export products hierarchy from compile-time built-in products.
-    /// Products are now embedded in the binary via voltage-model crate.
+    /// Export product names. Product-level hierarchy is no longer part of the
+    /// source-library contract, so every entry is emitted as a root.
     fn export_products_hierarchy(&self) -> BTreeMap<String, Option<String>> {
         product_lib::get_builtin_products()
             .iter()
-            .map(|p| (p.name.clone(), p.parent_name.clone()))
+            .map(|p| (p.name.clone(), None))
             .collect()
     }
 

@@ -9,6 +9,7 @@
 //! - System metrics upload (CPU, memory, disk, network)
 //! - Single-point read / write commands from the cloud
 //! - call-data / call-alarm total-recall commands
+//! - Gateway reboot command forwarding to apigateway
 //! - Alarm broadcast (from alarmsrv via HTTP → MQTT)
 //! - HTTP API for MQTT config, status, certificate management
 //!

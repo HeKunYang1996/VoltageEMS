@@ -972,6 +972,21 @@ fn truncate_body(body: &str, max_length: usize) -> String {
 ///     .layer(middleware::from_fn(http_request_logger))  // BEFORE .with_state()
 ///     .with_state(state);
 /// ```
+pub const INTERNAL_REQUEST_HEADER: &str = "x-voltage-internal-service";
+
+fn is_internal_broadcast_request(req: &axum::extract::Request) -> bool {
+    req.method() == axum::http::Method::POST
+        && matches!(
+            req.uri().path(),
+            "/api/v1/broadcast" | "/netApi/alarm/broadcast"
+        )
+        && req
+            .headers()
+            .get(INTERNAL_REQUEST_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|service| !service.is_empty())
+}
+
 pub async fn http_request_logger(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -981,6 +996,13 @@ pub async fn http_request_logger(
 
     const MAX_BODY_LENGTH: usize = 500;
     const MAX_BODY_READ: usize = 2048;
+
+    // Internal alarm fan-out is high-frequency implementation traffic. The
+    // originating user API call remains logged; only explicitly marked
+    // downstream broadcast requests are omitted.
+    if is_internal_broadcast_request(&req) {
+        return next.run(req).await;
+    }
 
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -1134,7 +1156,36 @@ pub async fn shutdown_logging_tasks() {
 #[allow(clippy::disallowed_methods)] // Test code - unwrap is acceptable
 mod tests {
     use super::*;
+    use axum::body::Body;
     use tracing::Level;
+
+    #[test]
+    fn skips_only_marked_internal_broadcast_requests() {
+        for path in ["/api/v1/broadcast", "/netApi/alarm/broadcast"] {
+            let request = axum::extract::Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(INTERNAL_REQUEST_HEADER, "alarmsrv")
+                .body(Body::empty())
+                .unwrap();
+            assert!(is_internal_broadcast_request(&request));
+        }
+
+        let manual_broadcast = axum::extract::Request::builder()
+            .method("POST")
+            .uri("/api/v1/broadcast")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!is_internal_broadcast_request(&manual_broadcast));
+
+        let marked_user_request = axum::extract::Request::builder()
+            .method("POST")
+            .uri("/api/v1/config")
+            .header(INTERNAL_REQUEST_HEADER, "alarmsrv")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!is_internal_broadcast_request(&marked_user_request));
+    }
 
     // ========================================================================
     // format_level tests

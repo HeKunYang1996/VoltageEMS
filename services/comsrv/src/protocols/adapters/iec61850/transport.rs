@@ -213,6 +213,8 @@ pub struct Framer {
     /// while waiting for a confirmed response.  Callers drain this with
     /// [`Framer::take_pending_reports`] or [`Framer::drain_socket`].
     pending_reports: Vec<Vec<u8>>,
+    /// TCP bytes not yet forming a complete TPKT frame.
+    rx_buffer: Vec<u8>,
 }
 
 impl Framer {
@@ -220,6 +222,7 @@ impl Framer {
         Self {
             stream,
             pending_reports: Vec::new(),
+            rx_buffer: Vec::new(),
         }
     }
 
@@ -293,31 +296,47 @@ impl Framer {
         std::mem::take(&mut self.pending_reports)
     }
 
-    /// Actively drain any additional unconfirmed PDUs already sitting in the
-    /// TCP receive buffer.  Uses a very short per-read timeout so it returns
-    /// quickly when no more data is waiting.
+    /// Actively drain complete PDUs already available from the TCP socket.
     ///
     /// Should be called at the *start* of a poll cycle to pick up reports that
     /// arrived while the channel was idle between cycles.
-    pub async fn drain_socket(&mut self) -> Vec<Vec<u8>> {
+    pub fn drain_socket(&mut self) -> Result<Vec<Vec<u8>>> {
         // First return everything already in the pending buffer.
         let mut out = std::mem::take(&mut self.pending_reports);
 
-        // Then try to read more frames from the socket with a very short
-        // timeout.  We stop as soon as the socket has no data ready.
-        // This is safe because recv_mms_raw uses read_exact: if it starts
-        // reading a TPKT header we will finish reading the full frame before
-        // the timeout fires (the data is already in the OS buffer).
+        // Keep partial frames buffered. A non-blocking drain must never cancel
+        // read_exact after it has already consumed part of a TCP frame.
+        let mut chunk = [0u8; 8192];
         loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(20), self.recv_mms_raw())
-                .await
-            {
-                Ok(Ok(pdu)) if pdu.first() == Some(&0xA3) => out.push(pdu),
-                Ok(Ok(_)) => break, // unexpected confirmed PDU between cycles, discard
-                _ => break,         // timeout or IO error → no more data
+            match self.stream.try_read(&mut chunk) {
+                Ok(0) => {
+                    return Err(io_err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "IEC 61850 peer closed the connection",
+                    )));
+                },
+                Ok(n) => self.rx_buffer.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(io_err(e)),
             }
         }
-        out
+
+        while let Some(cotp_payload) = take_buffered_tpkt(&mut self.rx_buffer)? {
+            let pdu = unwrap_data_pdu(&cotp_payload)
+                .ok_or_else(|| {
+                    GatewayError::Protocol("IEC 61850: failed to unwrap buffered MMS PDU".into())
+                })?
+                .to_vec();
+            if pdu.first() == Some(&0xA3) {
+                out.push(pdu);
+            } else {
+                return Err(GatewayError::Protocol(
+                    "IEC 61850: unexpected confirmed PDU while no request was outstanding; reconnecting to avoid response misassociation"
+                        .into(),
+                ));
+            }
+        }
+        Ok(out)
     }
 
     /// Low-level: receive exactly one TPKT and unwrap it to a raw MMS PDU.
@@ -344,27 +363,50 @@ impl Framer {
     }
 
     async fn recv_tpkt(&mut self) -> Result<Vec<u8>> {
-        let mut hdr = [0u8; 4];
-        self.stream.read_exact(&mut hdr).await.map_err(io_err)?;
+        loop {
+            if let Some(payload) = take_buffered_tpkt(&mut self.rx_buffer)? {
+                return Ok(payload);
+            }
 
-        if hdr[0] != TPKT_VER {
-            return Err(GatewayError::Protocol(format!(
-                "IEC 61850: invalid TPKT version byte 0x{:02X}",
-                hdr[0]
-            )));
+            let mut chunk = [0u8; 8192];
+            let n = self.stream.read(&mut chunk).await.map_err(io_err)?;
+            if n == 0 {
+                return Err(io_err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "IEC 61850 peer closed the connection",
+                )));
+            }
+            self.rx_buffer.extend_from_slice(&chunk[..n]);
         }
-        let total_len = u16::from_be_bytes([hdr[2], hdr[3]]) as usize;
-        if !(4..=MAX_PDU_SIZE).contains(&total_len) {
-            return Err(GatewayError::Protocol(format!(
-                "IEC 61850: TPKT length {} out of range",
-                total_len
-            )));
-        }
-        let payload_len = total_len - 4;
-        let mut payload = vec![0u8; payload_len];
-        self.stream.read_exact(&mut payload).await.map_err(io_err)?;
-        Ok(payload)
     }
+}
+
+/// Remove one complete TPKT payload from `buffer`.
+/// Incomplete frames remain untouched until more TCP bytes arrive.
+fn take_buffered_tpkt(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
+    if buffer.len() < 4 {
+        return Ok(None);
+    }
+    if buffer[0] != TPKT_VER {
+        return Err(GatewayError::Protocol(format!(
+            "IEC 61850: invalid TPKT version byte 0x{:02X}",
+            buffer[0]
+        )));
+    }
+
+    let total_len = u16::from_be_bytes([buffer[2], buffer[3]]) as usize;
+    if !(4..=MAX_PDU_SIZE).contains(&total_len) {
+        return Err(GatewayError::Protocol(format!(
+            "IEC 61850: TPKT length {} out of range",
+            total_len
+        )));
+    }
+    if buffer.len() < total_len {
+        return Ok(None);
+    }
+
+    let frame: Vec<u8> = buffer.drain(..total_len).collect();
+    Ok(Some(frame[4..].to_vec()))
 }
 
 // ── BER helpers ───────────────────────────────────────────────────────────────
@@ -457,5 +499,39 @@ mod tests {
         // COTP DT (3) + MMS_CONNECT_PAYLOAD = total COTP payload
         // Session header: 24 bytes, Presentation header: 67 bytes, ACSE: 20 bytes, MMS: 40 bytes
         assert_eq!(MMS_CONNECT_PAYLOAD.len(), 151); // 24 + 67 + 20 + 40
+    }
+
+    #[test]
+    fn buffered_tpkt_keeps_partial_frame_intact() {
+        let frame = wrap_data_pdu(b"\xA3\x00");
+        let split = frame.len() - 2;
+        let mut buffer = frame[..split].to_vec();
+
+        assert!(take_buffered_tpkt(&mut buffer).unwrap().is_none());
+        assert_eq!(buffer, frame[..split]);
+
+        buffer.extend_from_slice(&frame[split..]);
+        let payload = take_buffered_tpkt(&mut buffer).unwrap().unwrap();
+        assert_eq!(unwrap_data_pdu(&payload), Some(b"\xA3\x00".as_slice()));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn buffered_tpkt_extracts_multiple_frames() {
+        let first = wrap_data_pdu(b"\xA3\x00");
+        let second = wrap_data_pdu(b"\xA1\x00");
+        let mut buffer = [first, second].concat();
+
+        let first_payload = take_buffered_tpkt(&mut buffer).unwrap().unwrap();
+        let second_payload = take_buffered_tpkt(&mut buffer).unwrap().unwrap();
+        assert_eq!(
+            unwrap_data_pdu(&first_payload),
+            Some(b"\xA3\x00".as_slice())
+        );
+        assert_eq!(
+            unwrap_data_pdu(&second_payload),
+            Some(b"\xA1\x00".as_slice())
+        );
+        assert!(buffer.is_empty());
     }
 }

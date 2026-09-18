@@ -108,6 +108,7 @@ futures = "0.3"
 bytes = "1.5"
 async-trait = "0.1"
 evalexpr = "11"  # Expression evaluation with proper operator precedence
+sha2 = "0.10"
 
 # Testing
 tempfile = "3.8"
@@ -159,4 +160,3 @@ opt-level = 2      # Slightly lower optimization for faster compilation
 lto = "thin"       # Lightweight LTO for balance between speed and size
 codegen-units = 16 # Faster parallel compilation
 strip = false      # Keep symbols for easier debugging
-

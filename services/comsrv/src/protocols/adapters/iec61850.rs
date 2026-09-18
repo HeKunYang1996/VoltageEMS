@@ -42,6 +42,9 @@ use voltage_model::PointType;
 
 use crate::protocols::core::data::{DataBatch, DataPoint, Value};
 use crate::protocols::core::error::{GatewayError, Result};
+use crate::protocols::core::metadata::{
+    DriverMetadata, HasMetadata, ParameterMetadata, ParameterType,
+};
 use crate::protocols::core::point::{PointConfig, TransformConfig};
 use crate::protocols::core::quality::Quality;
 use crate::protocols::core::traits::{
@@ -50,9 +53,9 @@ use crate::protocols::core::traits::{
 use crate::protocols::gateway::ChannelRuntime;
 
 use self::mms::{
-    MmsValue, build_read_request, build_sbo_select_request, build_sbow_select_bool_request,
-    build_write_bool_request, build_write_f32_request, build_write_simple_bool,
-    parse_read_response, parse_report, parse_sbo_select_response, parse_write_response,
+    MmsValue, build_read_request, build_sbo_select_request, build_write_bool_request,
+    build_write_f32_request, build_write_simple_bool, parse_read_response, parse_report,
+    parse_sbo_select_response, parse_write_response,
 };
 use self::transport::Framer;
 
@@ -75,6 +78,7 @@ fn default_request_timeout_ms() -> u64 {
 /// "reports": [
 ///   {
 ///     "rcb_ref": "simpleIOGenericIO/LLN0$BR$EventsBRCB",
+///     "rpt_id": "simpleIOGenericIO/LLN0$BR$EventsBRCB01",
 ///     "dataset_members": [
 ///       "simpleIOGenericIO/GGIO1$ST$SPCSO1$stVal",
 ///       "simpleIOGenericIO/GGIO1$ST$SPCSO2$stVal",
@@ -89,13 +93,19 @@ fn default_request_timeout_ms() -> u64 {
 /// where FC is `BR` (buffered) or `UR` (unbuffered).
 ///
 /// `dataset_members`: ordered list of MMS paths (`"LD/LN$FC$DO$DA"`) matching
-/// the server's dataset definition.  Points whose address matches a member are
-/// **excluded from polling** and supplied exclusively via the report.
+/// the server's dataset definition. Points whose address matches a member are
+/// excluded from polling only after `RptEna` succeeds and report routing is
+/// unambiguous; otherwise they remain on polling fallback.
 /// Leave empty to enable reports without excluding any poll points.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReportConfig {
     /// Full RCB object reference, e.g. `"simpleIOGenericIO/LLN0$BR$EventsBRCB"`.
     pub rcb_ref: String,
+
+    /// RptID carried in InformationReport PDUs. Required when configuring
+    /// multiple RCBs so each report can be routed to the correct dataset.
+    #[serde(default)]
+    pub rpt_id: Option<String>,
 
     /// Ordered MMS paths of the dataset elements, matching the server CID/SCL.
     #[serde(default)]
@@ -119,7 +129,8 @@ pub struct Iec61850ParamsConfig {
     /// Report Control Block subscriptions.  When configured, the channel
     /// subscribes to these RCBs on connect (writes `RptEna=TRUE`, `GI=TRUE`)
     /// and processes incoming unconfirmed report PDUs during each poll cycle.
-    /// Points covered by `dataset_members` are excluded from polling.
+    /// Points covered by `dataset_members` are excluded from polling only after
+    /// the corresponding RCB subscription is active.
     #[serde(default)]
     pub reports: Vec<ReportConfig>,
 }
@@ -179,6 +190,14 @@ pub struct Iec61850Channel {
 
     /// RCB subscriptions configured in channel parameters.
     report_configs: Vec<ReportConfig>,
+
+    /// Indices of RCBs whose RptEna write succeeded. Their traffic must still
+    /// be drained even when missing RptID makes dataset routing ambiguous.
+    subscribed_report_indices: Vec<usize>,
+
+    /// Indices of RCB configurations whose RptEna write succeeded and whose
+    /// reports can be routed unambiguously.
+    active_report_indices: Vec<usize>,
 
     /// Reverse map: full MMS path (`"domain/item"`) → (point_id, type, transform).
     /// Used to decode report data values to DataPoints.
@@ -247,16 +266,6 @@ impl Iec61850Channel {
             path_to_point.insert(path, (pe.id, pe.point_type, pe.transform.clone()));
         }
 
-        // Build the skip-set: poll points whose path appears in any report dataset.
-        let mut report_skip_set: HashSet<u32> = HashSet::new();
-        for rc in &params.reports {
-            for member_path in &rc.dataset_members {
-                if let Some((pt_id, _, _)) = path_to_point.get(member_path) {
-                    report_skip_set.insert(*pt_id);
-                }
-            }
-        }
-
         Self {
             id,
             name: name.into(),
@@ -270,8 +279,10 @@ impl Iec61850Channel {
             ctrl_points,
             adj_points,
             report_configs: params.reports.clone(),
+            subscribed_report_indices: Vec::new(),
+            active_report_indices: Vec::new(),
             path_to_point,
-            report_skip_set,
+            report_skip_set: HashSet::new(),
         }
     }
 
@@ -449,6 +460,9 @@ impl Iec61850Channel {
     fn go_disconnected(&mut self) {
         self.framer = None;
         self.state = ConnectionState::Disconnected;
+        self.subscribed_report_indices.clear();
+        self.active_report_indices.clear();
+        self.report_skip_set.clear();
     }
 
     // ── Report subscription ───────────────────────────────────────────────────
@@ -472,18 +486,49 @@ impl Iec61850Channel {
     /// Failures are non-fatal: a warning is logged and the remaining RCBs are
     /// still attempted.
     async fn subscribe_reports(&mut self) {
+        self.subscribed_report_indices.clear();
+        self.active_report_indices.clear();
+        self.report_skip_set.clear();
         if self.report_configs.is_empty() {
             return;
         }
 
-        // Collect work: (domain, base_item) for each RCB.
-        let work: Vec<(String, String)> = self
+        // Clone the work list to avoid borrowing configuration across MMS I/O.
+        let work: Vec<(usize, ReportConfig, String, String)> = self
             .report_configs
             .iter()
-            .filter_map(|rc| Self::split_rcb_ref(&rc.rcb_ref))
+            .cloned()
+            .enumerate()
+            .filter_map(|(index, rc)| {
+                Self::split_rcb_ref(&rc.rcb_ref)
+                    .map(|(domain, base_item)| (index, rc, domain, base_item))
+            })
             .collect();
 
-        for (domain, base_item) in work {
+        let mut seen_rpt_ids = HashSet::new();
+        for (config_index, config, domain, base_item) in work {
+            if self.report_configs.len() > 1 {
+                let Some(rpt_id) = config
+                    .rpt_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                else {
+                    warn!(
+                        "IEC 61850 [{}] RCB {} has no rpt_id in a multi-RCB channel; not subscribing and keeping its points on polling fallback",
+                        self.name, config.rcb_ref
+                    );
+                    continue;
+                };
+                if !seen_rpt_ids.insert(rpt_id.to_string()) {
+                    warn!(
+                        "IEC 61850 [{}] duplicate rpt_id '{}' for RCB {}; not subscribing and keeping its points on polling fallback",
+                        self.name, rpt_id, config.rcb_ref
+                    );
+                    continue;
+                }
+            }
+
             // Resolve the actual MMS item name: try configured name first,
             // then fall back to "name01" (libiec61850 indexed-RCB convention).
             let resolved_base = match self
@@ -536,6 +581,19 @@ impl Iec61850Channel {
                 },
             };
 
+            self.subscribed_report_indices.push(config_index);
+
+            // Report routing is safe with an explicit RptID, or with exactly
+            // one configured RCB where any received RptID is unambiguous.
+            let routable = config
+                .rpt_id
+                .as_deref()
+                .is_some_and(|rpt_id| !rpt_id.trim().is_empty())
+                || self.report_configs.len() == 1;
+            if routable {
+                self.activate_report(config_index);
+            }
+
             // Write GI = TRUE (trigger an immediate full-dataset snapshot report)
             let invoke_id = self.next_invoke_id();
             let gi_item = format!("{}$GI", resolved_base);
@@ -553,6 +611,20 @@ impl Iec61850Channel {
                         self.name, domain, resolved_base, e
                     );
                 },
+            }
+        }
+    }
+
+    fn activate_report(&mut self, config_index: usize) {
+        if self.active_report_indices.contains(&config_index) {
+            return;
+        }
+        self.active_report_indices.push(config_index);
+        if let Some(config) = self.report_configs.get(config_index) {
+            for member_path in &config.dataset_members {
+                if let Some((point_id, _, _)) = self.path_to_point.get(member_path) {
+                    self.report_skip_set.insert(*point_id);
+                }
             }
         }
     }
@@ -608,39 +680,64 @@ impl Iec61850Channel {
                 .timestamp_ms
                 .and_then(|ms| Utc.timestamp_millis_opt(ms as i64).single());
 
-            // Match each included element to a configured dataset_members entry.
-            for rc in &self.report_configs {
-                if rc.dataset_members.is_empty() {
+            let Some(rc) = self.report_config_for_rpt_id(&report.rpt_id) else {
+                warn!(
+                    "IEC 61850 [{}] report RptID '{}' does not match an active RCB; ignoring",
+                    self.name, report.rpt_id
+                );
+                continue;
+            };
+
+            for (i, &elem_idx) in report.element_indices.iter().enumerate() {
+                let Some(member_path) = rc.dataset_members.get(elem_idx) else {
+                    continue;
+                };
+                let Some((pt_id, pt_type, transform)) = self.path_to_point.get(member_path) else {
+                    continue;
+                };
+                let Some(mms_val) = report.values.get(i) else {
+                    continue;
+                };
+                if !mms_val.is_ok() {
                     continue;
                 }
-                for (i, &elem_idx) in report.element_indices.iter().enumerate() {
-                    let Some(member_path) = rc.dataset_members.get(elem_idx) else {
-                        continue;
-                    };
-                    let Some((pt_id, pt_type, transform)) = self.path_to_point.get(member_path)
-                    else {
-                        continue;
-                    };
-                    let Some(mms_val) = report.values.get(i) else {
-                        continue;
-                    };
-                    if !mms_val.is_ok() {
-                        continue;
-                    }
-                    let raw = mms_to_value(mms_val);
-                    let value = apply_transform(&raw, transform);
-                    out.push(DataPoint {
-                        id: *pt_id,
-                        point_type: *pt_type,
-                        value,
-                        quality: Quality::Good,
-                        timestamp: Utc::now(),
-                        source_timestamp: source_ts,
-                    });
-                }
+                let raw = mms_to_value(mms_val);
+                let value = apply_transform(&raw, transform);
+                out.push(DataPoint {
+                    id: *pt_id,
+                    point_type: *pt_type,
+                    value,
+                    quality: Quality::Good,
+                    timestamp: Utc::now(),
+                    source_timestamp: source_ts,
+                });
             }
         }
         out
+    }
+
+    fn report_config_for_rpt_id(&self, rpt_id: &str) -> Option<&ReportConfig> {
+        let exact = self.active_report_indices.iter().find_map(|&index| {
+            let config = self.report_configs.get(index)?;
+            (config.rpt_id.as_deref().map(str::trim) == Some(rpt_id)).then_some(config)
+        });
+        if exact.is_some() {
+            return exact;
+        }
+
+        if self.active_report_indices.len() == 1 {
+            let config = self.report_configs.get(self.active_report_indices[0])?;
+            if config
+                .rpt_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|configured| !configured.is_empty())
+                .is_none()
+            {
+                return Some(config);
+            }
+        }
+        None
     }
 }
 
@@ -687,11 +784,18 @@ impl ChannelRuntime for Iec61850Channel {
         }
 
         // ── Phase 1: collect pending reports (arrived since last cycle) ────────
-        // drain_socket() reads buffered + incoming 0xA3 PDUs with a short
-        // timeout so we capture reports that arrived while the channel was idle.
-        let report_pdus = if !self.report_configs.is_empty() {
+        // Non-blocking buffered drain captures complete report frames without
+        // consuming partial TCP frames.
+        let report_pdus = if !self.subscribed_report_indices.is_empty() {
             if let Some(framer) = self.framer.as_mut() {
-                framer.drain_socket().await
+                match framer.drain_socket() {
+                    Ok(pdus) => pdus,
+                    Err(e) => {
+                        warn!("IEC 61850 [{}] report drain failed: {}", self.name, e);
+                        self.go_disconnected();
+                        return PollResult::default();
+                    },
+                }
             } else {
                 Vec::new()
             }
@@ -775,7 +879,7 @@ impl ChannelRuntime for Iec61850Channel {
         // ── Phase 3: also collect any reports buffered during the poll phase ──
         // recv_mms() silently buffers 0xA3 PDUs encountered while waiting for
         // confirmed responses; drain them now.
-        let mid_pdus = if !self.report_configs.is_empty() {
+        let mid_pdus = if !self.subscribed_report_indices.is_empty() {
             if let Some(framer) = self.framer.as_mut() {
                 framer.take_pending_reports()
             } else {
@@ -820,6 +924,18 @@ impl ChannelRuntime for Iec61850Channel {
                 },
             };
             let (domain, item, ctrl_model) = entry;
+            if value != 0.0 && value != 1.0 {
+                return Err(GatewayError::Protocol(format!(
+                    "IEC 61850 control point {} only supports boolean SPC values 0 or 1; got {}",
+                    point_id, value
+                )));
+            }
+            if !matches!(ctrl_model, 1 | 2) {
+                return Err(GatewayError::Protocol(format!(
+                    "IEC 61850 control point {} uses ctlModel={}; enhanced-security control is not yet supported safely",
+                    point_id, ctrl_model
+                )));
+            }
             let bool_val = value != 0.0;
 
             // ── Select step (SBO models only) ──────────────────────────────
@@ -862,29 +978,8 @@ impl ChannelRuntime for Iec61850Channel {
                         },
                     }
                 },
-                4 => {
-                    // SBOw-Enhanced: WRITE $SBOw with the same Oper structure
-                    let invoke_id = self.next_invoke_id();
-                    let req = build_sbow_select_bool_request(invoke_id, &domain, &item, bool_val);
-                    match self.do_write(req).await {
-                        Ok(()) => {
-                            info!(
-                                "IEC 61850 [{}] SBOw select+ pt{} ({}/{})",
-                                self.name, point_id, domain, item
-                            );
-                            true
-                        },
-                        Err(e) => {
-                            warn!(
-                                "IEC 61850 [{}] SBOw select pt{} err: {}",
-                                self.name, point_id, e
-                            );
-                            self.go_disconnected();
-                            break;
-                        },
-                    }
-                },
-                _ => true, // ctlModel=1,3: direct control, no select needed
+                1 => true,
+                _ => unreachable!("unsupported control models are rejected above"),
             };
 
             if !selected {
@@ -924,7 +1019,7 @@ impl ChannelRuntime for Iec61850Channel {
         let mut ok = 0;
         for &(point_id, value) in adjustments {
             let entry = match self.adj_points.get(&point_id) {
-                Some(e) => (e.domain.clone(), e.item.clone()),
+                Some(e) => (e.domain.clone(), e.item.clone(), e.ctrl_model),
                 None => {
                     warn!(
                         "IEC 61850 [{}] adjustment point {} not configured",
@@ -933,7 +1028,13 @@ impl ChannelRuntime for Iec61850Channel {
                     continue;
                 },
             };
-            let (domain, item) = entry;
+            let (domain, item, ctrl_model) = entry;
+            if ctrl_model != 1 {
+                return Err(GatewayError::Protocol(format!(
+                    "IEC 61850 adjustment point {} uses ctlModel={}; only direct-normal APC control is currently supported",
+                    point_id, ctrl_model
+                )));
+            }
             let invoke_id = self.next_invoke_id();
             let req = build_write_f32_request(invoke_id, &domain, &item, value as f32);
 
@@ -981,6 +1082,69 @@ impl ChannelRuntime for Iec61850Channel {
     }
 }
 
+impl HasMetadata for Iec61850Channel {
+    #[allow(clippy::disallowed_methods)] // json! macro
+    fn metadata() -> DriverMetadata {
+        DriverMetadata {
+            name: "iec61850",
+            display_name: "IEC 61850 MMS",
+            description: "IEC 61850 MMS client over TCP/ISO for polling, reports, and controls.",
+            is_recommended: true,
+            example_config: serde_json::json!({
+                "address": "192.168.1.10:102",
+                "connect_timeout_ms": 10000,
+                "request_timeout_ms": 5000,
+                "poll_interval_ms": 1000,
+                "reports": [
+                    {
+                        "rcb_ref": "simpleIOGenericIO/LLN0$BR$EventsBRCB",
+                        "rpt_id": "simpleIOGenericIO/LLN0$BR$EventsBRCB01",
+                        "dataset_members": [
+                            "simpleIOGenericIO/GGIO1$ST$SPCSO1$stVal"
+                        ]
+                    }
+                ]
+            }),
+            parameters: vec![
+                ParameterMetadata::required(
+                    "address",
+                    "IED Address",
+                    "IEC 61850 MMS server address in host:port format",
+                    ParameterType::String,
+                ),
+                ParameterMetadata::optional(
+                    "connect_timeout_ms",
+                    "Connect Timeout (ms)",
+                    "TCP and association setup timeout in milliseconds",
+                    ParameterType::Integer,
+                    serde_json::json!(10000),
+                ),
+                ParameterMetadata::optional(
+                    "request_timeout_ms",
+                    "Request Timeout (ms)",
+                    "Per-request MMS timeout in milliseconds",
+                    ParameterType::Integer,
+                    serde_json::json!(5000),
+                ),
+                ParameterMetadata::optional(
+                    "poll_interval_ms",
+                    "Poll Interval (ms)",
+                    "Polling interval for points not supplied by reports",
+                    ParameterType::Integer,
+                    serde_json::json!(1000),
+                ),
+                ParameterMetadata::optional(
+                    "reports",
+                    "Report Control Blocks",
+                    "Optional RCB subscriptions with rcb_ref, rpt_id, and ordered dataset_members",
+                    ParameterType::Array,
+                    serde_json::json!([]),
+                ),
+            ],
+        }
+    }
+}
+
 // ── Value helpers ─────────────────────────────────────────────────────────────
 
 fn mms_to_value(mms: &MmsValue) -> Value {
@@ -1001,5 +1165,131 @@ fn apply_transform(value: &Value, transform: &TransformConfig) -> Value {
         Value::Integer(i) => Value::Float(transform.apply(*i as f64)),
         Value::Bool(b) => Value::Bool(transform.apply_bool(*b)),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocols::core::point::{Iec61850Address, ProtocolAddress};
+
+    fn report(rcb: &str, rpt_id: Option<&str>, member: &str) -> ReportConfig {
+        ReportConfig {
+            rcb_ref: rcb.to_string(),
+            rpt_id: rpt_id.map(str::to_string),
+            dataset_members: vec![member.to_string()],
+        }
+    }
+
+    fn telemetry_point(id: u32, address: &str) -> PointConfig {
+        PointConfig {
+            id,
+            point_type: PointType::Telemetry,
+            name: None,
+            address: ProtocolAddress::Iec61850(Iec61850Address::parse(address).unwrap()),
+            transform: TransformConfig::default(),
+            poll_group: None,
+            enabled: true,
+        }
+    }
+
+    fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+        assert!(content.len() < 128);
+        let mut out = vec![tag, content.len() as u8];
+        out.extend_from_slice(content);
+        out
+    }
+
+    fn boolean_report(rpt_id: &str, value: bool) -> Vec<u8> {
+        let mut items = tlv(0x8A, rpt_id.as_bytes()); // RptID
+        items.extend(tlv(0x84, &[0x00, 0x00])); // OptFlds: no optional fields
+        items.extend(tlv(0x84, &[0x07, 0x80])); // inclusion: one included member
+        items.extend(tlv(0x83, &[u8::from(value)])); // boolean value
+
+        let mut info = tlv(0xA1, &[]); // variableAccessSpecification
+        info.extend(tlv(0xA0, &items)); // listOfAccessResult
+        tlv(0xA3, &tlv(0xA0, &info))
+    }
+
+    #[test]
+    fn report_points_are_polled_until_subscription_is_active() {
+        let member = "LD0/GGIO1$MX$AnIn1$mag$f";
+        let params = Iec61850ParamsConfig {
+            address: "127.0.0.1:102".to_string(),
+            connect_timeout_ms: 10_000,
+            request_timeout_ms: 5_000,
+            reports: vec![report("LD0/LLN0$BR$Events", None, member)],
+        };
+        let mut channel =
+            Iec61850Channel::new(1, "test", &params, vec![telemetry_point(101, member)]);
+
+        assert!(!channel.report_skip_set.contains(&101));
+        channel.activate_report(0);
+        assert!(channel.report_skip_set.contains(&101));
+        channel.go_disconnected();
+        assert!(!channel.report_skip_set.contains(&101));
+    }
+
+    #[test]
+    fn multiple_reports_are_selected_by_rpt_id() {
+        let params = Iec61850ParamsConfig {
+            address: "127.0.0.1:102".to_string(),
+            connect_timeout_ms: 10_000,
+            request_timeout_ms: 5_000,
+            reports: vec![
+                report("LD0/LLN0$BR$EventsA", Some("Events-A"), "LD0/A"),
+                report("LD0/LLN0$BR$EventsB", Some("Events-B"), "LD0/B"),
+            ],
+        };
+        let mut channel = Iec61850Channel::new(1, "test", &params, Vec::new());
+        channel.activate_report(0);
+        channel.activate_report(1);
+
+        let selected = channel.report_config_for_rpt_id("Events-B").unwrap();
+        assert_eq!(selected.dataset_members, ["LD0/B"]);
+        assert!(channel.report_config_for_rpt_id("unknown").is_none());
+    }
+
+    #[test]
+    fn report_values_are_not_applied_to_other_rcb_datasets() {
+        let params = Iec61850ParamsConfig {
+            address: "127.0.0.1:102".to_string(),
+            connect_timeout_ms: 10_000,
+            request_timeout_ms: 5_000,
+            reports: vec![
+                report("LD0/LLN0$BR$EventsA", Some("Events-A"), "LD0/A"),
+                report("LD0/LLN0$BR$EventsB", Some("Events-B"), "LD0/B"),
+            ],
+        };
+        let mut channel = Iec61850Channel::new(
+            1,
+            "test",
+            &params,
+            vec![telemetry_point(101, "LD0/A"), telemetry_point(102, "LD0/B")],
+        );
+        channel.activate_report(0);
+        channel.activate_report(1);
+
+        let points = channel.process_report_pdus(vec![boolean_report("Events-B", true)]);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].id, 102);
+    }
+
+    #[test]
+    fn single_report_without_rpt_id_has_compatibility_fallback() {
+        let params = Iec61850ParamsConfig {
+            address: "127.0.0.1:102".to_string(),
+            connect_timeout_ms: 10_000,
+            request_timeout_ms: 5_000,
+            reports: vec![report("LD0/LLN0$BR$Events", None, "LD0/A")],
+        };
+        let mut channel = Iec61850Channel::new(1, "test", &params, Vec::new());
+        channel.activate_report(0);
+
+        assert!(
+            channel
+                .report_config_for_rpt_id("vendor-defined-id")
+                .is_some()
+        );
     }
 }
