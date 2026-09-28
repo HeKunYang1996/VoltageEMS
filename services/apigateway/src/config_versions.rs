@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration as StdDuration;
 
 use axum::{
     Extension, Json,
@@ -33,6 +34,7 @@ const DEFAULT_HISTORY_DIR: &str = "/app/config-history";
 const MAX_ARCHIVE_FILES: usize = 10_000;
 const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 const IMPORT_TTL_MINUTES: i64 = 30;
+const CONFIG_ARCHIVE_CAPACITY_BYTES: u64 = 500 * 1024 * 1024;
 const PRESERVED_AUTH_TABLES: &[&str] = &["roles", "users"];
 
 static CONFIG_OPERATION: AtomicBool = AtomicBool::new(false);
@@ -51,6 +53,56 @@ fn history_dir() -> PathBuf {
 
 fn archives_dir() -> PathBuf {
     history_dir().join("archives")
+}
+
+fn archive_storage_used_bytes(root: &Path) -> io::Result<u64> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    let mut used = 0_u64;
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file()
+            || !entry
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("zip"))
+        {
+            continue;
+        }
+        used = used.saturating_add(entry.metadata()?.len());
+    }
+    Ok(used)
+}
+
+fn ensure_archive_capacity(root: &Path, requested_bytes: u64) -> anyhow::Result<()> {
+    let used_bytes = archive_storage_used_bytes(root)?;
+    if used_bytes.saturating_add(requested_bytes) > CONFIG_ARCHIVE_CAPACITY_BYTES {
+        return Err(ConfigStorageInsufficient {
+            used_bytes,
+            requested_bytes,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn rounded_percentage(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        return 0.0;
+    }
+    ((numerator as f64 / denominator as f64 * 100.0) * 100.0).round() / 100.0
+}
+
+fn bytes_to_megabytes(bytes: u64) -> f64 {
+    ((bytes as f64 / (1024 * 1024) as f64) * 100.0).round() / 100.0
+}
+
+fn version_name(revision: i64) -> String {
+    format!("V{revision}")
 }
 
 fn archive_filename(version: &str, created_at: &str) -> String {
@@ -92,11 +144,30 @@ impl Drop for StagingDir {
     }
 }
 
+#[derive(Debug)]
 struct ConfigFailure {
     status: StatusCode,
     code: &'static str,
     message: String,
 }
+
+#[derive(Debug)]
+struct ConfigStorageInsufficient {
+    used_bytes: u64,
+    requested_bytes: u64,
+}
+
+impl std::fmt::Display for ConfigStorageInsufficient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "configuration archives use {} bytes and need {} additional bytes, exceeding the {} byte limit",
+            self.used_bytes, self.requested_bytes, CONFIG_ARCHIVE_CAPACITY_BYTES
+        )
+    }
+}
+
+impl std::error::Error for ConfigStorageInsufficient {}
 
 impl IntoResponse for ConfigFailure {
     fn into_response(self) -> Response {
@@ -130,6 +201,18 @@ fn error_response(status: StatusCode, code: &str, message: impl Into<String>) ->
         })),
     )
         .into_response()
+}
+
+fn storage_insufficient_response(error: &anyhow::Error) -> Option<Response> {
+    error
+        .downcast_ref::<ConfigStorageInsufficient>()
+        .map(|error| {
+            error_response(
+                StatusCode::CONFLICT,
+                "CONFIG_STORAGE_INSUFFICIENT",
+                error.to_string(),
+            )
+        })
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -194,9 +277,10 @@ struct ValidatedArchive {
 
 pub async fn initialize(db: &SqlitePool) -> anyhow::Result<()> {
     let pool = history_pool().await?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM config_versions")
-        .fetch_one(&pool)
-        .await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM config_versions WHERE deleted_at IS NULL")
+            .fetch_one(&pool)
+            .await?;
     if count == 0 && data_dir().exists() {
         let claims = Claims {
             user_id: 0,
@@ -217,10 +301,27 @@ pub async fn initialize(db: &SqlitePool) -> anyhow::Result<()> {
             Some("Initial local configuration baseline".to_string()),
             &claims,
             false,
+            0,
         )
         .await?;
     }
+    start_import_cleanup_task();
     Ok(())
+}
+
+fn start_import_cleanup_task() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(StdDuration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match history_pool().await {
+                Ok(pool) => pool.close().await,
+                Err(e) => warn!("Periodic staged import cleanup failed: {}", e),
+            }
+        }
+    });
 }
 
 async fn history_pool() -> anyhow::Result<SqlitePool> {
@@ -250,11 +351,33 @@ async fn history_pool() -> anyhow::Result<SqlitePool> {
             operator_id INTEGER,
             operator_name TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            activated_at TEXT NOT NULL
+            activated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            deleted_by_id INTEGER,
+            deleted_by_name TEXT
         )",
     )
     .execute(&pool)
     .await?;
+    for (column, definition) in [
+        ("deleted_at", "TEXT"),
+        ("deleted_by_id", "INTEGER"),
+        ("deleted_by_name", "TEXT"),
+    ] {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('config_versions') WHERE name = ?",
+        )
+        .bind(column)
+        .fetch_one(&pool)
+        .await?;
+        if !exists {
+            sqlx::query(&format!(
+                "ALTER TABLE config_versions ADD COLUMN {column} {definition}"
+            ))
+            .execute(&pool)
+            .await?;
+        }
+    }
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS config_state (
             singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
@@ -280,14 +403,75 @@ async fn history_pool() -> anyhow::Result<SqlitePool> {
     )
     .execute(&pool)
     .await?;
+    if let Err(e) = cleanup_import_packages(&pool, &root.join("imports")).await {
+        warn!("Clean up staged configuration imports failed: {}", e);
+    }
     Ok(pool)
+}
+
+async fn cleanup_import_packages(pool: &SqlitePool, imports_root: &Path) -> anyhow::Result<usize> {
+    let rows = sqlx::query(
+        "SELECT id, staged_path, status, expires_at
+         FROM config_imports
+         WHERE staged_path <> ''
+           AND status IN ('validated', 'invalid', 'applied')",
+    )
+    .fetch_all(pool)
+    .await?;
+    let now = Utc::now();
+    let mut cleaned = 0;
+
+    for row in rows {
+        let id: String = row.get("id");
+        let staged_path: String = row.get("staged_path");
+        let status: String = row.get("status");
+        let expires_at: String = row.get("expires_at");
+        let expired = chrono::DateTime::parse_from_rfc3339(&expires_at)
+            .map(|value| value.with_timezone(&Utc) <= now)
+            .unwrap_or(true);
+        if status == "validated" && !expired {
+            continue;
+        }
+
+        let Ok(import_id) = Uuid::parse_str(&id) else {
+            warn!("Skip staged import cleanup with invalid id: {}", id);
+            continue;
+        };
+        let expected_path = imports_root.join(format!("{}.zip", import_id));
+        if Path::new(&staged_path) != expected_path {
+            warn!(
+                "Skip staged import cleanup outside imports directory: {}",
+                staged_path
+            );
+            continue;
+        }
+
+        match std::fs::remove_file(&expected_path) {
+            Ok(()) => {},
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+            Err(e) => {
+                warn!("Remove staged import {} failed: {}", id, e);
+                continue;
+            },
+        }
+        sqlx::query("UPDATE config_imports SET staged_path = '' WHERE id = ?")
+            .bind(&id)
+            .execute(pool)
+            .await?;
+        cleaned += 1;
+    }
+
+    if cleaned > 0 {
+        info!("Cleaned {} staged configuration import package(s)", cleaned);
+    }
+    Ok(cleaned)
 }
 
 async fn current_version(pool: &SqlitePool) -> anyhow::Result<Option<VersionRow>> {
     sqlx::query_as::<_, VersionRow>(
         "SELECT v.* FROM config_versions v
          JOIN config_state s ON s.current_version_id = v.id
-         WHERE s.singleton_id = 1",
+         WHERE s.singleton_id = 1 AND v.deleted_at IS NULL",
     )
     .fetch_optional(pool)
     .await
@@ -331,31 +515,35 @@ fn collect_paths(root: &Path) -> io::Result<Vec<PathBuf>> {
 
     let mut paths = Vec::new();
     visit(root, &mut paths)?;
-    paths.sort();
     Ok(paths)
 }
 
-fn hash_data_tree(root: &Path) -> io::Result<String> {
-    let mut hash = Sha256::new();
+fn collect_archive_entries(root: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
+    let mut entries = Vec::new();
     for path in collect_paths(root)? {
         let rel = path
             .strip_prefix(root)
             .map_err(|e| io::Error::other(e.to_string()))?;
-        hash.update(rel.to_string_lossy().as_bytes());
-        let mut file = File::open(path)?;
-        let mut buf = [0_u8; 64 * 1024];
-        loop {
-            let read = file.read(&mut buf)?;
-            if read == 0 {
-                break;
-            }
-            hash.update(&buf[..read]);
-        }
+        let name = rel.to_string_lossy().replace('\\', "/");
+        entries.push((name, std::fs::read(path)?));
     }
-    Ok(format!("sha256:{:x}", hash.finalize()))
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(entries)
 }
 
-fn create_archive(root: &Path, manifest: &PackageManifest) -> io::Result<Vec<u8>> {
+fn hash_content_entries(entries: &[(String, Vec<u8>)]) -> String {
+    let mut hash = Sha256::new();
+    for (name, bytes) in entries {
+        hash.update(name.as_bytes());
+        hash.update(bytes);
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn create_archive(
+    entries: &[(String, Vec<u8>)],
+    manifest: &PackageManifest,
+) -> io::Result<Vec<u8>> {
     let cursor = io::Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(cursor);
     let options = zip::write::SimpleFileOptions::default()
@@ -364,14 +552,9 @@ fn create_archive(root: &Path, manifest: &PackageManifest) -> io::Result<Vec<u8>
     zip.start_file("manifest.json", options)?;
     zip.write_all(&serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?)?;
 
-    for path in collect_paths(root)? {
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let rel_name = rel.to_string_lossy().replace('\\', "/");
-        zip.start_file(rel_name, options)?;
-        let mut input = File::open(path)?;
-        io::copy(&mut input, &mut zip)?;
+    for (name, bytes) in entries {
+        zip.start_file(name, options)?;
+        zip.write_all(bytes)?;
     }
     Ok(zip.finish()?.into_inner())
 }
@@ -386,10 +569,12 @@ async fn create_version(
     description: Option<String>,
     claims: &Claims,
     deduplicate: bool,
+    reserved_archive_bytes: u64,
 ) -> anyhow::Result<(VersionRow, bool)> {
     checkpoint_database(db).await;
     let root = data_dir();
-    let content_hash = hash_data_tree(&root)?;
+    let entries = collect_archive_entries(&root)?;
+    let content_hash = hash_content_entries(&entries);
 
     if deduplicate
         && let Some(current) = current_version(history).await?
@@ -403,7 +588,7 @@ async fn create_version(
             .fetch_one(history)
             .await?;
     let id = Uuid::new_v4().to_string();
-    let version = format!("V1.0.{}", revision);
+    let version = version_name(revision);
     let now = Utc::now().to_rfc3339();
     let manifest = PackageManifest {
         package_type: "voltageems-config".to_string(),
@@ -413,8 +598,14 @@ async fn create_version(
         created_by: claims.username.clone(),
         content_hash: content_hash.clone(),
     };
-    let archive = create_archive(&root, &manifest)?;
-    let archive_path = archives_dir().join(archive_filename(&version, &now));
+    let archive = create_archive(&entries, &manifest)?;
+    let archive_root = archives_dir();
+    let archive_bytes = u64::try_from(archive.len()).unwrap_or(u64::MAX);
+    ensure_archive_capacity(
+        &archive_root,
+        archive_bytes.saturating_add(reserved_archive_bytes),
+    )?;
+    let archive_path = archive_root.join(archive_filename(&version, &now));
     std::fs::write(&archive_path, &archive)?;
 
     sqlx::query(
@@ -532,6 +723,7 @@ pub async fn backup_current(
         request.description,
         &claims,
         true,
+        0,
     )
     .await
     {
@@ -552,6 +744,9 @@ pub async fn backup_current(
         )
             .into_response(),
         Err(e) => {
+            if let Some(response) = storage_insufficient_response(&e) {
+                return response;
+            }
             error!("Create config backup error: {}", e);
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -584,21 +779,24 @@ pub async fn list_versions(Query(query): Query<VersionsQuery>) -> Response {
             .fetch_optional(&pool)
             .await
             .unwrap_or(None);
-    let total: i64 = match sqlx::query_scalar("SELECT COUNT(*) FROM config_versions")
-        .fetch_one(&pool)
-        .await
-    {
-        Ok(total) => total,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "CONFIG_HISTORY_READ_FAILED",
-                e.to_string(),
-            );
-        },
-    };
+    let total: i64 =
+        match sqlx::query_scalar("SELECT COUNT(*) FROM config_versions WHERE deleted_at IS NULL")
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(total) => total,
+            Err(e) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "CONFIG_HISTORY_READ_FAILED",
+                    e.to_string(),
+                );
+            },
+        };
     let rows = match sqlx::query_as::<_, VersionRow>(
-        "SELECT * FROM config_versions ORDER BY revision DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM config_versions
+         WHERE deleted_at IS NULL
+         ORDER BY revision DESC LIMIT ? OFFSET ?",
     )
     .bind(page_size)
     .bind(offset)
@@ -610,6 +808,16 @@ pub async fn list_versions(Query(query): Query<VersionsQuery>) -> Response {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "CONFIG_HISTORY_READ_FAILED",
+                e.to_string(),
+            );
+        },
+    };
+    let backup_size_bytes = match archive_storage_used_bytes(&archives_dir()) {
+        Ok(size) => size,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_STORAGE_READ_FAILED",
                 e.to_string(),
             );
         },
@@ -645,7 +853,184 @@ pub async fn list_versions(Query(query): Query<VersionsQuery>) -> Response {
                 "page_size": page_size,
                 "total": total,
                 "total_pages": (total + page_size - 1) / page_size
+            },
+            "storage": {
+                "backup_size_mb": bytes_to_megabytes(backup_size_bytes),
+                "total_size_mb": bytes_to_megabytes(CONFIG_ARCHIVE_CAPACITY_BYTES),
+                "used_percent": rounded_percentage(
+                    backup_size_bytes,
+                    CONFIG_ARCHIVE_CAPACITY_BYTES
+                )
             }
+        }
+    }))
+    .into_response()
+}
+
+async fn delete_version_data(
+    pool: &SqlitePool,
+    version: &VersionRow,
+    claims: &Claims,
+    archive_root: &Path,
+) -> Result<(String, bool), ConfigFailure> {
+    let archive_path = PathBuf::from(&version.archive_path);
+    if archive_path.parent() != Some(archive_root) {
+        return Err(ConfigFailure {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "CONFIG_ARCHIVE_PATH_INVALID",
+            message: "Configuration archive path is outside the archive directory".to_string(),
+        });
+    }
+    let tombstone = archive_root.join(format!(".deleting-{}.tmp", Uuid::new_v4()));
+    let archive_moved = match std::fs::rename(&archive_path, &tombstone) {
+        Ok(()) => true,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => {
+            return Err(ConfigFailure {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "CONFIG_ARCHIVE_DELETE_FAILED",
+                message: e.to_string(),
+            });
+        },
+    };
+
+    let deleted_at = Utc::now().to_rfc3339();
+    let update = sqlx::query(
+        "UPDATE config_versions
+         SET deleted_at = ?, deleted_by_id = ?, deleted_by_name = ?
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&deleted_at)
+    .bind(claims.user_id)
+    .bind(&claims.username)
+    .bind(&version.id)
+    .execute(pool)
+    .await;
+    if let Err(e) = update {
+        if archive_moved && let Err(restore_error) = std::fs::rename(&tombstone, &archive_path) {
+            error!(
+                "Restore archive after delete metadata failure failed: {}",
+                restore_error
+            );
+        }
+        return Err(ConfigFailure {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "CONFIG_VERSION_DELETE_FAILED",
+            message: e.to_string(),
+        });
+    }
+
+    if archive_moved && let Err(e) = std::fs::remove_file(&tombstone) {
+        let _ = sqlx::query(
+            "UPDATE config_versions
+             SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL
+             WHERE id = ?",
+        )
+        .bind(&version.id)
+        .execute(pool)
+        .await;
+        let _ = std::fs::rename(&tombstone, &archive_path);
+        return Err(ConfigFailure {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "CONFIG_ARCHIVE_DELETE_FAILED",
+            message: e.to_string(),
+        });
+    }
+
+    Ok((deleted_at, archive_moved))
+}
+
+#[utoipa::path(delete, path = "/api/v1/config/versions/{version_id}", tag = "Config",
+    security(("bearer_auth" = [])),
+    params(("version_id" = String, Path, description = "Configuration version ID")),
+    responses(
+        (status = 200, description = "Configuration version deleted"),
+        (status = 404, description = "Version not found"),
+        (status = 409, description = "Current version cannot be deleted")
+    ))]
+pub async fn delete_version(
+    Extension(claims): Extension<Claims>,
+    AxumPath(version_id): AxumPath<String>,
+) -> Response {
+    let _guard = match acquire_operation() {
+        Ok(guard) => guard,
+        Err(error) => return error.into_response(),
+    };
+    let pool = match history_pool().await {
+        Ok(pool) => pool,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_HISTORY_UNAVAILABLE",
+                e.to_string(),
+            );
+        },
+    };
+    let current_id: Option<String> = match sqlx::query_scalar(
+        "SELECT current_version_id FROM config_state WHERE singleton_id = 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_HISTORY_READ_FAILED",
+                e.to_string(),
+            );
+        },
+    };
+    if current_id.as_deref() == Some(version_id.as_str()) {
+        return error_response(
+            StatusCode::CONFLICT,
+            "CONFIG_VERSION_CURRENT",
+            "The current configuration version cannot be deleted",
+        );
+    }
+
+    let version = match sqlx::query_as::<_, VersionRow>(
+        "SELECT * FROM config_versions WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&version_id)
+    .fetch_optional(&pool)
+    .await
+    {
+        Ok(Some(version)) => version,
+        Ok(None) => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                "CONFIG_VERSION_NOT_FOUND",
+                "Configuration version not found",
+            );
+        },
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_HISTORY_READ_FAILED",
+                e.to_string(),
+            );
+        },
+    };
+
+    let (deleted_at, archive_moved) =
+        match delete_version_data(&pool, &version, &claims, &archives_dir()).await {
+            Ok(result) => result,
+            Err(error) => return error.into_response(),
+        };
+
+    info!(
+        "Configuration version deleted: {} ({}) by {}",
+        version.id, version.version, claims.username
+    );
+    Json(json!({
+        "success": true,
+        "data": {
+            "id": version.id,
+            "version": version.version,
+            "archive_size": version.archive_size,
+            "archive_removed": archive_moved,
+            "deleted_at": deleted_at
         }
     }))
     .into_response()
@@ -675,6 +1060,10 @@ fn archive_download(data: Vec<u8>, filename: &str) -> Response {
     params(("version_id" = String, Path, description = "Configuration version ID")),
     responses((status = 200, description = "Version ZIP archive"), (status = 404, description = "Version not found")))]
 pub async fn export_version(AxumPath(version_id): AxumPath<String>) -> Response {
+    let _guard = match acquire_operation() {
+        Ok(guard) => guard,
+        Err(error) => return error.into_response(),
+    };
     let pool = match history_pool().await {
         Ok(pool) => pool,
         Err(e) => {
@@ -685,10 +1074,12 @@ pub async fn export_version(AxumPath(version_id): AxumPath<String>) -> Response 
             );
         },
     };
-    let row = match sqlx::query_as::<_, VersionRow>("SELECT * FROM config_versions WHERE id = ?")
-        .bind(&version_id)
-        .fetch_optional(&pool)
-        .await
+    let row = match sqlx::query_as::<_, VersionRow>(
+        "SELECT * FROM config_versions WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&version_id)
+    .fetch_optional(&pool)
+    .await
     {
         Ok(Some(row)) => row,
         Ok(None) => {
@@ -723,6 +1114,10 @@ pub async fn export_current(
     State(state): State<std::sync::Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Response {
+    let _guard = match acquire_operation() {
+        Ok(guard) => guard,
+        Err(error) => return error.into_response(),
+    };
     checkpoint_database(&state.db).await;
     let root = data_dir();
     if !root.exists() {
@@ -748,8 +1143,8 @@ pub async fn export_current(
         .flatten()
         .map(|v| v.version)
         .unwrap_or_else(|| "unversioned".to_string());
-    let content_hash = match hash_data_tree(&root) {
-        Ok(hash) => hash,
+    let entries = match collect_archive_entries(&root) {
+        Ok(entries) => entries,
         Err(e) => {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -758,6 +1153,7 @@ pub async fn export_current(
             );
         },
     };
+    let content_hash = hash_content_entries(&entries);
     let created_at = Utc::now().to_rfc3339();
     let manifest = PackageManifest {
         package_type: "voltageems-config".to_string(),
@@ -767,7 +1163,7 @@ pub async fn export_current(
         created_by: claims.username,
         content_hash,
     };
-    match create_archive(&root, &manifest) {
+    match create_archive(&entries, &manifest) {
         Ok(data) => archive_download(data, &archive_filename(&version, &created_at)),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -816,12 +1212,7 @@ fn validate_archive(data: &[u8]) -> io::Result<ValidatedArchive> {
         .as_ref()
         .is_some_and(|m| m.package_type == "voltageems-config" && m.format_version == 1);
     content_entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut content_hasher = Sha256::new();
-    for (name, bytes) in &content_entries {
-        content_hasher.update(name.as_bytes());
-        content_hasher.update(bytes);
-    }
-    let actual_content_hash = format!("sha256:{:x}", content_hasher.finalize());
+    let actual_content_hash = hash_content_entries(&content_entries);
     let checksum_matches = manifest
         .as_ref()
         .is_some_and(|value| value.content_hash == actual_content_hash);
@@ -1048,6 +1439,11 @@ pub async fn validate_import(
             "CONFIG_IMPORT_STAGE_FAILED",
             e.to_string(),
         );
+    }
+    if !validation.valid
+        && let Err(e) = cleanup_import_packages(&pool, &imports_dir()).await
+    {
+        warn!("Clean up invalid configuration import failed: {}", e);
     }
 
     let package = validation.manifest.as_ref().map(|m| {
@@ -1351,14 +1747,17 @@ async fn apply_archive(
         }),
         claims,
         false,
+        u64::try_from(data.len()).unwrap_or(u64::MAX),
     )
     .await
     .map_err(|e| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "CONFIG_SNAPSHOT_FAILED",
-            e.to_string(),
-        )
+        storage_insufficient_response(&e).unwrap_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_SNAPSHOT_FAILED",
+                e.to_string(),
+            )
+        })
     })?;
 
     let staging = StagingDir::create().map_err(|e| {
@@ -1438,14 +1837,17 @@ async fn apply_archive(
         description,
         claims,
         false,
+        0,
     )
     .await
     .map_err(|e| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "CONFIG_VERSION_CREATE_FAILED",
-            e.to_string(),
-        )
+        storage_insufficient_response(&e).unwrap_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CONFIG_VERSION_CREATE_FAILED",
+                e.to_string(),
+            )
+        })
     })?;
     Ok(json!({
         "version": version,
@@ -1559,10 +1961,18 @@ pub async fn apply_import(
     .await
     {
         Ok(result) => {
-            let _ = sqlx::query("UPDATE config_imports SET status = 'applied' WHERE id = ?")
+            match sqlx::query("UPDATE config_imports SET status = 'applied' WHERE id = ?")
                 .bind(&import_id)
                 .execute(&history)
-                .await;
+                .await
+            {
+                Ok(_) => {
+                    if let Err(e) = cleanup_import_packages(&history, &imports_dir()).await {
+                        warn!("Clean up applied configuration import failed: {}", e);
+                    }
+                },
+                Err(e) => warn!("Update applied configuration import status failed: {}", e),
+            }
             info!("Configuration import applied: {}", import_id);
             Json(json!({"success": true, "data": result})).into_response()
         },
@@ -1609,10 +2019,12 @@ pub async fn restore_version(
             "The selected version is already current",
         );
     }
-    let source = match sqlx::query_as::<_, VersionRow>("SELECT * FROM config_versions WHERE id = ?")
-        .bind(&version_id)
-        .fetch_optional(&history)
-        .await
+    let source = match sqlx::query_as::<_, VersionRow>(
+        "SELECT * FROM config_versions WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&version_id)
+    .fetch_optional(&history)
+    .await
     {
         Ok(Some(row)) => row,
         Ok(None) => {
@@ -1663,10 +2075,32 @@ mod tests {
 
     #[test]
     fn uses_readable_archive_filename() {
+        assert_eq!(version_name(1), "V1");
+        assert_eq!(version_name(23), "V23");
         assert_eq!(
-            archive_filename("V1.0.5", "2026-09-18T10:30:00+08:00"),
-            "Config_V1.0.5_20260918-103000.zip"
+            archive_filename("V5", "2026-09-18T10:30:00+08:00"),
+            "Config_V5_20260918-103000.zip"
         );
+    }
+
+    #[test]
+    fn enforces_archive_capacity_using_zip_files_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("Config_V1.zip");
+        let file = File::create(&archive).unwrap();
+        file.set_len(CONFIG_ARCHIVE_CAPACITY_BYTES - 10).unwrap();
+        let ignored = File::create(temp.path().join("staging.tmp")).unwrap();
+        ignored.set_len(1024).unwrap();
+
+        assert_eq!(
+            archive_storage_used_bytes(temp.path()).unwrap(),
+            CONFIG_ARCHIVE_CAPACITY_BYTES - 10
+        );
+        ensure_archive_capacity(temp.path(), 10).unwrap();
+        let error = ensure_archive_capacity(temp.path(), 11).unwrap_err();
+        assert!(error.downcast_ref::<ConfigStorageInsufficient>().is_some());
+        assert_eq!(bytes_to_megabytes(CONFIG_ARCHIVE_CAPACITY_BYTES), 500.0);
+        assert_eq!(rounded_percentage(1, 4), 25.0);
     }
 
     #[cfg(unix)]
@@ -1698,7 +2132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validates_generated_archive() {
+    async fn validates_generated_archive_with_shared_file_and_directory_prefix() {
         let temp = tempfile::tempdir().unwrap();
         let database_path = temp.path().join("voltage.db");
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -1718,19 +2152,186 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
-        let content_hash = hash_data_tree(temp.path()).unwrap();
+
+        let instances_dir = temp.path().join("config/modsrv/instances/diesel_gen_01");
+        std::fs::create_dir_all(&instances_dir).unwrap();
+        std::fs::write(
+            temp.path().join("config/modsrv/instances.yaml"),
+            b"instances: []",
+        )
+        .unwrap();
+        std::fs::write(instances_dir.join("instance.yaml"), b"id: diesel_gen_01").unwrap();
+
+        let entries = collect_archive_entries(temp.path()).unwrap();
+        let content_hash = hash_content_entries(&entries);
         let manifest = PackageManifest {
             package_type: "voltageems-config".to_string(),
             format_version: 1,
-            config_version: "V1.0.1".to_string(),
+            config_version: "V1".to_string(),
             created_at: Utc::now().to_rfc3339(),
             created_by: "test".to_string(),
             content_hash,
         };
-        let data = create_archive(temp.path(), &manifest).unwrap();
+        let data = create_archive(&entries, &manifest).unwrap();
         let result = validate_package(&data).await.unwrap();
         assert!(result.valid);
         assert!(result.checks.iter().all(|check| check.passed));
+    }
+
+    #[tokio::test]
+    async fn deletes_version_archive_but_keeps_audit_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let archives = temp.path().join("archives");
+        std::fs::create_dir(&archives).unwrap();
+        let archive_path = archives.join("Config_V1.zip");
+        std::fs::write(&archive_path, b"archive").unwrap();
+        let database_path = temp.path().join("metadata.db");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(common::bootstrap_database::sqlite_connect_options(
+                database_path.to_str().unwrap(),
+            ))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE config_versions (
+                id TEXT PRIMARY KEY,
+                deleted_at TEXT,
+                deleted_by_id INTEGER,
+                deleted_by_name TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let id = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO config_versions (id) VALUES (?)")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let version = VersionRow {
+            id: id.clone(),
+            revision: 1,
+            version: "V1".to_string(),
+            origin: "manual_backup".to_string(),
+            source_version_id: None,
+            source_filename: None,
+            description: None,
+            content_hash: "sha256:test".to_string(),
+            archive_path: archive_path.to_string_lossy().into_owned(),
+            archive_size: 7,
+            operator_id: Some(1),
+            operator_name: "creator".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            activated_at: Utc::now().to_rfc3339(),
+        };
+        let claims = Claims {
+            user_id: 2,
+            username: "deleter".to_string(),
+            role: Some("Engineer".to_string()),
+            token_id: None,
+            auth_version: 0,
+            exp: 0,
+            iat: 0,
+            token_type: "access".to_string(),
+        };
+
+        let (_, archive_removed) = delete_version_data(&pool, &version, &claims, &archives)
+            .await
+            .unwrap();
+        assert!(archive_removed);
+        assert!(!archive_path.exists());
+        let audit: (Option<String>, Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT deleted_at, deleted_by_id, deleted_by_name
+             FROM config_versions WHERE id = ?",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(audit.0.is_some());
+        assert_eq!(audit.1, Some(2));
+        assert_eq!(audit.2.as_deref(), Some("deleter"));
+        let visible_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM config_versions WHERE deleted_at IS NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(visible_count, 0);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn cleans_invalid_applied_and_expired_import_packages() {
+        let temp = tempfile::tempdir().unwrap();
+        let imports = temp.path().join("imports");
+        std::fs::create_dir(&imports).unwrap();
+        let database_path = temp.path().join("metadata.db");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(common::bootstrap_database::sqlite_connect_options(
+                database_path.to_str().unwrap(),
+            ))
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE config_imports (
+                id TEXT PRIMARY KEY,
+                staged_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let invalid_id = Uuid::new_v4();
+        let applied_id = Uuid::new_v4();
+        let expired_id = Uuid::new_v4();
+        let active_id = Uuid::new_v4();
+        let expired_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+        let active_until = (Utc::now() + Duration::minutes(30)).to_rfc3339();
+        for (id, status, expires_at) in [
+            (invalid_id, "invalid", active_until.as_str()),
+            (applied_id, "applied", active_until.as_str()),
+            (expired_id, "validated", expired_at.as_str()),
+            (active_id, "validated", active_until.as_str()),
+        ] {
+            let path = imports.join(format!("{}.zip", id));
+            std::fs::write(&path, b"zip").unwrap();
+            sqlx::query(
+                "INSERT INTO config_imports (id, staged_path, status, expires_at)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(id.to_string())
+            .bind(path.to_string_lossy().as_ref())
+            .bind(status)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(cleanup_import_packages(&pool, &imports).await.unwrap(), 3);
+        for id in [invalid_id, applied_id, expired_id] {
+            assert!(!imports.join(format!("{}.zip", id)).exists());
+            let staged_path: String =
+                sqlx::query_scalar("SELECT staged_path FROM config_imports WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert!(staged_path.is_empty());
+        }
+        assert!(imports.join(format!("{}.zip", active_id)).exists());
+        let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM config_imports")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 4);
+        pool.close().await;
     }
 
     #[tokio::test]

@@ -87,6 +87,7 @@ use crate::ws::WsHub;
         config_versions::get_current,
         config_versions::backup_current,
         config_versions::list_versions,
+        config_versions::delete_version,
         config_versions::export_version,
         config_versions::validate_import,
         config_versions::apply_import,
@@ -246,6 +247,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(config_versions::import_compat).layer(DefaultBodyLimit::max(64 * 1024 * 1024)), // 64 MB for config ZIP
         )
         .route("/backups", post(config_versions::backup_current))
+        .route(
+            "/versions/{version_id}",
+            delete(config_versions::delete_version),
+        )
         .route(
             "/imports/validate",
             post(config_versions::validate_import).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
