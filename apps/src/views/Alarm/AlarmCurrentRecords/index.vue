@@ -26,20 +26,45 @@
 
       <!-- table -->
       <div class="alarm-records__table vt-table-shell">
-        <el-table :data="tableData" class="alarm-records__table-content vt-table-content">
-          <el-table-column prop="rule_name" label="Rule Name" :min-width="160" show-overflow-tooltip />
-          <el-table-column prop="warning_level" label="Alarm Level" :width="160">
+        <el-table
+          :data="tableData"
+          class="alarm-records__table-content vt-table-content"
+          table-layout="fixed"
+          align="left"
+        >
+          <el-table-column
+            prop="rule_name"
+            label="Rule Name"
+            min-width="160"
+            class-name="table-ellipsis"
+            show-overflow-tooltip
+          />
+          <el-table-column prop="warning_level" label="Alarm Level" :min-width="160">
             <template #default="{ row }">
               <span class="alarm-records__table-level-text" :class="`alarm-level--${row.warning_level}`">
                 {{ levelTextList[row.warning_level as 1 | 2 | 3] || '-' }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="Device Name" :min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.device_name || '-' }}</template>
+          <el-table-column
+            label="Device Name"
+            min-width="160"
+            class-name="table-ellipsis"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span class="table-ellipsis__text vt-ellipsis">{{ row.device_name || '-' }}</span>
+            </template>
           </el-table-column>
-          <el-table-column label="Point Name" :min-width="140" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.point_name || '-' }}</template>
+          <el-table-column
+            label="Point Name"
+            min-width="140"
+            class-name="table-ellipsis"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span class="table-ellipsis__text vt-ellipsis">{{ row.point_name || '-' }}</span>
+            </template>
           </el-table-column>
           <el-table-column label="Trigger Value" :min-width="140">
             <template #default="{ row }">{{ formatValue(row.current_value, row.unit) }}</template>
@@ -168,7 +193,6 @@ const formatDateTime = (dateTime: number | string | null | undefined): string =>
 
   :deep(.alarm-records__toolbar-form.el-form--inline .el-form-item) {
     margin-bottom: 0;
-    margin-right: 0.2rem;
   }
 
   .alarm-level--1 {
