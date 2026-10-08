@@ -2947,7 +2947,8 @@ async fn test_list_templates_empty() {
 
     let json = extract_json(resp).await;
     assert_eq!(json["success"], true);
-    assert_eq!(json["data"].as_array().unwrap().len(), 0);
+    assert_eq!(json["data"]["list"].as_array().unwrap().len(), 0);
+    assert_eq!(json["data"]["total"], 0);
 }
 
 #[tokio::test]
@@ -2979,8 +2980,9 @@ async fn test_create_template_manually() {
     let app2 = rebuild_template_app(pool).await;
     let resp2 = send_json_request(app2, "GET", "/api/templates", None).await;
     let json2 = extract_json(resp2).await;
-    assert_eq!(json2["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json2["data"][0]["name"], "Test Template");
+    assert_eq!(json2["data"]["list"].as_array().unwrap().len(), 1);
+    assert_eq!(json2["data"]["total"], 1);
+    assert_eq!(json2["data"]["list"][0]["name"], "Test Template");
 }
 
 #[tokio::test]
@@ -3164,15 +3166,45 @@ async fn test_list_templates_filter_by_protocol() {
     let app3 = rebuild_template_app(pool.clone()).await;
     let resp = send_json_request(app3, "GET", "/api/templates?protocol=modbus_tcp", None).await;
     let json = extract_json(resp).await;
-    assert_eq!(json["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json["data"][0]["protocol"], "modbus_tcp");
+    assert_eq!(json["data"]["list"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"]["total"], 1);
+    assert_eq!(json["data"]["list"][0]["protocol"], "modbus_tcp");
 
     // Filter by gpio
     let app4 = rebuild_template_app(pool).await;
     let resp2 = send_json_request(app4, "GET", "/api/templates?protocol=gpio", None).await;
     let json2 = extract_json(resp2).await;
-    assert_eq!(json2["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json2["data"][0]["protocol"], "gpio");
+    assert_eq!(json2["data"]["list"].as_array().unwrap().len(), 1);
+    assert_eq!(json2["data"]["total"], 1);
+    assert_eq!(json2["data"]["list"][0]["protocol"], "gpio");
+}
+
+#[tokio::test]
+async fn test_list_templates_pagination() {
+    let (mut app, pool) = create_template_test_app().await;
+
+    for name in ["Template A", "Template B", "Template C"] {
+        let body = json!({
+            "name": name,
+            "protocol": "modbus_tcp",
+            "points_snapshot": {},
+            "mappings_snapshot": {}
+        });
+        let response = send_json_request(app, "POST", "/api/templates", Some(body)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        app = rebuild_template_app(pool.clone()).await;
+    }
+
+    let response = send_json_request(app, "GET", "/api/templates?page=2&page_size=2", None).await;
+    let json = extract_json(response).await;
+    assert_eq!(json["data"]["list"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"]["total"], 3);
+
+    let app = rebuild_template_app(pool).await;
+    let response = send_json_request(app, "GET", "/api/templates?page=3&page_size=2", None).await;
+    let json = extract_json(response).await;
+    assert_eq!(json["data"]["list"].as_array().unwrap().len(), 0);
+    assert_eq!(json["data"]["total"], 3);
 }
 
 #[tokio::test]

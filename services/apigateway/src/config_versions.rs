@@ -161,7 +161,7 @@ impl std::fmt::Display for ConfigStorageInsufficient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "configuration archives use {} bytes and need {} additional bytes, exceeding the {} byte limit",
+            "Backup storage is full. Current archives use {} bytes and this operation requires {} additional bytes, exceeding the {} byte limit. Please delete one or more restore points before continuing.",
             self.used_bytes, self.requested_bytes, CONFIG_ARCHIVE_CAPACITY_BYTES
         )
     }
@@ -183,7 +183,8 @@ fn acquire_operation() -> Result<OperationGuard, ConfigFailure> {
         return Err(ConfigFailure {
             status: StatusCode::CONFLICT,
             code: "CONFIG_OPERATION_IN_PROGRESS",
-            message: "Another configuration operation is already running".to_string(),
+            message: "Another configuration operation is in progress. Please try again later."
+                .to_string(),
         });
     }
     Ok(OperationGuard)
@@ -822,7 +823,7 @@ pub async fn list_versions(Query(query): Query<VersionsQuery>) -> Response {
             );
         },
     };
-    let items: Vec<Value> = rows
+    let list: Vec<Value> = rows
         .into_iter()
         .map(|row| {
             let status = if current_id.as_deref() == Some(row.id.as_str()) {
@@ -847,13 +848,8 @@ pub async fn list_versions(Query(query): Query<VersionsQuery>) -> Response {
     Json(json!({
         "success": true,
         "data": {
-            "items": items,
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": (total + page_size - 1) / page_size
-            },
+            "list": list,
+            "total": total,
             "storage": {
                 "backup_size_mb": bytes_to_megabytes(backup_size_bytes),
                 "total_size_mb": bytes_to_megabytes(CONFIG_ARCHIVE_CAPACITY_BYTES),
@@ -985,7 +981,7 @@ pub async fn delete_version(
         return error_response(
             StatusCode::CONFLICT,
             "CONFIG_VERSION_CURRENT",
-            "The current configuration version cannot be deleted",
+            "The current restore point cannot be deleted.",
         );
     }
 
@@ -1001,7 +997,7 @@ pub async fn delete_version(
             return error_response(
                 StatusCode::NOT_FOUND,
                 "CONFIG_VERSION_NOT_FOUND",
-                "Configuration version not found",
+                "Restore point was not found or has already been deleted.",
             );
         },
         Err(e) => {
@@ -1086,7 +1082,7 @@ pub async fn export_version(AxumPath(version_id): AxumPath<String>) -> Response 
             return error_response(
                 StatusCode::NOT_FOUND,
                 "CONFIG_VERSION_NOT_FOUND",
-                "Configuration version not found",
+                "Restore point was not found or has already been deleted.",
             );
         },
         Err(e) => {
@@ -1897,7 +1893,7 @@ pub async fn apply_import(
             return error_response(
                 StatusCode::NOT_FOUND,
                 "CONFIG_IMPORT_NOT_FOUND",
-                "Validated import was not found",
+                "Import session was not found. Please upload and validate the package again.",
             );
         },
         Err(e) => {
@@ -1924,7 +1920,7 @@ pub async fn apply_import(
         return error_response(
             StatusCode::GONE,
             "CONFIG_IMPORT_EXPIRED",
-            "Validated import has expired",
+            "Import session has expired. Please upload and validate the package again.",
         );
     }
     let path: String = row.get("staged_path");
@@ -2031,7 +2027,7 @@ pub async fn restore_version(
             return error_response(
                 StatusCode::NOT_FOUND,
                 "CONFIG_VERSION_NOT_FOUND",
-                "Configuration version not found",
+                "Restore point was not found or has already been deleted.",
             );
         },
         Err(e) => {

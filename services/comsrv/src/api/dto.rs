@@ -605,6 +605,13 @@ pub struct TemplateListItem {
     pub created_at: String,
 }
 
+/// Template list response shared by paginated tables and unpaginated selectors.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TemplateListResponse {
+    pub list: Vec<TemplateListItem>,
+    pub total: usize,
+}
+
 /// Template detail (includes full snapshots)
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TemplateDetail {
@@ -676,6 +683,12 @@ fn default_clear_existing() -> bool {
 /// Template list query parameters
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TemplateListQuery {
+    /// Page number (starting from 1). Providing either pagination parameter enables pagination.
+    pub page: Option<usize>,
+
+    /// Items per page (1-100). Providing either pagination parameter enables pagination.
+    pub page_size: Option<usize>,
+
     /// Filter by protocol type
     pub protocol: Option<String>,
 }
