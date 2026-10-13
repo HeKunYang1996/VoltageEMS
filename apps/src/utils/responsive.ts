@@ -1,10 +1,13 @@
 // Responsive layout utilities
 
 const DESIGN_WIDTH = 1920
+const DESIGN_HEIGHT = 1080
 const BASE_FONT_SIZE = 100 // 100px = 1rem
 
 function getResponsiveScale(): number {
-  return window.innerWidth / DESIGN_WIDTH
+  // The dashboard is designed for a 1920x1080 canvas. Scaling only from the
+  // width makes the vertical layout overflow on shorter Safari viewports.
+  return Math.min(window.innerWidth / DESIGN_WIDTH, window.innerHeight / DESIGN_HEIGHT)
 }
 
 /**

@@ -20,17 +20,14 @@ export interface ChannelBindingsData {
 
 // ──────────────────────── 完整拓扑（GET /modApi/api/station/topology）────────────────────────
 
-/** 拓扑节点的业务数据（data 字段） */
+/** 拓扑节点的业务数据（data 字段，与 PCManagement flow_json 对齐） */
 export interface TopologyNodeData {
   label: string
   displayName?: string
   display_name?: string
   productName?: string
-  /** 节点绑定的实例列表（Visual Modeling 配置后写入 flow_json） */
-  instances?: Array<{
-    instanceId: number
-    instanceName: string
-  }>
+  /** 当前节点绑定的唯一设备实例；null 表示尚未绑定。 */
+  instanceId?: number | null
   isContainer?: boolean
   description?: string
 }
@@ -59,10 +56,10 @@ export interface TopologyFlowEdge {
 export interface TopologyFlowData {
   nodes: TopologyFlowNode[]
   edges: TopologyFlowEdge[]
-  /** Optional fixed card bindings stored alongside the editable graph. */
+  /** 固定在画布左上角的绑定，不属于拓扑节点或连线。 */
   fixedBindings?: {
-    station?: number | string | null
-    environment?: number | string | null
+    stationInstanceId: number | null
+    environmentInstanceId: number | null
   }
 }
 

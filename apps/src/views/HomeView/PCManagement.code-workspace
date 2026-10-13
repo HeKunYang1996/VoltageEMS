@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "../../../../../PCManagement"
+		},
+		{
+			"path": "../../../.."
+		},
+		{
+			"path": "../../../../../../Project/CloudEMS"
+		},
+		{
+			"path": "../../../../../iotcloud"
+		},
+		{
+			"path": "../../../../../../Project/voltage-monitor-console"
+		},
+		{
+			"path": "../../../../../../Project/voltage-product-lib"
+		}
+	],
+	"settings": {}
+}

@@ -150,7 +150,14 @@
 import type { EnergyCard } from '@/types/home'
 import { HOMEPAGE_POINT_IDS } from '@/types/home'
 import useWebSocket from '@/composables/useWebSocket'
+import {
+  isHomepageDemoMode,
+  shouldSubscribeHomepageWebSocket,
+  useHomepageDemo,
+} from '@/composables/useHomepageDemo'
 import { formatNumber } from '@/utils/common'
+
+const isDemoMode = isHomepageDemoMode()
 
 import ModuleCard from '@/components/card/ModuleCard.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
@@ -373,21 +380,23 @@ function applyHomepageBatch(data: {
   }
 }
 
-/** 首页 WebSocket 订阅：进入订阅、离开取消 */
-useWebSocket(
-  {
-    source: 'homepage',
-    interval: 1000,
-  },
-  {
-    onBatchDataUpdate: (data: any) => {
-      if (data?.updates?.length) {
-        applyHomepageBatch(data)
-      }
+/** 首页 WebSocket 订阅：进入订阅、离开取消（演示模式跳过） */
+if (shouldSubscribeHomepageWebSocket()) {
+  useWebSocket(
+    {
+      source: 'homepage',
+      interval: 1000,
     },
-    onAlarm: handleHomeAlarm,
-  },
-)
+    {
+      onBatchDataUpdate: (data: any) => {
+        if (data?.updates?.length) {
+          applyHomepageBatch(data)
+        }
+      },
+      onAlarm: handleHomeAlarm,
+    },
+  )
+}
 
 interface HomeAlarmItem {
   id: number | string
@@ -475,12 +484,18 @@ const handleAlarmTouchMove = (event: TouchEvent) => {
 }
 
 const handleAlarmTouchEnd = () => {
-  if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) fetchHomeAlarms()
-  else alarmPullDistance.value = 0
+  if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) {
+    if (isDemoMode) demoControls?.refreshAlarms()
+    else fetchHomeAlarms()
+  } else {
+    alarmPullDistance.value = 0
+  }
   alarmTouchStartY.value = null
 }
 
-fetchHomeAlarms()
+if (!isDemoMode) {
+  fetchHomeAlarms()
+}
 
 // ─── 图表数据（Power Curve + Energy Chart）────────────────────
 const chartXAxisData = ref<string[]>([])
@@ -579,23 +594,35 @@ const fetchHomeChartData = async () => {
   }
 }
 
-// 等拓扑加载完成且选中组就绪后再拉取图表数据，避免 series 为空触发后端 400
-watch(
-  () => {
-    const topoStore = useDeviceTopologyStore()
-    return {
-      loaded: topoStore.loaded,
-      hasPv: !!topoStore.selectedPvGroup,
-      hasEss: !!topoStore.selectedBatteryGroup,
-    }
-  },
-  async (state) => {
-    if (state.loaded && (state.hasPv || state.hasEss)) {
-      await fetchHomeChartData()
-    }
-  },
-  { immediate: true },
-)
+let demoControls: ReturnType<typeof useHomepageDemo> | null = null
+
+if (isDemoMode) {
+  demoControls = useHomepageDemo({
+    applyHomepageBatch,
+    alarmInfoList,
+    chartXAxisData,
+    lineChartSeries,
+    exampleSeries,
+  })
+} else {
+  // 等拓扑加载完成且选中组就绪后再拉取图表数据，避免 series 为空触发后端 400
+  watch(
+    () => {
+      const topoStore = useDeviceTopologyStore()
+      return {
+        loaded: topoStore.loaded,
+        hasPv: !!topoStore.selectedPvGroup,
+        hasEss: !!topoStore.selectedBatteryGroup,
+      }
+    },
+    async (state) => {
+      if (state.loaded && (state.hasPv || state.hasEss)) {
+        await fetchHomeChartData()
+      }
+    },
+    { immediate: true },
+  )
+}
 
 onUnmounted(() => {
   // 标记旧请求失效，防止卸载后回调写入已销毁组件
@@ -644,6 +671,8 @@ const handleNext = () => {
     z-index: 2;
     width: calc(100% - 3.9rem);
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     margin-right: 0.2rem;
     display: flex;
     flex-direction: column;
@@ -666,6 +695,7 @@ const handleNext = () => {
       width: 100%;
       height: calc(69% - 1.2rem);
       flex: 1;
+      min-height: 0;
       // background-image: url('@/assets/images/tuopu.png');
       // background-size: 100% 100%;
       // background-repeat: no-repeat;
@@ -702,6 +732,8 @@ const handleNext = () => {
 
     width: 3.7rem;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -710,13 +742,22 @@ const handleNext = () => {
     .home-station {
       width: 100%;
       height: 36.75%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-stationList {
         height: 100%;
+        min-height: 0;
         padding-top: 0.2rem;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
 
         .home-stationItem {
-          height: 33.33%;
+          height: auto;
+          min-height: 0;
+          flex: 1 1 0;
+          overflow: hidden;
           padding-top: 0.12rem;
           padding-bottom: 0.13rem;
           border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
@@ -733,10 +774,14 @@ const handleNext = () => {
     .home-device {
       width: 100%;
       height: 28.27%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-decice-Carousel {
         height: 100%;
         width: 100%;
+        min-height: 0;
+        overflow: hidden;
 
         .home-decice-Carousel-item {
           height: 100%;
@@ -804,21 +849,32 @@ const handleNext = () => {
     .home-alarms {
       height: 30.89%;
       width: 100%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-alarmsList {
         height: 100%;
-        overflow-y: scroll;
+        overflow-y: auto;
         touch-action: pan-y;
-        // 默认隐藏滚动条
-        scrollbar-width: none;
-        /* Firefox */
+        // 使用细滚动条，避免 Safari 将悬停时的滚动条绘制成粗竖块
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
         -ms-overflow-style: none;
         /* IE and Edge */
 
-        // Webkit浏览器隐藏滚动条
+        // WebKit 浏览器使用 2px 滑块，轨道保持透明
         &::-webkit-scrollbar {
-          width: 0;
-          height: 0;
+          width: 0.02rem;
+          height: 0.02rem;
+        }
+
+        &::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        &::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.28);
+          border-radius: 999px;
         }
 
         .home-alarmsRefreshHint,
@@ -829,20 +885,15 @@ const handleNext = () => {
           text-align: center;
         }
 
-        // 鼠标悬停时显示滚动条
+        // 悬停时保持细滚动条，不让 Safari 恢复系统默认粗度
         &:hover {
-          scrollbar-width: auto;
-          /* Firefox */
-          -ms-overflow-style: auto;
-          /* IE and Edge */
-
           &::-webkit-scrollbar {
-            width: 0.04rem;
-            height: 0.04rem;
+            width: 0.02rem;
+            height: 0.02rem;
           }
 
           &::-webkit-scrollbar-thumb {
-            border-radius: 0.02rem;
+            border-radius: 999px;
           }
         }
 
@@ -894,6 +945,7 @@ const handleNext = () => {
 :deep(.home-device-carousel .el-carousel__container),
 :deep(.home-device-carousel__item.el-carousel__item) {
   height: 100%;
+  min-height: 0;
 }
 
 :deep(.home-device-carousel__item.el-carousel__item) {
