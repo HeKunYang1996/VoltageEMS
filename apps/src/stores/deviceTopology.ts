@@ -4,6 +4,8 @@ import { getChannelBindings, getStationTopology } from '@/api/stationTopology'
 import { getAllInstances } from '@/api/devicesManagement'
 import type { NodeChannelBinding, StationTopology } from '@/types/stationTopology'
 import type { DeviceInstanceListItem } from '@/types/deviceConfiguration'
+import { buildTopologyNeighbours, resolveMeterLoadNodeIds } from '@/utils/topologyGraph'
+import { collectFlowNodeInstanceIds, getFlowNodeInstanceId } from '@/utils/topologyNode'
 
 export type LogicalTopologyDevice = 'pv' | 'diesel' | 'battery' | 'meterLoad'
 
@@ -149,19 +151,15 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
    */
   function getLogicalDeviceNodeIds(device: LogicalTopologyDevice): string[] {
     const nodes = topology.value?.flow_json?.nodes ?? []
-    const products = new Set(LOGICAL_DEVICE_PRODUCTS[device])
-    const distributionBoardIds = new Set(
-      nodes
-        .filter((node) => node.data.productName === 'Distribution_Board')
-        .map((node) => node.id),
-    )
+    const edges = topology.value?.flow_json?.edges ?? []
 
+    if (device === 'meterLoad') {
+      return resolveMeterLoadNodeIds(nodes, edges)
+    }
+
+    const products = new Set(LOGICAL_DEVICE_PRODUCTS[device])
     return nodes
-      .filter((node) => {
-        if (!products.has(node.data.productName ?? node.data.label)) return false
-        if (device !== 'meterLoad') return true
-        return Boolean(node.parentNode && distributionBoardIds.has(node.parentNode))
-      })
+      .filter((node) => products.has(node.data.productName ?? node.data.label))
       .map((node) => node.id)
   }
 
@@ -172,12 +170,11 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     const instanceIds = new Set<number>()
     const channelIds = new Set<number>()
 
-    for (const node of topology.value?.flow_json?.nodes ?? []) {
-      if (!nodeIdSet.has(node.id)) continue
-      for (const instance of node.data.instances ?? []) {
-        const id = Number(instance.instanceId)
-        if (Number.isFinite(id) && id > 0) instanceIds.add(id)
-      }
+    for (const id of collectFlowNodeInstanceIds(
+      topology.value?.flow_json?.nodes ?? [],
+      nodeIdSet,
+    )) {
+      instanceIds.add(id)
     }
 
     for (const binding of bindings.value) {
@@ -216,24 +213,14 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     const nodes = topology.value?.flow_json?.nodes ?? []
     const edges = topology.value?.flow_json?.edges ?? []
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
-    const neighbours = new Map<string, Set<string>>()
-    for (const edge of edges) {
-      if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue
-      if (!neighbours.has(edge.source)) neighbours.set(edge.source, new Set())
-      if (!neighbours.has(edge.target)) neighbours.set(edge.target, new Set())
-      neighbours.get(edge.source)!.add(edge.target)
-      neighbours.get(edge.target)!.add(edge.source)
-    }
+    const neighbours = buildTopologyNeighbours(nodes, edges)
 
     const groups: TopologyEquipmentGroup[] = []
     const getNodeBinding = (nodeId: string) => {
       const instanceIds = new Set<number>()
       const channelIds = new Set<number>()
-      const node = nodeById.get(nodeId)
-      for (const instance of node?.data.instances ?? []) {
-        const id = Number(instance.instanceId)
-        if (Number.isFinite(id) && id > 0) instanceIds.add(id)
-      }
+      const flowInstanceId = getFlowNodeInstanceId(nodeById.get(nodeId)?.data)
+      if (flowInstanceId !== null) instanceIds.add(flowInstanceId)
       for (const binding of bindings.value.filter((item) => item.nodeId === nodeId)) {
         for (const instance of binding.instances ?? []) {
           const instanceId = Number(instance.instanceId)
@@ -250,14 +237,16 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     const getNodeInstanceName = (nodeId: string) => {
       const node = nodeById.get(nodeId)
       const nodeBindings = bindings.value.filter((item) => item.nodeId === nodeId)
-      const ids = [
-        ...(node?.data.instances?.map((item) => Number(item.instanceId)) ?? []),
-        ...nodeBindings.flatMap((item) => item.instances.map((instance) => Number(instance.instanceId))),
-      ]
+      const ids: number[] = []
+      const flowInstanceId = getFlowNodeInstanceId(node?.data)
+      if (flowInstanceId !== null) ids.push(flowInstanceId)
+      ids.push(
+        ...nodeBindings.flatMap((item) =>
+          item.instances.map((instance) => Number(instance.instanceId)),
+        ),
+      )
       const apiInstance = instances.value.find((item) => ids.includes(Number(item.id)))
       if (apiInstance?.name) return apiInstance.name
-      const nodeInstance = node?.data.instances?.[0]?.instanceName
-      if (nodeInstance) return nodeInstance
       const bindingInstance = nodeBindings[0]?.instances?.[0]?.instanceName
       if (bindingInstance) return bindingInstance
       return undefined
@@ -306,12 +295,8 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
       const ids = new Set(nodeIds)
       const instanceIds = new Set<number>()
       const channelIds = new Set<number>()
-      for (const node of nodes) {
-        if (!ids.has(node.id)) continue
-        for (const instance of node.data.instances ?? []) {
-          const instanceId = Number(instance.instanceId)
-          if (Number.isFinite(instanceId) && instanceId > 0) instanceIds.add(instanceId)
-        }
+      for (const id of collectFlowNodeInstanceIds(nodes, ids)) {
+        instanceIds.add(id)
       }
       for (const binding of bindings.value) {
         if (!ids.has(binding.nodeId)) continue
@@ -327,9 +312,6 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
       return { instanceIds: [...instanceIds], channelIds: [...channelIds] }
     }
 
-    const componentByContainer = (containerId: string, productName: string) =>
-      nodes.find((node) => node.parentNode === containerId && node.data.productName === productName)
-
     for (const primary of nodes) {
       const primaryProduct = primary.data.productName
       const kind: TopologyEquipmentGroupKind | undefined =
@@ -341,13 +323,9 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
         if (!neighbour) continue
         const neighbourProduct = neighbour.data.productName
         const directTarget = kind === 'pv' ? 'AC_Inverter' : 'PCS'
-        if (neighbourProduct === directTarget) {
+        if (neighbourProduct === directTarget || neighbourProduct === 'Hybrid_Inverter') {
           addGroup(kind, 'direct', primary.id, neighbour.id)
-          continue
         }
-        if (neighbourProduct !== 'Hybrid_Inverter') continue
-        const component = componentByContainer(neighbour.id, directTarget)
-        if (component) addGroup(kind, 'hybrid-component', primary.id, component.id, neighbour.id)
       }
     }
     const grouped: TopologyEquipmentGroup[] = []

@@ -47,6 +47,9 @@ const globalStore = useGlobalStore()
   .main-layout__right {
     transition: width 0.3s ease-in-out;
     width: calc(100% - 2.2rem);
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
 
     // z-index: 99;
     &.collapse {
@@ -57,6 +60,9 @@ const globalStore = useGlobalStore()
       padding: 0.2rem;
       height: calc(100% - 0.85rem);
       width: 100%;
+      min-width: 0;
+      min-height: 0;
+      box-sizing: border-box;
     }
   }
 }

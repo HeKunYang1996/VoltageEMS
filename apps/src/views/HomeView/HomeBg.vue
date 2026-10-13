@@ -31,22 +31,13 @@
           />
         </g>
 
-        <foreignObject
-          x="620.906"
-          y="204.24"
-          width="60.48"
-          height="21.12"
-          transform="rotate(28.4666 620.906 204.24)"
-        >
-          <div xmlns="http://www.w3.org/1999/xhtml" class="horizontal-loop loop1">
-            <div class="arrow-container arrow1">
-              <img :src="jiantou" />
-            </div>
-            <div class="arrow-container arrow2">
-              <img :src="jiantou" />
-            </div>
-          </div>
-        </foreignObject>
+        <g transform="rotate(28.4666 620.906 204.24)" clip-path="url(#arrow-clip-1)" class="svg-arrow-track">
+          <g class="svg-arrow-motion">
+            <use href="#arrow-shape" x="620.906" y="204.24" />
+            <use href="#arrow-shape" x="681.386" y="204.24" />
+            <animateTransform attributeName="transform" type="translate" from="-60.48 0" to="0 0" dur="2.4s" repeatCount="indefinite" />
+          </g>
+        </g>
         <g filter="url(#filter1_f_1172_2531)">
           <circle
             cx="583.457"
@@ -68,38 +59,20 @@
             fill="url(#paint2_linear_1172_2531)"
           />
         </g>
-        <foreignObject
-          x="735.265"
-          y="373.892"
-          width="60.48"
-          height="21.12"
-          transform="rotate(148.574 735.265 373.892)"
-        >
-          <div xmlns="http://www.w3.org/1999/xhtml" class="horizontal-loop loop1">
-            <div class="arrow-container arrow1">
-              <img :src="jiantou" />
-            </div>
-            <div class="arrow-container arrow2">
-              <img :src="jiantou" />
-            </div>
-          </div>
-        </foreignObject>
-        <foreignObject
-          x="890.314"
-          y="370.921"
-          width="60.48"
-          height="21.12"
-          transform="rotate(31.19 890.314 370.921)"
-        >
-          <div xmlns="http://www.w3.org/1999/xhtml" class="horizontal-loop loop1">
-            <div class="arrow-container arrow1">
-              <img :src="jiantou" />
-            </div>
-            <div class="arrow-container arrow2">
-              <img :src="jiantou" />
-            </div>
-          </div>
-        </foreignObject>
+        <g transform="rotate(148.574 735.265 373.892)" clip-path="url(#arrow-clip-2)" class="svg-arrow-track">
+          <g class="svg-arrow-motion">
+            <use href="#arrow-shape" x="735.265" y="373.892" />
+            <use href="#arrow-shape" x="795.745" y="373.892" />
+            <animateTransform attributeName="transform" type="translate" from="-60.48 0" to="0 0" dur="2.4s" repeatCount="indefinite" />
+          </g>
+        </g>
+        <g transform="rotate(31.19 890.314 370.921)" clip-path="url(#arrow-clip-3)" class="svg-arrow-track">
+          <g class="svg-arrow-motion">
+            <use href="#arrow-shape" x="890.314" y="370.921" />
+            <use href="#arrow-shape" x="950.794" y="370.921" />
+            <animateTransform attributeName="transform" type="translate" from="-60.48 0" to="0 0" dur="2.4s" repeatCount="indefinite" />
+          </g>
+        </g>
         <g filter="url(#filter4_f_1172_2531)">
           <circle
             cx="866.457"
@@ -161,18 +134,14 @@
           fill-opacity="0.5"
           stroke="url(#paint4_linear_1172_2531)"
         />
-        <foreignObject x="53" y="28" width="160" height="120">
-          <div class="no-rem__card">
-            <div class="no-rem__card-title">PV</div>
-            <div class="no-rem__card-content">
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.pv.P?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.pv.P?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.pv.P?.unit }}</span>
-              </div>
-            </div>
-          </div>
-        </foreignObject>
+        <g class="svg-card-text">
+          <text x="83" y="76" class="svg-card-title">PV</text>
+          <text x="83" y="106" class="svg-card-value">
+            <tspan>{{ props.data.pv.P?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.pv.P?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.pv.P?.unit }}</tspan>
+          </text>
+        </g>
 
         <circle
           cx="306"
@@ -196,18 +165,14 @@
           fill-opacity="0.5"
           stroke="url(#paint6_linear_1172_2531)"
         />
-        <foreignObject x="91" y="284" width="160" height="120">
-          <div class="no-rem__card">
-            <div class="no-rem__card-title">Load</div>
-            <div class="no-rem__card-content">
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.load.P?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.load.P?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.load.P?.unit }}</span>
-              </div>
-            </div>
-          </div>
-        </foreignObject>
+        <g class="svg-card-text">
+          <text x="121" y="332" class="svg-card-title">Load</text>
+          <text x="121" y="362" class="svg-card-value">
+            <tspan>{{ props.data.load.P?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.load.P?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.load.P?.unit }}</tspan>
+          </text>
+        </g>
         <!-- <circle cx="234" cy="309" r="15" fill="#DA2D2C" />
         <path
           d="M233.999 304.051C237.23 304.051 239.849 306.67 239.849 309.901V314.401H231.749V310.351H230.399V314.401H228.149V309.901C228.149 306.67 230.768 304.051 233.999 304.051ZM227.831 303.003L229.422 304.594L228.468 305.548L226.876 303.958L227.83 303.003H227.831ZM240.167 303.003L241.122 303.957L239.531 305.548L238.576 304.594L240.167 303.003ZM234.674 300.901V303.151H233.324V300.901H234.674ZM227.249 315.571H240.749V316.921H227.249V315.571Z"
@@ -235,23 +200,19 @@
           fill-opacity="0.5"
           stroke="url(#paint8_linear_1172_2531)"
         />
-        <foreignObject x="1103" y="386" width="160" height="120">
-          <div class="no-rem__card">
-            <div class="no-rem__card-title">Diesel</div>
-            <div class="no-rem__card-content">
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.diesel.p?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.diesel.p?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.diesel.p?.unit }}</span>
-              </div>
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.diesel.oil?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.diesel.oil?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.diesel.oil?.unit }}</span>
-              </div>
-            </div>
-          </div>
-        </foreignObject>
+        <g class="svg-card-text">
+          <text x="1143" y="434" class="svg-card-title">Diesel</text>
+          <text x="1143" y="461" class="svg-card-value">
+            <tspan>{{ props.data.diesel.p?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.diesel.p?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.diesel.p?.unit }}</tspan>
+          </text>
+          <text x="1143" y="482" class="svg-card-value">
+            <tspan>{{ props.data.diesel.oil?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.diesel.oil?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.diesel.oil?.unit }}</tspan>
+          </text>
+        </g>
         <circle
           cx="994"
           cy="428"
@@ -275,23 +236,19 @@
           fill-opacity="0.5"
           stroke="url(#paint10_linear_1172_2531)"
         />
-        <foreignObject x="1006" y="170" width="160" height="120">
-          <div class="no-rem__card">
-            <div class="no-rem__card-title">ESS</div>
-            <div class="no-rem__card-content">
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.ess.p?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.ess.p?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.ess.p?.unit }}</span>
-              </div>
-              <div class="no-rem__card-content-item">
-                <span class="no-rem__name">{{ props.data.ess.soc?.name }}:</span>
-                <span class="no-rem__value">{{ props.data.ess.soc?.value }}</span>
-                <span class="no-rem__unit">{{ props.data.ess.soc?.unit }}</span>
-              </div>
-            </div>
-          </div>
-        </foreignObject>
+        <g class="svg-card-text">
+          <text x="1046" y="218" class="svg-card-title">ESS</text>
+          <text x="1046" y="245" class="svg-card-value">
+            <tspan>{{ props.data.ess.p?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.ess.p?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.ess.p?.unit }}</tspan>
+          </text>
+          <text x="1046" y="266" class="svg-card-value">
+            <tspan>{{ props.data.ess.soc?.name }}:</tspan>
+            <tspan dx="8" class="svg-card-number">{{ props.data.ess.soc?.value }}</tspan>
+            <tspan dx="5" class="svg-card-unit">{{ props.data.ess.soc?.unit }}</tspan>
+          </text>
+        </g>
         <circle
           cx="6"
           cy="6"
@@ -310,6 +267,20 @@
         />
       </g>
       <defs>
+        <clipPath id="arrow-clip-1" clipPathUnits="userSpaceOnUse">
+          <path d="M627.906 204.24H674.386L681.386 214.8L674.386 225.36H627.906L620.906 214.8L627.906 204.24Z" />
+        </clipPath>
+        <clipPath id="arrow-clip-2" clipPathUnits="userSpaceOnUse">
+          <path d="M742.265 373.892H788.745L795.745 384.452L788.745 395.012H742.265L735.265 384.452L742.265 373.892Z" />
+        </clipPath>
+        <clipPath id="arrow-clip-3" clipPathUnits="userSpaceOnUse">
+          <path d="M897.314 370.921H943.794L950.794 381.481L943.794 392.041H897.314L890.314 381.481L897.314 370.921Z" />
+        </clipPath>
+        <path
+          id="arrow-shape"
+          d="M0 0H5L13 10.56L5 21H0L8 10.56ZM12.096 0H17.096L25.096 10.56L17.096 21H12.096L20.096 10.56ZM24.192 0H29.192L37.192 10.56L29.192 21H24.192L32.192 10.56ZM36.288 0H41.288L49.288 10.56L41.288 21H36.288L44.288 10.56ZM48.384 0H53.384L61.384 10.56L53.384 21H48.384L56.384 10.56Z"
+          fill="#F8DB6B"
+        />
         <filter
           id="filter0_ddi_1172_2531"
           x="529.096"
@@ -690,7 +661,6 @@
   </div>
 </template>
 <script setup lang="ts">
-import jiantou from '@/assets/images/jiantou.png'
 interface TopologyPoint {
   id?: number
   name?: string
@@ -878,6 +848,33 @@ const props = defineProps<{
   background-position: center;
   background-repeat: no-repeat;
   display: block;
+}
+
+.svg-card-title,
+.svg-card-value,
+.svg-card-number,
+.svg-card-unit {
+  font-family: Arimo, Arial, sans-serif;
+  fill: var(--vt-text-primary);
+}
+
+.svg-card-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.svg-card-value {
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.svg-card-number {
+  font-weight: 700;
+}
+
+.svg-card-unit {
+  font-size: 12px;
+  fill: rgba(255, 255, 255, 0.5);
 }
 
 /* px-to-rem-enable */
