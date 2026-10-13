@@ -31,6 +31,7 @@ mod device;
 mod forwarder;
 mod models;
 mod mqtt;
+mod operation_uploader;
 mod routes;
 mod state;
 mod system_monitor;
@@ -119,6 +120,11 @@ async fn main() -> anyhow::Result<()> {
         let sd = shutdown.clone();
         tokio::spawn(async move { forwarder::run_system_monitor(s, sd).await });
     }
+    {
+        let s = Arc::clone(&state);
+        let sd = shutdown.clone();
+        tokio::spawn(async move { operation_uploader::run(s, sd).await });
+    }
 
     // ── HTTP server ───────────────────────────────────────────────────────────
     let cors = CorsLayer::new()
@@ -141,13 +147,16 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            common::shutdown::wait_for_shutdown().await;
-            info!("Shutdown signal received");
-            shutdown.cancel();
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        common::shutdown::wait_for_shutdown().await;
+        info!("Shutdown signal received");
+        shutdown.cancel();
+    })
+    .await?;
 
     common::logging::shutdown_logging_tasks().await;
     Ok(())

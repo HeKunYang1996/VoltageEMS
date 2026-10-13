@@ -240,7 +240,7 @@ pub async fn publish_json(
 
 // ── TLS configuration ─────────────────────────────────────────────────────────
 
-fn build_tls(cert_dir: &str) -> anyhow::Result<TlsConfiguration> {
+pub(crate) fn build_tls(cert_dir: &str) -> anyhow::Result<TlsConfiguration> {
     let ca = std::fs::read(format!("{}/AmazonRootCA1.pem", cert_dir))
         .or_else(|_| std::fs::read(format!("{}/ca.pem", cert_dir)))
         .map_err(|e| anyhow::anyhow!("CA cert not found in {}: {}", cert_dir, e))?;

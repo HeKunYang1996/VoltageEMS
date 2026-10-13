@@ -657,9 +657,12 @@ async fn main() -> Result<()> {
 
     // Spawn server task
     let server_task = async move {
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal)
-            .await
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal)
+        .await
         {
             error!("Server error: {}", e);
         }

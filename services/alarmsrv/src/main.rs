@@ -124,13 +124,16 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Listening on {}", addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            common::shutdown::wait_for_shutdown().await;
-            info!("Shutdown signal received");
-            shutdown.cancel();
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        common::shutdown::wait_for_shutdown().await;
+        info!("Shutdown signal received");
+        shutdown.cancel();
+    })
+    .await?;
 
     common::logging::shutdown_logging_tasks().await;
     info!("alarmsrv stopped");

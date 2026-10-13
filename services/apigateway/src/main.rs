@@ -37,6 +37,7 @@ mod routes_broadcast;
 mod routes_config;
 mod routes_homepage;
 mod routes_network;
+mod routes_operation_logs;
 mod routes_system;
 mod state;
 mod ws;
@@ -96,6 +97,7 @@ use crate::ws::WsHub;
         routes_config::start_upgrade,
         routes_config::abort_upgrade,
         routes_config::upgrade_status,
+        routes_operation_logs::list_operation_logs,
     ),
     components(schemas(
         models::UserCreate,
@@ -185,7 +187,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         // nginx auth_request endpoints — one per permission level
         .route("/validate", get(routes_auth::validate_token))
         .route("/validate/engineer", get(routes_auth::validate_engineer_token))
-        .route("/validate/admin", get(routes_auth::validate_admin_token));
+        .route("/validate/admin", get(routes_auth::validate_admin_token))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            middleware_auth::audit_auth_routes,
+        ));
 
     // ── Homepage routes ───────────────────────────────────────────────────────
     // GET (list/get) → Viewer+ (outer require_jwt covers this)
@@ -288,6 +294,16 @@ fn build_router(state: Arc<AppState>) -> Router {
             middleware_auth::require_jwt,
         ));
 
+    let operation_routes = Router::new()
+        .route(
+            "/operation-logs",
+            get(routes_operation_logs::list_operation_logs),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_engineer,
+        ));
+
     // Internal service-to-service routes do not use user JWTs. Guard them with
     // loopback-only access instead — all services share host networking, so
     // external clients cannot reach these handlers through the bound port.
@@ -299,6 +315,7 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     let api_v1 = Router::new()
         .merge(protected_v1)
+        .merge(operation_routes)
         .merge(internal_v1)
         .nest("/auth", auth_routes);
 
