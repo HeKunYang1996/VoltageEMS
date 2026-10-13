@@ -21,6 +21,8 @@ pub mod api_types;
 pub mod config_loader;
 pub mod log_rotation;
 pub mod logging;
+#[cfg(all(feature = "sqlite", feature = "axum"))]
+pub mod operation_log;
 pub mod serde_helpers;
 pub mod service_bootstrap;
 pub mod shutdown;

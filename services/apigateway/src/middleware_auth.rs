@@ -21,6 +21,44 @@ use axum::{
 
 use crate::auth::validate_access_token;
 use crate::state::AppState;
+use common::operation_log::AuditActor;
+
+fn audit_actor(claims: &crate::auth::Claims) -> AuditActor {
+    AuditActor {
+        user_id: claims.user_id,
+        username: claims.username.clone(),
+    }
+}
+
+/// Capture identity for auth routes whose handlers validate tokens themselves.
+pub async fn audit_auth_routes(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    let handler_supplies_identity = path.ends_with("/login")
+        || path.ends_with("/register")
+        || path.ends_with("/refresh")
+        || path.contains("/validate");
+    let claims = if !handler_supplies_identity {
+        let token = extract_bearer(&req);
+        if let Some(token) = token {
+            validate_access_token(&token, &state.config.jwt_secret, &state.db).await
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let mut response = next.run(req).await;
+    if let Some(claims) = claims
+        && response.extensions().get::<AuditActor>().is_none()
+    {
+        response.extensions_mut().insert(audit_actor(&claims));
+    }
+    response
+}
 
 fn extract_bearer(req: &Request) -> Option<String> {
     req.headers()
@@ -56,8 +94,10 @@ pub async fn require_jwt(
         return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
     };
 
-    req.extensions_mut().insert(claims);
-    next.run(req).await
+    req.extensions_mut().insert(claims.clone());
+    let mut response = next.run(req).await;
+    response.extensions_mut().insert(audit_actor(&claims));
+    response
 }
 
 /// Middleware that requires Admin or Engineer role.
@@ -83,11 +123,16 @@ pub async fn require_engineer(
 
     let role = claims.role.as_deref().unwrap_or("");
     if role != "Admin" && role != "Engineer" {
-        return (StatusCode::FORBIDDEN, "Engineer or Admin role required").into_response();
+        let mut response =
+            (StatusCode::FORBIDDEN, "Engineer or Admin role required").into_response();
+        response.extensions_mut().insert(audit_actor(&claims));
+        return response;
     }
 
-    req.extensions_mut().insert(claims);
-    next.run(req).await
+    req.extensions_mut().insert(claims.clone());
+    let mut response = next.run(req).await;
+    response.extensions_mut().insert(audit_actor(&claims));
+    response
 }
 
 /// Middleware that requires Admin role only.
@@ -112,10 +157,14 @@ pub async fn require_admin_role(
     };
 
     if claims.role.as_deref() != Some("Admin") {
-        return (StatusCode::FORBIDDEN, "Admin role required").into_response();
+        let mut response = (StatusCode::FORBIDDEN, "Admin role required").into_response();
+        response.extensions_mut().insert(audit_actor(&claims));
+        return response;
     }
 
-    next.run(req).await
+    let mut response = next.run(req).await;
+    response.extensions_mut().insert(audit_actor(&claims));
+    response
 }
 
 /// Guard for internal service-to-service endpoints (e.g. `/broadcast`).

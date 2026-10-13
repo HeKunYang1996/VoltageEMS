@@ -545,7 +545,10 @@ async fn main() -> VoltageResult<()> {
     info!("API server listening on http://{}", addr);
     info!("Health check: http://{}/health", addr);
 
-    let server = serve(listener, app);
+    let server = serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     let server_token = shutdown_token.clone();
     let server_handle = tokio::spawn(async move {
         let shutdown = async move { server_token.cancelled().await };

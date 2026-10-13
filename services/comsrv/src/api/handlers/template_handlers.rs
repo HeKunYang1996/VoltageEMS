@@ -9,7 +9,8 @@
 use crate::api::routes::AppState;
 use crate::dto::{
     AppError, ApplyTemplateReq, CreateTemplateFromChannelReq, CreateTemplateReq, PointCounts,
-    SuccessResponse, TemplateDetail, TemplateListItem, TemplateListQuery, UpdateTemplateReq,
+    SuccessResponse, TemplateDetail, TemplateListItem, TemplateListQuery, TemplateListResponse,
+    UpdateTemplateReq,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -253,20 +254,25 @@ async fn snapshot_channel_mappings(
     get,
     path = "/api/templates",
     params(
+        ("page" = Option<usize>, Query, description = "Page number (starting from 1); enables pagination when provided"),
+        ("page_size" = Option<usize>, Query, description = "Items per page (1-100); enables pagination when provided"),
         ("protocol" = Option<String>, Query, description = "Filter by protocol type (e.g. modbus_tcp)")
     ),
     responses(
-        (status = 200, description = "List of templates", body = Vec<TemplateListItem>,
+        (status = 200, description = "List of templates", body = TemplateListResponse,
             example = json!({
                 "success": true,
-                "data": [{
-                    "template_id": 1,
-                    "name": "PCS Modbus Template",
-                    "description": "Standard PCS point definitions",
-                    "protocol": "modbus_tcp",
-                    "point_counts": {"telemetry": 30, "signal": 10, "control": 5, "adjustment": 5},
-                    "created_at": "2025-10-15T10:30:00Z"
-                }]
+                "data": {
+                    "list": [{
+                        "template_id": 1,
+                        "name": "PCS Modbus Template",
+                        "description": "Standard PCS point definitions",
+                        "protocol": "modbus_tcp",
+                        "point_counts": {"telemetry": 30, "signal": 10, "control": 5, "adjustment": 5},
+                        "created_at": "2025-10-15T10:30:00Z"
+                    }],
+                    "total": 1
+                }
             })
         )
     ),
@@ -275,32 +281,80 @@ async fn snapshot_channel_mappings(
 pub async fn list_templates<R: Rtdb>(
     State(state): State<AppState<R>>,
     Query(query): Query<TemplateListQuery>,
-) -> Result<Json<SuccessResponse<Vec<TemplateListItem>>>, AppError> {
-    let (sql, has_filter) = match &query.protocol {
-        Some(_) => (
-            "SELECT template_id, name, description, protocol, points_snapshot, created_at \
-             FROM channel_templates WHERE protocol = ? ORDER BY created_at DESC",
-            true,
-        ),
-        None => (
-            "SELECT template_id, name, description, protocol, points_snapshot, created_at \
-             FROM channel_templates ORDER BY created_at DESC",
-            false,
-        ),
-    };
+) -> Result<Json<SuccessResponse<TemplateListResponse>>, AppError> {
+    let protocol = query.protocol.as_deref();
+    let pagination_requested = query.page.is_some() || query.page_size.is_some();
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = i64::try_from((page - 1).saturating_mul(page_size))
+        .map_err(|_| AppError::bad_request("Pagination offset is too large"))?;
+    let limit =
+        i64::try_from(page_size).map_err(|_| AppError::bad_request("Page size is too large"))?;
 
-    let rows: Vec<(i64, String, Option<String>, String, String, String)> = if has_filter {
-        sqlx::query_as(sql)
-            .bind(query.protocol.as_deref().unwrap_or_default())
-            .fetch_all(&state.sqlite_pool)
-            .await
-    } else {
-        sqlx::query_as(sql).fetch_all(&state.sqlite_pool).await
+    let total: i64 = match protocol {
+        Some(protocol) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM channel_templates WHERE protocol = ?")
+                .bind(protocol)
+                .fetch_one(&state.sqlite_pool)
+                .await
+        },
+        None => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM channel_templates")
+                .fetch_one(&state.sqlite_pool)
+                .await
+        },
     }
     .map_err(|e| {
-        tracing::error!("List templates: {}", e);
+        tracing::error!("Count templates: {}", e);
         AppError::internal_error("Database operation failed")
     })?;
+
+    let rows: Vec<(i64, String, Option<String>, String, String, String)> =
+        match (protocol, pagination_requested) {
+            (Some(protocol), true) => {
+                sqlx::query_as(
+                    "SELECT template_id, name, description, protocol, points_snapshot, created_at \
+                 FROM channel_templates WHERE protocol = ? ORDER BY created_at DESC \
+                 LIMIT ? OFFSET ?",
+                )
+                .bind(protocol)
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&state.sqlite_pool)
+                .await
+            },
+            (Some(protocol), false) => {
+                sqlx::query_as(
+                    "SELECT template_id, name, description, protocol, points_snapshot, created_at \
+                 FROM channel_templates WHERE protocol = ? ORDER BY created_at DESC",
+                )
+                .bind(protocol)
+                .fetch_all(&state.sqlite_pool)
+                .await
+            },
+            (None, true) => {
+                sqlx::query_as(
+                    "SELECT template_id, name, description, protocol, points_snapshot, created_at \
+                 FROM channel_templates ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                )
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&state.sqlite_pool)
+                .await
+            },
+            (None, false) => {
+                sqlx::query_as(
+                    "SELECT template_id, name, description, protocol, points_snapshot, created_at \
+                 FROM channel_templates ORDER BY created_at DESC",
+                )
+                .fetch_all(&state.sqlite_pool)
+                .await
+            },
+        }
+        .map_err(|e| {
+            tracing::error!("List templates: {}", e);
+            AppError::internal_error("Database operation failed")
+        })?;
 
     let items: Vec<TemplateListItem> = rows
         .into_iter()
@@ -321,7 +375,14 @@ pub async fn list_templates<R: Rtdb>(
         )
         .collect();
 
-    Ok(Json(SuccessResponse::new(items)))
+    let total = usize::try_from(total).map_err(|_| {
+        AppError::internal_error("Template count returned an invalid negative value")
+    })?;
+
+    Ok(Json(SuccessResponse::new(TemplateListResponse {
+        list: items,
+        total,
+    })))
 }
 
 /// Full template content (metadata + point snapshot + protocol mapping snapshot).

@@ -213,6 +213,7 @@ pub type ProductionAppState = AppState<voltage_rtdb::RedisRtdb>;
             crate::api::handlers::point_handlers::PointBatchError,
             // Template schemas
             crate::dto::TemplateListItem,
+            crate::dto::TemplateListResponse,
             crate::dto::TemplateDetail,
             crate::dto::CreateTemplateReq,
             crate::dto::CreateTemplateFromChannelReq,

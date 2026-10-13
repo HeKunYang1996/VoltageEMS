@@ -85,10 +85,13 @@ jobs:
       - name: Check Compilation
         run: cargo check --workspace
 
+      - name: Install cargo-hakari
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari@0.9.38
+
       - name: Verify workspace-hack is up-to-date
-        run: |
-          command -v cargo-hakari || cargo install cargo-hakari --locked
-          cargo hakari verify
+        run: cargo hakari verify
 
   # Job 2: Unit Tests (no Redis instance needed)
   unit-tests:

@@ -80,6 +80,7 @@ where
 static GUARDS: OnceLock<Arc<Mutex<Vec<WorkerGuard>>>> = OnceLock::new();
 // API logger guard - separate to allow independent lifecycle
 static API_GUARD: OnceLock<Arc<Mutex<Option<WorkerGuard>>>> = OnceLock::new();
+static AUDIT_SERVICE: OnceLock<String> = OnceLock::new();
 // Background logging task handles (SIGHUP handler, compression task)
 static LOGGING_TASK_HANDLES: OnceLock<Arc<tokio::sync::RwLock<Vec<tokio::task::JoinHandle<()>>>>> =
     OnceLock::new();
@@ -490,6 +491,7 @@ fn build_env_filter(service_name: &str, api_level: &str) -> (EnvFilter, String) 
 /// starts with console-only logging. File logging can be activated later
 /// via `reload_logging()` when the directory becomes available.
 pub fn init_with_config(config: LogConfig) -> Result<(), Box<dyn std::error::Error>> {
+    AUDIT_SERVICE.get_or_init(|| config.service_name.clone());
     // Try to create log directory — graceful degradation if unavailable
     let log_dir_available = fs::create_dir_all(&config.log_dir).is_ok();
     if !log_dir_available {
@@ -974,6 +976,43 @@ fn truncate_body(body: &str, max_length: usize) -> String {
 /// ```
 pub const INTERNAL_REQUEST_HEADER: &str = "x-voltage-internal-service";
 
+#[cfg(feature = "sqlite")]
+fn trusted_audit_identity(
+    req: &axum::extract::Request,
+) -> (Option<crate::operation_log::AuditActor>, Option<String>) {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let trusted_proxy = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_some_and(|peer| peer.0.ip().is_loopback());
+    if !trusted_proxy {
+        return (None, None);
+    }
+    let actor = req
+        .headers()
+        .get("x-voltage-audit-user-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+        .zip(
+            req.headers()
+                .get("x-voltage-audit-username")
+                .and_then(|value| value.to_str().ok()),
+        )
+        .map(|(user_id, username)| crate::operation_log::AuditActor {
+            user_id,
+            username: crate::operation_log::decode_header_value(username),
+        });
+    let service = req
+        .headers()
+        .get(INTERNAL_REQUEST_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    (actor, service)
+}
+
 fn is_internal_broadcast_request(req: &axum::extract::Request) -> bool {
     req.method() == axum::http::Method::POST
         && matches!(
@@ -1006,7 +1045,30 @@ pub async fn http_request_logger(
 
     let method = req.method().clone();
     let uri = req.uri().clone();
+    #[cfg(feature = "sqlite")]
+    let audit_details = {
+        use axum::extract::MatchedPath;
+
+        let route = req
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|value| value.as_str().to_owned())
+            .unwrap_or_else(|| uri.path().to_owned())
+            .chars()
+            .take(512)
+            .collect::<String>();
+        let (actor, internal) = trusted_audit_identity(&req);
+        let request_id = req
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.len() <= 128)
+            .map(str::to_owned);
+        (route, actor, internal, request_id)
+    };
     let start = Instant::now();
+    #[cfg(feature = "sqlite")]
+    let audit_started_at_ms = crate::operation_log::now_ms();
 
     // Decide whether to read body (DEBUG + modifying method + small JSON only)
     let should_read_body = level_enabled!(Level::DEBUG)
@@ -1033,6 +1095,54 @@ pub async fn http_request_logger(
     let response = next.run(req).await;
     let duration = start.elapsed();
     let status = response.status();
+
+    #[cfg(feature = "sqlite")]
+    if crate::operation_log::should_record(&method, uri.path()) {
+        let (route, proxy_actor, internal, request_id) = audit_details;
+        let response_actor = response
+            .extensions()
+            .get::<crate::operation_log::AuditActor>();
+        let submitted_username = response
+            .extensions()
+            .get::<crate::operation_log::AuditSubmittedUsername>()
+            .map(|value| value.0.as_str());
+        let service = AUDIT_SERVICE.get().map(String::as_str).unwrap_or("unknown");
+        let actor = response_actor.or_else(|| {
+            (service != "apigateway")
+                .then_some(proxy_actor.as_ref())
+                .flatten()
+        });
+        let actor_type = if actor.is_some() {
+            "user"
+        } else if submitted_username.is_some() {
+            "unverified"
+        } else if internal.is_some() {
+            "service"
+        } else {
+            "unknown"
+        };
+        let bounded_path = uri.path().chars().take(2048).collect::<String>();
+        let result = crate::operation_log::insert(crate::operation_log::NewOperation {
+            occurred_at_ms: audit_started_at_ms,
+            service,
+            actor,
+            submitted_username,
+            actor_type,
+            source_service: internal.as_deref(),
+            method: method.as_str(),
+            route: &route,
+            path: &bounded_path,
+            status: status.as_u16() as i64,
+            business_success: (uri.path().ends_with("/login"))
+                .then_some(actor.is_some() && submitted_username.is_none()),
+            duration_ms: duration.as_millis().min(i64::MAX as u128) as i64,
+            request_id: request_id.as_deref(),
+        })
+        .await;
+        if let Err(error) = result {
+            tracing::error!("Operation log insert failed: {}", error);
+        }
+    }
 
     // INFO: modifying methods (no body); DEBUG: all requests with body
     if matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
@@ -1158,6 +1268,31 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use tracing::Level;
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn audit_headers_require_loopback_peer() {
+        use axum::extract::ConnectInfo;
+
+        let mut request = axum::extract::Request::builder()
+            .uri("/api/channels")
+            .header("x-voltage-audit-user-id", "42")
+            .header("x-voltage-audit-username", "%E6%B5%8B%E8%AF%95")
+            .body(Body::empty())
+            .unwrap();
+        assert!(trusted_audit_identity(&request).0.is_none());
+        request.extensions_mut().insert(ConnectInfo(
+            "192.0.2.5:1234".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        assert!(trusted_audit_identity(&request).0.is_none());
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let (actor, _) = trusted_audit_identity(&request);
+        let actor = actor.unwrap();
+        assert_eq!(actor.user_id, 42);
+        assert_eq!(actor.username, "测试");
+    }
 
     #[test]
     fn skips_only_marked_internal_broadcast_requests() {

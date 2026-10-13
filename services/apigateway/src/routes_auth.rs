@@ -25,6 +25,19 @@ use crate::{
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+fn unverified_login_response(
+    response: impl IntoResponse,
+    username: &str,
+) -> axum::response::Response {
+    let mut response = response.into_response();
+    response
+        .extensions_mut()
+        .insert(common::operation_log::AuditSubmittedUsername(
+            username.to_owned(),
+        ));
+    response
+}
+
 fn extract_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get("authorization")
@@ -181,37 +194,48 @@ pub async fn login(
     let user = match db::get_user_with_role_by_username(&state.db, &body.username).await {
         Ok(Some(u)) => u,
         Ok(None) => {
-            return Json(json!({"success": false, "message": "Invalid username or password"}))
-                .into_response();
+            return unverified_login_response(
+                Json(json!({"success": false, "message": "Invalid username or password"})),
+                &body.username,
+            );
         },
         Err(e) => {
             error!("DB login error: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": "Internal server error"})),
-            )
-                .into_response();
+            return unverified_login_response(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": "Internal server error"})),
+                ),
+                &body.username,
+            );
         },
     };
 
     if !user.is_active {
-        return Json(json!({"success": false, "message": "Account is disabled"})).into_response();
+        return unverified_login_response(
+            Json(json!({"success": false, "message": "Account is disabled"})),
+            &body.username,
+        );
     }
 
     let row = match db::get_user_by_username(&state.db, &body.username).await {
         Ok(Some(r)) => r,
         _ => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": "Internal server error"})),
-            )
-                .into_response();
+            return unverified_login_response(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": "Internal server error"})),
+                ),
+                &body.username,
+            );
         },
     };
 
     if !verify_password(&body.password, &row.password_hash) {
-        return Json(json!({"success": false, "message": "Invalid username or password"}))
-            .into_response();
+        return unverified_login_response(
+            Json(json!({"success": false, "message": "Invalid username or password"})),
+            &body.username,
+        );
     }
 
     let cfg = &state.config;
@@ -226,7 +250,7 @@ pub async fn login(
             state.refresh_tokens.insert(token_id, token_info);
             let _ = db::update_user_last_login(&state.db, user.id).await;
 
-            Json(json!({
+            let mut response = Json(json!({
                 "success": true,
                 "message": "Login successful",
                 "data": {
@@ -236,15 +260,24 @@ pub async fn login(
                     "expires_in": tokens.expires_in,
                 }
             }))
-            .into_response()
+            .into_response();
+            response
+                .extensions_mut()
+                .insert(common::operation_log::AuditActor {
+                    user_id: user.id,
+                    username: user.username.clone(),
+                });
+            response
         },
         Err(e) => {
             error!("Token creation error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": "Internal server error"})),
+            unverified_login_response(
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": "Internal server error"})),
+                ),
+                &body.username,
             )
-                .into_response()
         },
     }
 }
@@ -977,7 +1010,7 @@ pub async fn validate_token(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     match require_auth(&state, &headers).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(claims) => audit_validation_response(&claims),
         Err((status, _)) => status.into_response(),
     }
 }
@@ -1000,7 +1033,7 @@ pub async fn validate_engineer_token(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     match require_engineer(&state, &headers).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(claims) => audit_validation_response(&claims),
         Err((status, _)) => status.into_response(),
     }
 }
@@ -1022,7 +1055,60 @@ pub async fn validate_admin_token(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     match require_admin(&state, &headers).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(claims) => audit_validation_response(&claims),
         Err((status, _)) => status.into_response(),
+    }
+}
+
+fn audit_validation_response(claims: &crate::auth::Claims) -> axum::response::Response {
+    use axum::http::{HeaderValue, header::HeaderName};
+
+    let mut response = StatusCode::OK.into_response();
+    if let Ok(id) = HeaderValue::from_str(&claims.user_id.to_string()) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-voltage-audit-user-id"), id);
+    }
+    let encoded = claims
+        .username
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect::<String>();
+    if let Ok(username) = HeaderValue::from_str(&encoded) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-voltage-audit-username"),
+            username,
+        );
+    }
+    response
+}
+
+#[cfg(test)]
+mod operation_log_tests {
+    use super::*;
+
+    #[test]
+    fn validation_response_carries_encoded_identity() {
+        let claims = crate::auth::Claims {
+            user_id: 42,
+            username: "测试".to_owned(),
+            role: Some("Admin".to_owned()),
+            token_id: None,
+            auth_version: 0,
+            exp: 1,
+            iat: 0,
+            token_type: "access".to_owned(),
+        };
+        let response = audit_validation_response(&claims);
+        assert_eq!(response.headers()["x-voltage-audit-user-id"], "42");
+        assert_eq!(
+            common::operation_log::decode_header_value(
+                response.headers()["x-voltage-audit-username"]
+                    .to_str()
+                    .unwrap()
+            ),
+            "测试"
+        );
     }
 }
