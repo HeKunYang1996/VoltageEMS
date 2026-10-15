@@ -528,7 +528,14 @@ async fn main() -> VoltageResult<()> {
     #[cfg(not(feature = "swagger-ui"))]
     info!("Swagger UI feature DISABLED");
 
-    // Note: HTTP request logging middleware is applied in create_api_routes()
+    let app = app
+        .layer(axum::middleware::from_fn_with_state(
+            common::audit_auth::AuditAuth::from_env()?,
+            common::audit_auth::authenticate_operation,
+        ))
+        .layer(axum::middleware::from_fn(
+            common::logging::http_request_logger,
+        ));
 
     let socket = tokio::net::TcpSocket::new_v4()
         .map_err(|e| ComSrvError::ConnectionError(format!("Failed to create socket: {}", e)))?;

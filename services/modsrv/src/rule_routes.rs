@@ -64,8 +64,6 @@ pub fn create_rule_routes<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stat
         // Scheduler control
         .route("/api/scheduler/status", get(scheduler_status::<R, S>))
         .route("/api/scheduler/reload", post(scheduler_reload::<R, S>))
-        // Apply HTTP request logging middleware
-        .layer(axum::middleware::from_fn(common::logging::http_request_logger))
         .with_state(state)
 }
 

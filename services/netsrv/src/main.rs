@@ -133,6 +133,10 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any);
 
     let app = routes::build_router(Arc::clone(&state))
+        .layer(axum::middleware::from_fn_with_state(
+            common::audit_auth::AuditAuth::from_env()?,
+            common::audit_auth::authenticate_operation,
+        ))
         .layer(axum::middleware::from_fn(
             common::logging::http_request_logger,
         ))

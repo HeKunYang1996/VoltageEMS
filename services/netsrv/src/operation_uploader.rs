@@ -192,6 +192,8 @@ mod tests {
             business_success: None,
             duration_ms: 12,
             request_id: None,
+            request_body: Some("{\"name\":\"test\"}".to_owned()),
+            response_body: Some("{\"success\":true}".to_owned()),
         };
         let payload =
             serde_json::to_value(operation_payload(&row, "20f0bcc6c1a8cddf").unwrap()).unwrap();
@@ -203,6 +205,8 @@ mod tests {
             serde_json::from_str(payload["property"][0]["value"]["log"].as_str().unwrap()).unwrap();
         assert_eq!(log["event_id"], "event-1");
         assert_eq!(log["username"], "admin");
+        assert_eq!(log["request_body"], "{\"name\":\"test\"}");
+        assert_eq!(log["response_body"], "{\"success\":true}");
         assert_eq!(
             crate::device::Topics::new("MonarchHub", "20f0bcc6c1a8cddf").property,
             "property/MonarchHub/20f0bcc6c1a8cddf"

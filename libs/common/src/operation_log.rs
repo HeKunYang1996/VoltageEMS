@@ -37,6 +37,8 @@ pub struct NewOperation<'a> {
     pub business_success: Option<bool>,
     pub duration_ms: i64,
     pub request_id: Option<&'a str>,
+    pub request_body: Option<&'a str>,
+    pub response_body: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -55,6 +57,8 @@ pub struct OperationRow {
     pub business_success: Option<bool>,
     pub duration_ms: i64,
     pub request_id: Option<String>,
+    pub request_body: Option<String>,
+    pub response_body: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -101,6 +105,7 @@ pub fn decode_header_value(value: &str) -> String {
 pub fn should_record(method: &Method, path: &str) -> bool {
     if matches!(path, "/health" | "/ping")
         || path.contains("/auth/validate")
+        || path == "/api/v1/auth/refresh"
         || path == "/api/v1/broadcast"
         || path == "/netApi/alarm/broadcast"
     {
@@ -200,6 +205,8 @@ pub async fn create_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             business_success BOOLEAN,
             duration_ms INTEGER NOT NULL,
             request_id TEXT,
+            request_body TEXT,
+            response_body TEXT,
             upload_state INTEGER NOT NULL DEFAULT 0,
             uploaded_at_ms INTEGER
         )",
@@ -219,8 +226,8 @@ pub async fn insert(record: NewOperation<'_>) -> anyhow::Result<()> {
     let pool = pool().await?;
     sqlx::query(
         "INSERT INTO operation_logs
-         (occurred_at_ms, service, user_id, username, actor_type, source_service, method, route, path, status, business_success, duration_ms, request_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (occurred_at_ms, service, user_id, username, actor_type, source_service, method, route, path, status, business_success, duration_ms, request_id, request_body, response_body)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(record.occurred_at_ms)
     .bind(record.service)
@@ -235,6 +242,8 @@ pub async fn insert(record: NewOperation<'_>) -> anyhow::Result<()> {
     .bind(record.business_success)
     .bind(record.duration_ms)
     .bind(record.request_id)
+    .bind(record.request_body)
+    .bind(record.response_body)
     .execute(pool)
     .await?;
     Ok(())
@@ -286,7 +295,7 @@ async fn search_with_pool(
         .await?;
     let rows_sql = format!(
         "SELECT event_id, occurred_at_ms, service, user_id, username, actor_type, source_service, method, route, path,
-                status, business_success, duration_ms, request_id FROM operation_logs WHERE {where_sql}
+                status, business_success, duration_ms, request_id, request_body, response_body FROM operation_logs WHERE {where_sql}
          ORDER BY occurred_at_ms DESC, event_id DESC LIMIT ? OFFSET ?"
     );
     let rows = sqlx::query_as::<_, OperationRow>(&rows_sql)
@@ -317,7 +326,7 @@ pub async fn pending(limit: i64) -> anyhow::Result<Vec<OperationRow>> {
 async fn pending_with_pool(pool: &SqlitePool, limit: i64) -> anyhow::Result<Vec<OperationRow>> {
     Ok(sqlx::query_as::<_, OperationRow>(
         "SELECT event_id, occurred_at_ms, service, user_id, username, actor_type, source_service, method, route, path,
-                status, business_success, duration_ms, request_id FROM operation_logs WHERE upload_state = 0
+                status, business_success, duration_ms, request_id, request_body, response_body FROM operation_logs WHERE upload_state = 0
          ORDER BY occurred_at_ms, event_id LIMIT ?",
     )
     .bind(limit)
@@ -363,6 +372,7 @@ mod tests {
         assert!(should_record(&Method::POST, "/api/channels"));
         assert!(!should_record(&Method::GET, "/health"));
         assert!(!should_record(&Method::GET, "/api/v1/auth/validate"));
+        assert!(!should_record(&Method::POST, "/api/v1/auth/refresh"));
         assert_eq!(decode_header_value("%E7%AE%A1%E7%90%86%E5%91%98"), "管理员");
         assert_eq!(
             like_pattern(Some("a%b_c\\d")).as_deref(),
@@ -387,7 +397,7 @@ mod tests {
             .unwrap();
         assert_eq!(journal_mode, "delete");
         create_schema(&pool).await.unwrap();
-        sqlx::query("INSERT INTO operation_logs (occurred_at_ms, service, user_id, username, actor_type, method, route, path, status, duration_ms) VALUES (100, 'comsrv', 4, 'alice', 'user', 'POST', '/api/channels/{id}', '/api/channels/1', 200, 3)")
+        sqlx::query("INSERT INTO operation_logs (occurred_at_ms, service, user_id, username, actor_type, method, route, path, status, duration_ms, request_body, response_body) VALUES (100, 'comsrv', 4, 'alice', 'user', 'POST', '/api/channels/{id}', '/api/channels/1', 200, 3, '{\"name\":\"test\"}', '{\"success\":true}')")
             .execute(&pool).await.unwrap();
         let filter = OperationFilter {
             from_ms: 0,
@@ -400,6 +410,8 @@ mod tests {
         let (rows, total) = search_with_pool(&pool, &filter).await.unwrap();
         assert_eq!(total, 1);
         assert_eq!(rows[0].username.as_deref(), Some("alice"));
+        assert_eq!(rows[0].request_body.as_deref(), Some("{\"name\":\"test\"}"));
+        assert_eq!(rows[0].response_body.as_deref(), Some("{\"success\":true}"));
         let escaped_filter = OperationFilter {
             username: Some("a%".to_owned()),
             ..filter

@@ -350,8 +350,6 @@ pub fn create_api_routes_generic<R: Rtdb>(
             get(get_network_interface).put(update_network_interface),
         )
         .route("/api/network/apply", post(apply_network_changes))
-        // CRITICAL: Apply middleware BEFORE .with_state() for it to work
-        .layer(axum::middleware::from_fn(common::logging::http_request_logger))
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB request body limit
         .with_state(state)
 }
