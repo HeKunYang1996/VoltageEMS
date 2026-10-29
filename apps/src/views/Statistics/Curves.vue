@@ -148,11 +148,11 @@ const PRODUCT_ACCENT: Record<string, string> = {
 
 const getAccentColor = (productName: string) => PRODUCT_ACCENT[productName] ?? '#69CBFF'
 
-const mapMeasurementPoints = (measurements: Record<string, InstanceMeasurementItem>): PointDef[] => {
-  return Object.entries(measurements)
-    .map(([id, item]) => ({
-      id,
-      name: item.name || `Point ${id}`,
+const mapMeasurementPoints = (measurements: InstanceMeasurementItem[]): PointDef[] => {
+  return measurements
+    .map((item) => ({
+      id: String(item.measurement_id),
+      name: item.name || `Point ${item.measurement_id}`,
       unit: item.unit || '',
     }))
     .sort((a, b) => Number(a.id) - Number(b.id))

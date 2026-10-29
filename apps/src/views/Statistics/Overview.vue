@@ -39,7 +39,10 @@
         <div class="curves__chart-item">
           <div class="chart__review">
             <div class="chart__review-header">
-              <div class="chart__review-header-title">Energy consumption</div>
+              <div>
+                <div class="chart__review-header-title">Energy consumption</div>
+                <div v-if="loadEnergyCoverage" class="chart__review-coverage">{{ loadEnergyCoverage }}</div>
+              </div>
               <div class="chart__review-header-value">
                 {{ totalLoadEnergy }}&nbsp;<span class="chart__review-header-unit">kWh</span>
               </div>
@@ -127,299 +130,132 @@ import DG from '@/assets/icons/DGEnergy.svg'
 import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
 import { getRecentHoursRange, getRecentDaysRange, getRecentWeekRange } from '@/utils/date.ts'
-import type { BatchQueryResponse } from '@/types/Statistics/OverView'
-import useWebSocket from '@/composables/useWebSocket'
 import { formatNumber } from '@/utils/common'
-import { useDeviceTopologyStore } from '@/stores/deviceTopology'
-import { computed, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { useEnergyStatistics } from '@/composables/useEnergyStatistics'
+import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } from '@/utils/energyStatistics'
 
 interface ChartSeries {
   name: string
-  data: number[]
+  data: (number | null)[]
   color: string
 }
 
-// 时间选择
 const defaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
-const rangeArray = ref<string[]>([])
+const rangeArray = ref<string[] | null>([])
 const selectedTimeBtn = ref<'6h' | '1d' | '1w' | '1m' | 'custom'>('6h')
-
-const timeBtnList: { label: string; value: '6h' | '1d' | '1w' | '1m' | 'custom' }[] = [
+const timeBtnList = [
   { label: 'Custom', value: 'custom' },
   { label: '6 Hour', value: '6h' },
   { label: '1 Day', value: '1d' },
   { label: '1 Week', value: '1w' },
   { label: '1 Month', value: '1m' },
-]
-
-// 概览卡片数据
-const totalLoadEnergy = ref(0)
-const stationInfoList = reactive([
-  { title: 'PV', icon: PVEnergy, value: '--', unit: 'kW' },
-  { title: 'ESS', icon: ESS, value: '--', unit: 'kW' },
-  { title: 'DG', icon: DG, value: '--', unit: 'kW' },
-])
-
-const topoStore = useDeviceTopologyStore()
-
-// 无回退值：store 未加载时为 undefined，响应式触发后再订阅/请求
-const essIds = computed(() => topoStore.selectedBatteryGroup?.primaryInstanceIds ?? [])
-const dgIds = computed(() => topoStore.getLogicalDeviceInstanceIds('diesel'))
-const pvIds = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds ?? [])
-const loadWsIds = computed(() => topoStore.getLogicalDeviceInstanceIds('meterLoad'))
-const essId = computed<number | undefined>(
-  () => essIds.value[0],
-)
-const dgId = computed<number | undefined>(() => dgIds.value[0])
-const pvId = computed<number | undefined>(() => pvIds.value[0])
-const loadWsId = computed<number | undefined>(() => loadWsIds.value[0])
-
-// WebSocket 订阅的 inst 通道列表（过滤掉尚未解析的 undefined）
-const wsInstChannels = computed<number[]>(() =>
-  [...new Set([...essIds.value, ...dgIds.value, ...pvIds.value, ...loadWsIds.value])],
-)
-
-// 加载状态 & 请求取消
+] as const
+const statistics = useEnergyStatistics()
+// Range consumption comes only from historical counter differences. Live
+// cumulative readings must never overwrite a selected range's consumption.
+const totalLoadEnergy = ref<string>('--')
+const loadEnergyCoverage = ref('')
+const stationInfoList = computed(() => [
+  { title: 'PV', icon: PVEnergy, value: statistics.live.value.pvPower, unit: 'kW' },
+  { title: 'ESS', icon: ESS, value: statistics.live.value.essPower, unit: 'kW' },
+  { title: 'DG', icon: DG, value: statistics.live.value.dgPower, unit: 'kW' },
+].map((item) => ({ ...item, value: item.value === null ? '--' : formatNumber(item.value) })))
 const isLoading = ref(false)
 let fetchAbortController: AbortController | null = null
-
-// 图表公共 X 轴
+let requestVersion = 0
 const xAxisData = ref<string[]>([])
-
-// Load Energy 柱状图 series
-const loadEnergySeriesData = ref<ChartSeries[]>([
-  { name: 'Load', data: [], color: '#4FADF7' },
-])
-
-// Energy 柱状图 series (PV + DG)
-const energySeriesData = ref<ChartSeries[]>([
-  { name: 'Pv', data: [], color: '#69CBFF' },
-  { name: 'DG', data: [], color: '#1D86FF' },
-])
-
-// SOC 折线图 series
-const socSeriesData = ref<ChartSeries[]>([
-  { name: 'SOC', data: [], color: '#6DD400' },
-])
-
-// Power 折线图 series (PV + ESS + DG)
-const powerSeriesData = ref<ChartSeries[]>([
-  { name: 'Pv', data: [], color: '#69CBFF' },
-  { name: 'ESS', data: [], color: '#4FADF7' },
-  { name: 'DG', data: [], color: '#F6C85F' },
-])
-
-// 饼图：设备运行状态（Online / Offline / Alarm）
+const loadEnergySeriesData = ref<ChartSeries[]>([])
+const energySeriesData = ref<ChartSeries[]>([])
+const socSeriesData = ref<ChartSeries[]>([])
+const powerSeriesData = ref<ChartSeries[]>([])
 const energyDistributionData = [
   { name: 'Online', value: 0, color: '#6DD400' },
   { name: 'Offline', value: 100, color: '#4FADF7' },
   { name: 'Alarm', value: 0, color: '#FF4D4F' },
 ]
 
-// 实时值映射：根据 store 提供的动态 instanceId 分发到对应卡片
-const applyChannelValues = (channelId: number, values: Record<string, number>) => {
-  if (pvIds.value.includes(channelId)) {
-    if (values['7'] !== undefined) stationInfoList[0].value = formatNumber(values['7'])
-  } else if (essIds.value.includes(channelId)) {
-    if (values['9'] !== undefined) stationInfoList[1].value = formatNumber(values['9'])
-  } else if (dgIds.value.includes(channelId)) {
-    if (values['1'] !== undefined) stationInfoList[2].value = formatNumber(values['1'])
-  } else if (loadWsIds.value.includes(channelId)) {
-    if (values['2'] !== undefined) totalLoadEnergy.value = Math.round(Number(values['2']))
+const getTimeRange = (): { start_time: string; end_time: string } | null => {
+  if (selectedTimeBtn.value === 'custom') {
+    if (!Array.isArray(rangeArray.value) || rangeArray.value.length !== 2) return null
+    const start = dayjs(rangeArray.value[0])
+    const end = dayjs(rangeArray.value[1])
+    if (!start.isValid() || !end.isValid() || !end.isAfter(start)) return null
+    return {
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+    }
   }
+  const rangeMap = {
+    '6h': getRecentHoursRange(6), '1d': getRecentDaysRange(1),
+    '1w': getRecentWeekRange(), '1m': getRecentDaysRange(30),
+  }
+  const range = rangeMap[selectedTimeBtn.value as keyof typeof rangeMap] ?? getRecentHoursRange(6)
+  return { start_time: range.start!, end_time: range.end! }
 }
-
-const makeWsHandlers = () => ({
-  onDataUpdate: (data: any) => applyChannelValues(data.channel_id, data.values),
-  onBatchDataUpdate: (data: any) => {
-    for (const item of data?.updates ?? []) applyChannelValues(item.channel_id, item.values)
-  },
-})
-
-const { subscribe, unsubscribe } = useWebSocket(
-  { source: 'inst', channels: [], dataTypes: ['M'], interval: 2000 },
-  makeWsHandlers(),
+const formatLabel = (timestamp: string) => dayjs(timestamp).format(
+  selectedTimeBtn.value === '6h' || selectedTimeBtn.value === '1d' ? 'HH:mm' : 'MM-DD HH:mm',
 )
 
-// store 加载后，若 onMounted 时 ID 已可用则立即订阅
-onMounted(() => {
-  const channels = wsInstChannels.value
-  if (channels.length > 0) {
-    unsubscribe()
-    subscribe({ source: 'inst', channels, dataTypes: ['M'], interval: 2000 }, makeWsHandlers())
-  }
-})
-
-// store 加载完成或 instanceId 变化时重新订阅（空数组时取消订阅等待）
-watch(wsInstChannels, (ids) => {
-  unsubscribe()
-  if (ids.length > 0) {
-    subscribe({ source: 'inst', channels: ids, dataTypes: ['M'], interval: 2000 }, makeWsHandlers())
-  }
-})
-
-// 获取当前时间范围（ISO 格式）
-const getTimeRange = (): { start_time: string; end_time: string } => {
-  if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
-    return {
-      start_time: dayjs(rangeArray.value[0]).toISOString(),
-      end_time: dayjs(rangeArray.value[1]).toISOString(),
-    }
-  }
-  const rangeMap: Record<string, { start?: string; end?: string }> = {
-    '6h': getRecentHoursRange(6),
-    '1d': getRecentDaysRange(1),
-    '1w': getRecentWeekRange(),
-    '1m': getRecentDaysRange(30),
-  }
-  const range = rangeMap[selectedTimeBtn.value] || getRecentHoursRange(6)
-  return {
-    start_time: range.start!,
-    end_time: range.end!,
-  }
-}
-
-// 格式化时间戳为 x 轴标签
-const formatLabel = (ts: string): string => {
-  const btn = selectedTimeBtn.value
-  if (btn === '6h' || btn === '1d') return dayjs(ts).format('HH:mm')
-  return dayjs(ts).format('MM-DD HH:mm')
-}
-
-const formatValue = (v: number | null | undefined): number =>
-  Number(Number(v ?? 0).toFixed(3))
-
-// 批量查询并更新所有图表
 const fetchAllChartData = async () => {
-  const ess    = essId.value
-  const dg     = dgId.value
-  const pv     = pvId.value
-  const loadId = loadWsId.value
-
-  // 拓扑未加载或关键设备未找到，等待响应式触发后再请求
-  if (ess === undefined || dg === undefined || pv === undefined) return
-
-  // 取消上一次未完成的请求
+  const metrics = statistics.metrics.value
+  const series = statisticRequests(metrics)
+  const version = ++requestVersion
   fetchAbortController?.abort()
   fetchAbortController = new AbortController()
-  const signal = fetchAbortController.signal
-
-  isLoading.value = true
-  const { start_time, end_time } = getTimeRange()
-
-  // 动态构建 series，Load 未绑定时不请求该序列
-  const loadSeries = loadId !== undefined
-    ? [{ redis_key: `inst:${loadId}:M`, point_id: '2' }]
-    : []
-
+  totalLoadEnergy.value = '--'
+  loadEnergyCoverage.value = ''
+  xAxisData.value = []
+  loadEnergySeriesData.value = []
+  energySeriesData.value = []
+  socSeriesData.value = []
+  powerSeriesData.value = []
+  const range = getTimeRange()
+  isLoading.value = series.length > 0 && range !== null
+  if (!series.length || !range) return
   try {
-    const res = await batchQueryHistory(
-      {
-        start_time,
-        end_time,
-        limit_per_series: 500,
-        series: [
-          ...loadSeries,                                            // Load Energy（可选）
-          { redis_key: `inst:${pv}:M`,  point_id: '15' },         // Energy PV
-          { redis_key: `inst:${dg}:M`,  point_id: '2'  },         // Energy DG
-          { redis_key: `inst:${ess}:M`, point_id: '7'  },         // SOC
-          { redis_key: `inst:${pv}:M`,  point_id: '7'  },         // Power PV
-          { redis_key: `inst:${ess}:M`, point_id: '5'  },         // Power ESS
-          { redis_key: `inst:${dg}:M`,  point_id: '1'  },         // Power DG
-        ],
-      },
-      signal,
-    )
-
-    const responses: BatchQueryResponse[] = res.data?.series || []
-
-    const findSeries = (redisKey: string, pointId: string) =>
-      responses.find((r) => r.redis_key === redisKey && r.point_id === pointId)
-
-    // 合并所有时间戳并排序
-    const allTimestamps = new Set<string>()
-    responses.forEach((r) => (r.data || []).forEach((p) => allTimestamps.add(p.timestamp)))
-    const sortedTimestamps = [...allTimestamps].sort(
-      (a, b) => new Date(a).getTime() - new Date(b).getTime(),
-    )
-
-    xAxisData.value = sortedTimestamps.map(formatLabel)
-
-    const makeValueArray = (s: BatchQueryResponse | undefined): number[] => {
-      if (!s) return sortedTimestamps.map(() => 0)
-      const map = new Map((s.data || []).map((p) => [p.timestamp, p.value]))
-      return sortedTimestamps.map((ts) => formatValue(map.get(ts)))
+    const response = await batchQueryHistory({
+      ...range, limit_per_series: STATISTIC_HISTORY_LIMIT, series,
+    }, fetchAbortController.signal)
+    if (version !== requestVersion || !response.success) return
+    const chart = buildStatisticChartData(metrics, response.data?.series ?? [])
+    xAxisData.value = chart.timestamps.map(formatLabel)
+    totalLoadEnergy.value = chart.loadEnergy === null ? '--' : formatNumber(chart.loadEnergy)
+    if (chart.loadEnergyCoverage) {
+      const { start, end } = chart.loadEnergyCoverage
+      loadEnergyCoverage.value = `Measured ${dayjs(start).format('MM-DD HH:mm')} – ${dayjs(end).format('MM-DD HH:mm')}`
     }
-
-    const loadEnergyData   = loadId !== undefined ? makeValueArray(findSeries(`inst:${loadId}:M`, '2')) : []
-    const pvEnergyData     = makeValueArray(findSeries(`inst:${pv}:M`, '15'))
-    const dieselEnergyData = makeValueArray(findSeries(`inst:${dg}:M`, '2'))
-    const socData          = makeValueArray(findSeries(`inst:${ess}:M`, '7'))
-    const pvPowerData      = makeValueArray(findSeries(`inst:${pv}:M`, '7'))
-    const essPowerData     = makeValueArray(findSeries(`inst:${ess}:M`, '5'))
-    const dieselPowerData  = makeValueArray(findSeries(`inst:${dg}:M`, '1'))
-
-    // 更新总负荷电能
-    totalLoadEnergy.value = Math.round(loadEnergyData.reduce((a, b) => a + b, 0))
-
-    // 更新 Load Energy 图表
-    loadEnergySeriesData.value = [{ name: 'Load', data: loadEnergyData, color: '#4FADF7' }]
-
-    // 更新 Energy 图表
+    loadEnergySeriesData.value = [{ name: 'Load', data: chart.values('loadEnergy'), color: '#4FADF7' }]
     energySeriesData.value = [
-      { name: 'Pv', data: pvEnergyData, color: '#69CBFF' },
-      { name: 'DG', data: dieselEnergyData, color: '#1D86FF' },
+      { name: 'Pv', data: chart.values('pvEnergy'), color: '#69CBFF' },
+      { name: 'DG', data: chart.values('dgEnergy'), color: '#1D86FF' },
     ]
-
-    // 更新 SOC 图表
-    socSeriesData.value = [{ name: 'SOC', data: socData, color: '#6DD400' }]
-
-    // 更新 Power 图表
+    socSeriesData.value = [{ name: 'SOC', data: chart.values('soc'), color: '#6DD400' }]
     powerSeriesData.value = [
-      { name: 'Pv', data: pvPowerData, color: '#69CBFF' },
-      { name: 'ESS', data: essPowerData, color: '#4FADF7' },
-      { name: 'DG', data: dieselPowerData, color: '#F6C85F' },
+      { name: 'Pv', data: chart.values('pvPower'), color: '#69CBFF' },
+      { name: 'ESS', data: chart.values('essPower'), color: '#4FADF7' },
+      { name: 'DG', data: chart.values('dgPower'), color: '#F6C85F' },
     ]
-  } catch (error: any) {
-    // AbortError / CanceledError 表示请求被主动取消，静默处理
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED' || error?.name === 'AbortError') return
+  } catch (error: unknown) {
+    if (version !== requestVersion || fetchAbortController.signal.aborted) return
     console.error('Failed to load overview chart data:', error)
   } finally {
-    isLoading.value = false
+    if (version === requestVersion) isLoading.value = false
   }
 }
 
-onMounted(() => {
-  // 若 store 已加载（快速页面切换场景），立即拉取历史图表
-  if (topoStore.loaded) fetchAllChartData()
-})
-
-onUnmounted(() => {
-  fetchAbortController?.abort()
-})
-
-// store 首次完成加载后触发图表数据（异步加载完成场景）
-watch(() => topoStore.loaded, (loaded) => {
-  if (loaded) fetchAllChartData()
-})
-
-// 时间按钮点击（事件代理）
+// Fetch whatever equipment exists; PV/ESS/Diesel are independently optional.
+watch(statistics.metrics, fetchAllChartData, { immediate: true })
+onUnmounted(() => { requestVersion++; fetchAbortController?.abort() })
 const handleTimeBtnClick = (event: MouseEvent) => {
   const btn = (event.target as HTMLElement).closest('.curves__toolbar-time-btn') as HTMLElement | null
-  if (btn?.dataset.value) {
-    selectedTimeBtn.value = btn.dataset.value as '6h' | '1d' | '1w' | '1m' | 'custom'
-    rangeArray.value = []
-    if (selectedTimeBtn.value !== 'custom') {
-      fetchAllChartData()
-    }
-  }
+  if (!btn?.dataset.value) return
+  selectedTimeBtn.value = btn.dataset.value as typeof selectedTimeBtn.value
+  rangeArray.value = []
+  fetchAllChartData()
 }
-
-// 自定义时间范围变化
 const handleDateRangeChange = () => {
-  if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
-    fetchAllChartData()
-  }
+  if (selectedTimeBtn.value === 'custom') fetchAllChartData()
 }
 
 </script>
@@ -532,6 +368,12 @@ const handleDateRangeChange = () => {
             font-size: 0.26rem;
             line-height: 100%;
             letter-spacing: 0%;
+          }
+
+          .chart__review-coverage {
+            margin-top: 0.04rem;
+            font-size: 0.11rem;
+            color: rgba(255, 255, 255, 0.6);
           }
 
           .chart__review-header-value {

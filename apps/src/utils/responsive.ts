@@ -4,7 +4,9 @@ const DESIGN_WIDTH = 1920
 const BASE_FONT_SIZE = 100 // 100px = 1rem
 
 function getResponsiveScale(): number {
-  return window.innerWidth / DESIGN_WIDTH
+  // Scale from design width (1920px). Matches login/background layout expectations on wide viewports.
+  const width = document.documentElement.clientWidth || window.innerWidth
+  return width / DESIGN_WIDTH
 }
 
 /**
@@ -16,15 +18,22 @@ export function setRem(): void {
   html.style.fontSize = `${fontSize}px`
 }
 
+let remResizeTimer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleRemUpdate(): void {
+  clearTimeout(remResizeTimer)
+  remResizeTimer = setTimeout(setRem, 100)
+}
+
 /**
  * Initialize responsive behavior.
  */
 export function initResponsive(): void {
   setRem()
 
-  window.addEventListener('resize', function () {
-    clearTimeout((window as any).remResizeTimer)
-    ;(window as any).remResizeTimer = setTimeout(setRem, 100)
+  window.addEventListener('resize', scheduleRemUpdate)
+  window.addEventListener('orientationchange', () => {
+    setRem()
   })
 }
 

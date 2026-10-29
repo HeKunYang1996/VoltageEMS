@@ -9,8 +9,10 @@ import { useUserStore } from '@/stores/user'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { storeToRefs } from 'pinia'
 import AppSkeleton from '@/components/common/AppSkeleton.vue'
+import { DEMO_ALARM_NUM } from '@/mocks/homepageDemo'
 
 const locale = en
+const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true'
 const router = useRouter()
 const globalStore = useGlobalStore()
 const userStore = useUserStore()
@@ -87,6 +89,7 @@ const initWebSocket = async () => {
         console.log('[main] alarm:', alarm)
       },
       onAlarmNum: (alarmNum) => {
+        if (isDemoMode) return
         console.log('[main] alarm count updated:', alarmNum)
         globalStore.alarmNum = alarmNum.current_alarms
       },
@@ -100,6 +103,9 @@ watch(
   () => userStore.isLoggedIn,
   (isLoggedIn) => {
     if (isLoggedIn) {
+      if (isDemoMode) {
+        globalStore.alarmNum = DEMO_ALARM_NUM
+      }
       console.log('[main] user logged in, connecting websocket')
       initWebSocket()
     } else {

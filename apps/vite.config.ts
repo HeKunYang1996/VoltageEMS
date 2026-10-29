@@ -2,7 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import vueDevTools from 'vite-plugin-vue-devtools'
+// import vueDevTools from 'vite-plugin-vue-devtools'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
@@ -20,7 +20,6 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     vue(),
-    vueDevTools(),
     // vueDevTools(), // 暂时关闭 Vue DevTools 调试工具
     AutoImport({
       imports: ['vue', 'vue-router', 'pinia'],
@@ -145,7 +144,10 @@ export default defineConfig(({ mode }) => ({
           replace: true, // 是否替换原来的值
           mediaQuery: false, // 是否转换媒体查询中的 px
           minPixelValue: 1, // 小于这个值的 px 不转换
-          exclude: /EnergyBg\.vue/i, // 排除EnergyBg.vue 文件
+          // HomeBg.vue contains SVG foreignObject coordinates and animation
+          // distances. Keep those values in SVG/CSS pixels instead of
+          // converting them to viewport-dependent rem values.
+          exclude: /(?:EnergyBg|HomeBg)\.vue/i,
         }),
       ],
     },

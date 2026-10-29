@@ -28,11 +28,21 @@
           Battery Management
         </el-button>
       </div>
-      <div v-if="topoStore.batteryGroups.length > 1" class="device-group-selector">
+      <div v-if="topoStore.batterySystems.length" class="device-group-selector">
         <span>Battery System:</span>
-        <el-select v-model="topoStore.selectedBatteryGroupId" size="small" fit-input-width :title="topoStore.selectedBatteryGroup?.displayName ?? ''">
-          <el-option v-for="group in topoStore.batteryGroups" :key="group.id" :label="group.displayName" :value="group.id">
-            <span class="select-option-text" :title="group.displayName">{{ group.displayName }}</span>
+        <el-select
+          v-model="topoStore.selectedBatterySystemId"
+          size="small"
+          fit-input-width
+          :title="topoStore.selectedBatterySystem?.displayName ?? ''"
+        >
+          <el-option
+            v-for="system in topoStore.batterySystems"
+            :key="system.id"
+            :label="system.displayName"
+            :value="system.id"
+          >
+            <span class="select-option-text" :title="system.displayName">{{ system.displayName }}</span>
           </el-option>
         </el-select>
       </div>

@@ -25,6 +25,8 @@
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="lineChartYAxiosOption"
               :series="lineChartSeries"
+              :showArea="false"
+              legendIcon="rect"
             />
           </ModuleCard>
         </div>
@@ -34,6 +36,7 @@
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="yAxiosOption"
               :series="exampleSeries"
+              legendIcon="rect"
             />
           </ModuleCard>
         </div>
@@ -117,7 +120,13 @@
             @touchend="handleAlarmTouchEnd"
           >
             <div v-if="alarmPullDistance > 0" class="home-alarmsRefreshHint">
-              {{ refreshingAlarms ? 'Refreshing...' : alarmPullDistance >= ALARM_PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh' }}
+              {{
+                refreshingAlarms
+                  ? 'Refreshing...'
+                  : alarmPullDistance >= ALARM_PULL_TRIGGER
+                    ? 'Release to refresh'
+                    : 'Pull to refresh'
+              }}
             </div>
             <div class="home-alarmsItem" v-for="item in alarmInfoList" :key="item.id">
               <div class="alarms__item-name" :title="item.deviceName">{{ item.deviceName }}</div>
@@ -138,7 +147,9 @@
               />
               <div class="alarms__item-msg" :title="item.alarmMsg">{{ item.alarmMsg }}</div>
             </div>
-            <div v-if="!alarmInfoList.length && !refreshingAlarms" class="home-alarmsEmpty">No current alarms</div>
+            <div v-if="!alarmInfoList.length && !refreshingAlarms" class="home-alarmsEmpty">
+              No current alarms
+            </div>
           </div>
         </ModuleCard>
       </div>
@@ -147,10 +158,18 @@
 </template>
 
 <script setup lang="ts">
+import { homepageChartColor } from '@/utils/theme'
 import type { EnergyCard } from '@/types/home'
 import { HOMEPAGE_POINT_IDS } from '@/types/home'
 import useWebSocket from '@/composables/useWebSocket'
+import {
+  isHomepageDemoMode,
+  shouldSubscribeHomepageWebSocket,
+  useHomepageDemo,
+} from '@/composables/useHomepageDemo'
 import { formatNumber } from '@/utils/common'
+
+const isDemoMode = isHomepageDemoMode()
 
 import ModuleCard from '@/components/card/ModuleCard.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
@@ -158,19 +177,19 @@ import LineChart from '@/components/charts/lineChart.vue'
 import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
 import { getRecentHoursRange } from '@/utils/date'
-import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import { useEnergyStatistics } from '@/composables/useEnergyStatistics'
+import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } from '@/utils/energyStatistics'
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
-import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { watch, onUnmounted } from 'vue'
 
 import alarmL1 from '@/assets/icons/home-alarm-L1.svg'
 import alarmL2 from '@/assets/icons/home-alarm-L2.svg'
-import alarmL3 from '@/assets/icons/home-alarm-L3.svg'
+import alarmL3 from '@/assets/images/home-topology/alert-l3.svg'
 
-import arrowLeftImg from '@/assets/icons/arrow-left.svg'
-import arrowRightImg from '@/assets/icons/arrow-right.svg'
+import arrowLeftImg from '@/assets/images/home-topology/device-prev.svg'
+import arrowRightImg from '@/assets/images/home-topology/device-next.svg'
 
 import devicePV from '@/assets/icons/device-pv.svg'
 import deviceDiesel from '@/assets/icons/device-diesel.svg'
@@ -226,7 +245,7 @@ const HOMEPAGE_POINT_DEFAULTS: Record<number, { name: string; unit: string; imgu
   4: { name: 'Saving Billing', unit: '$', imgurl: 'icon-saving-billing' },
   5: { name: 'PV Power', unit: 'kW', imgurl: 'icon-pv-energy' },
   6: { name: 'Diesel Power', unit: 'kW', imgurl: 'icon-diesel-energy' },
-  7: { name: 'ESS Power', unit: 'kW', imgurl: 'icon-ess-energy' },
+  7: { name: 'BESS Power', unit: 'kW', imgurl: 'icon-ess-energy' },
   8: { name: 'P', unit: 'kW' },
   9: { name: 'U', unit: 'V' },
   10: { name: 'P', unit: 'kW' },
@@ -236,7 +255,7 @@ const HOMEPAGE_POINT_DEFAULTS: Record<number, { name: string; unit: string; imgu
   14: { name: 'P', unit: 'kW' },
   15: { name: 'P', unit: 'kW' },
   16: { name: 'P', unit: 'kW' },
-  17: { name: 'Oil', unit: '%' },
+  17: { name: 'Fuel', unit: '%' },
   18: { name: 'P', unit: 'kW' },
   19: { name: 'SOC', unit: '%' },
 }
@@ -263,7 +282,7 @@ const stationInfoList = computed<EnergyCard[]>(() =>
     const def = HOMEPAGE_POINT_DEFAULTS[id]
     return {
       id,
-      title: p?.name ?? def?.name,
+      title: id === 7 ? def.name : (p?.name ?? def?.name),
       icon: getIconByImgurl(p?.imgurl ?? def?.imgurl),
       value: displayValue(p?.values),
       unit: p?.unit ?? def?.unit,
@@ -280,9 +299,16 @@ const tuopuData = computed(() => {
           ...p,
           name: p.name ?? defaultName,
           value: displayValue(p.values),
+          rawValue: p.values,
           unit: p.unit ?? defaultUnit,
         }
-      : { id: undefined, name: defaultName, value: '-' as const, unit: defaultUnit }
+      : {
+          id: undefined,
+          name: defaultName,
+          value: '-' as const,
+          rawValue: undefined,
+          unit: defaultUnit,
+        }
   return {
     pv: {
       P: fmt(
@@ -338,7 +364,7 @@ interface DeviceSlide {
   name: string
 }
 const deviceIcons = [devicePV, deviceDiesel, deviceBattery]
-const deviceNames = ['PV', 'Diesel Generator', 'ESS']
+const deviceNames = ['PV', 'Diesel Generator', 'BESS']
 const deviceInfoList = computed<DeviceSlide[]>(() =>
   HOMEPAGE_POINT_IDS.deviceInfo.map((ids, idx) => ({
     data: ids.map((pointId) => {
@@ -373,21 +399,23 @@ function applyHomepageBatch(data: {
   }
 }
 
-/** 首页 WebSocket 订阅：进入订阅、离开取消 */
-useWebSocket(
-  {
-    source: 'homepage',
-    interval: 1000,
-  },
-  {
-    onBatchDataUpdate: (data: any) => {
-      if (data?.updates?.length) {
-        applyHomepageBatch(data)
-      }
+/** 首页 WebSocket 订阅：进入订阅、离开取消（演示模式跳过） */
+if (shouldSubscribeHomepageWebSocket()) {
+  useWebSocket(
+    {
+      source: 'homepage',
+      interval: 1000,
     },
-    onAlarm: handleHomeAlarm,
-  },
-)
+    {
+      onBatchDataUpdate: (data: any) => {
+        if (data?.updates?.length) {
+          applyHomepageBatch(data)
+        }
+      },
+      onAlarm: handleHomeAlarm,
+    },
+  )
+}
 
 interface HomeAlarmItem {
   id: number | string
@@ -475,26 +503,32 @@ const handleAlarmTouchMove = (event: TouchEvent) => {
 }
 
 const handleAlarmTouchEnd = () => {
-  if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) fetchHomeAlarms()
-  else alarmPullDistance.value = 0
+  if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) {
+    if (isDemoMode) demoControls?.refreshAlarms()
+    else fetchHomeAlarms()
+  } else {
+    alarmPullDistance.value = 0
+  }
   alarmTouchStartY.value = null
 }
 
-fetchHomeAlarms()
+if (!isDemoMode) {
+  fetchHomeAlarms()
+}
 
 // ─── 图表数据（Power Curve + Energy Chart）────────────────────
 const chartXAxisData = ref<string[]>([])
 
 const lineChartSeries = ref([
-  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
-  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
-  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+  { name: 'PV', data: [] as (number | null)[], color: homepageChartColor('PV') },
+  { name: 'Diesel', data: [] as (number | null)[], color: homepageChartColor('DG') },
+  { name: 'BESS', data: [] as (number | null)[], color: homepageChartColor('BESS') },
 ])
 
 const exampleSeries = ref([
-  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
-  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
-  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+  { name: 'PV', data: [] as (number | null)[], color: homepageChartColor('PV') },
+  { name: 'Diesel', data: [] as (number | null)[], color: homepageChartColor('DG') },
+  { name: 'BESS', data: [] as (number | null)[], color: homepageChartColor('BESS') },
 ])
 
 const xAxiosOption = computed(() => ({ xAxiosData: chartXAxisData.value }))
@@ -502,104 +536,63 @@ const yAxiosOption = { yUnit: 'kWh' }
 const lineChartYAxiosOption = { yUnit: 'kW' }
 
 const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
-const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3))
-
+const statistics = useEnergyStatistics(() => !isDemoMode)
 let chartRequestToken = 0
+let chartAbortController: AbortController | undefined
 
 const fetchHomeChartData = async () => {
-  const range = getRecentHoursRange(6)
+  const metrics = statistics.metrics.value
+  const series = statisticRequests(metrics)
   const myToken = ++chartRequestToken
+  chartAbortController?.abort()
+  chartAbortController = new AbortController()
+  chartXAxisData.value = []
+  lineChartSeries.value = []
+  exampleSeries.value = []
+  if (!series.length) return
+  const range = getRecentHoursRange(6)
   try {
-    const topoStore = useDeviceTopologyStore()
-    if (!topoStore.loaded) await topoStore.load()
-
-    // 选中组就绪前的空态保护：避免 series 为空触发后端 400
-    const instanceIds = {
-      pv: topoStore.selectedPvGroup?.relatedInstanceIds[0],
-      dg: topoStore.getLogicalDeviceInstanceIds('diesel')[0],
-      ess: topoStore.selectedBatteryGroup?.primaryInstanceIds[0],
-    }
-    const queryDefinitions = [
-      { instanceId: instanceIds.pv, pointId: '7' },
-      { instanceId: instanceIds.dg, pointId: '1' },
-      { instanceId: instanceIds.ess, pointId: '5' },
-      { instanceId: instanceIds.pv, pointId: '15' },
-      { instanceId: instanceIds.dg, pointId: '2' },
-      { instanceId: instanceIds.ess, pointId: '9' },
-    ].filter((item) => item.instanceId !== undefined)
-
-    if (queryDefinitions.length === 0) {
-      console.warn('[HomeView] no valid series to query, skip chart request')
-      return
-    }
-
     const res = await batchQueryHistory({
-      start_time: range.start!,
-      end_time: range.end!,
-      limit_per_series: 500,
-      series: queryDefinitions.map(({ instanceId, pointId }) => ({
-        redis_key: `inst:${instanceId}:M`,
-        point_id: pointId,
-      })),
-    })
-
-    // 组件卸载或已有更新的请求发出，丢弃过期结果
-    if (myToken !== chartRequestToken) return
-
-    const responses: BatchQueryResponse[] = res.data?.series ?? []
-    const find = (instanceId: number | undefined, pointId: string) =>
-      instanceId === undefined
-        ? undefined
-        : responses.find((r) => r.redis_key === `inst:${instanceId}:M` && r.point_id === pointId)
-
-    const allTs = new Set<string>()
-    responses.forEach((r) => (r.data ?? []).forEach((p) => allTs.add(p.timestamp)))
-    const sorted = [...allTs].sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
-    chartXAxisData.value = sorted.map(fmtLabel)
-
-    const makeVals = (s: BatchQueryResponse | undefined) => {
-      if (!s) return sorted.map(() => 0)
-      const map = new Map((s.data ?? []).map((p) => [p.timestamp, p.value]))
-      return sorted.map((ts) => fmtVal(map.get(ts)))
-    }
-
+      start_time: range.start!, end_time: range.end!,
+      limit_per_series: STATISTIC_HISTORY_LIMIT, series,
+    }, chartAbortController.signal)
+    if (myToken !== chartRequestToken || !res.success) return
+    const chart = buildStatisticChartData(metrics, res.data?.series ?? [])
+    chartXAxisData.value = chart.timestamps.map(fmtLabel)
     lineChartSeries.value = [
-      { name: 'PV', data: makeVals(find(instanceIds.pv, '7')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find(instanceIds.dg, '1')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find(instanceIds.ess, '5')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: chart.values('pvPower'), color: homepageChartColor('PV') },
+      { name: 'Diesel', data: chart.values('dgPower'), color: homepageChartColor('DG') },
+      { name: 'BESS', data: chart.values('essPower'), color: homepageChartColor('BESS') },
     ]
-
     exampleSeries.value = [
-      { name: 'PV', data: makeVals(find(instanceIds.pv, '15')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find(instanceIds.dg, '2')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find(instanceIds.ess, '9')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: chart.values('pvEnergy'), color: homepageChartColor('PV') },
+      { name: 'Diesel', data: chart.values('dgEnergy'), color: homepageChartColor('DG') },
+      { name: 'BESS Discharge', data: chart.values('essEnergy'), color: homepageChartColor('BESS') },
     ]
   } catch (error) {
+    if (myToken !== chartRequestToken || chartAbortController.signal.aborted) return
     console.error('Failed to fetch home chart data:', error)
   }
 }
 
-// 等拓扑加载完成且选中组就绪后再拉取图表数据，避免 series 为空触发后端 400
-watch(
-  () => {
-    const topoStore = useDeviceTopologyStore()
-    return {
-      loaded: topoStore.loaded,
-      hasPv: !!topoStore.selectedPvGroup,
-      hasEss: !!topoStore.selectedBatteryGroup,
-    }
-  },
-  async (state) => {
-    if (state.loaded && (state.hasPv || state.hasEss)) {
-      await fetchHomeChartData()
-    }
-  },
-  { immediate: true },
-)
+let demoControls: ReturnType<typeof useHomepageDemo> | null = null
+
+if (isDemoMode) {
+  demoControls = useHomepageDemo({
+    applyHomepageBatch,
+    alarmInfoList,
+    chartXAxisData,
+    lineChartSeries,
+    exampleSeries,
+  })
+} else {
+  watch(statistics.metrics, fetchHomeChartData, { immediate: true })
+}
 
 onUnmounted(() => {
   // 标记旧请求失效，防止卸载后回调写入已销毁组件
   chartRequestToken += 1
+  chartAbortController?.abort()
 })
 
 // Carousel引用
@@ -626,6 +619,7 @@ const handleNext = () => {
   display: flex;
   justify-content: space-between;
   z-index: 2;
+  --energy-card-unit-weight: var(--vt-font-weight-normal);
 
   &::before {
     content: '';
@@ -634,16 +628,21 @@ const handleNext = () => {
     left: -0.2rem;
     width: calc(100% + 0.4rem);
     height: calc(100% + 0.4rem);
-    background: url('@/assets/images/home-bg.png') no-repeat center center;
+    background: var(--vt-bg-home);
     background-size: 100% 100%;
+    background-position: center;
+    background-repeat: no-repeat;
+    pointer-events: none;
     z-index: 1;
   }
 
   .home-left {
     position: relative;
     z-index: 2;
-    width: calc(100% - 3.9rem);
+    width: calc(100% - 3.8rem);
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     margin-right: 0.2rem;
     display: flex;
     flex-direction: column;
@@ -652,7 +651,7 @@ const handleNext = () => {
     .home-left-top {
       width: 100%;
       height: 0.8rem;
-      padding-top: 0.1rem;
+      /* padding-top: 0.255rem; */
       display: flex;
       justify-content: space-between;
       z-index: 1;
@@ -663,9 +662,12 @@ const handleNext = () => {
     }
 
     .home-left-middle {
+      position: relative;
+      z-index: 1;
       width: 100%;
       height: calc(69% - 1.2rem);
       flex: 1;
+      min-height: 0;
       // background-image: url('@/assets/images/tuopu.png');
       // background-size: 100% 100%;
       // background-repeat: no-repeat;
@@ -679,6 +681,8 @@ const handleNext = () => {
     }
 
     .home-left-bottom {
+      position: relative;
+      z-index: 2;
       width: 100%;
       height: 30.89%;
       display: flex;
@@ -700,8 +704,10 @@ const handleNext = () => {
     position: relative;
     z-index: 2;
 
-    width: 3.7rem;
+    width: 3.6rem;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -710,13 +716,22 @@ const handleNext = () => {
     .home-station {
       width: 100%;
       height: 36.75%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-stationList {
         height: 100%;
+        min-height: 0;
         padding-top: 0.2rem;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
 
         .home-stationItem {
-          height: 33.33%;
+          height: auto;
+          min-height: 0;
+          flex: 1 1 0;
+          overflow: hidden;
           padding-top: 0.12rem;
           padding-bottom: 0.13rem;
           border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
@@ -733,10 +748,14 @@ const handleNext = () => {
     .home-device {
       width: 100%;
       height: 28.27%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-decice-Carousel {
         height: 100%;
         width: 100%;
+        min-height: 0;
+        overflow: hidden;
 
         .home-decice-Carousel-item {
           height: 100%;
@@ -804,21 +823,32 @@ const handleNext = () => {
     .home-alarms {
       height: 30.89%;
       width: 100%;
+      min-height: 0;
+      overflow: hidden;
 
       .home-alarmsList {
         height: 100%;
-        overflow-y: scroll;
+        overflow-y: auto;
         touch-action: pan-y;
-        // 默认隐藏滚动条
-        scrollbar-width: none;
-        /* Firefox */
+        // 使用细滚动条，避免 Safari 将悬停时的滚动条绘制成粗竖块
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
         -ms-overflow-style: none;
         /* IE and Edge */
 
-        // Webkit浏览器隐藏滚动条
+        // WebKit 浏览器使用 2px 滑块，轨道保持透明
         &::-webkit-scrollbar {
-          width: 0;
-          height: 0;
+          width: 0.02rem;
+          height: 0.02rem;
+        }
+
+        &::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        &::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.28);
+          border-radius: 999px;
         }
 
         .home-alarmsRefreshHint,
@@ -829,28 +859,23 @@ const handleNext = () => {
           text-align: center;
         }
 
-        // 鼠标悬停时显示滚动条
+        // 悬停时保持细滚动条，不让 Safari 恢复系统默认粗度
         &:hover {
-          scrollbar-width: auto;
-          /* Firefox */
-          -ms-overflow-style: auto;
-          /* IE and Edge */
-
           &::-webkit-scrollbar {
-            width: 0.04rem;
-            height: 0.04rem;
+            width: 0.02rem;
+            height: 0.02rem;
           }
 
           &::-webkit-scrollbar-thumb {
-            border-radius: 0.02rem;
+            border-radius: 999px;
           }
         }
 
         .home-alarmsItem {
           min-height: 0.6rem;
-          border-bottom: 0.01rem solid rgba(255, 255, 255, 0.2);
+          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
           display: grid;
-          grid-template-columns: 0.4rem 0.46rem minmax(0, 1fr);
+          grid-template-columns: 0.5rem 0.46rem minmax(0, 1fr);
           column-gap: 0.1rem;
           align-items: center;
 
@@ -882,8 +907,6 @@ const handleNext = () => {
             -webkit-box-orient: vertical;
             -webkit-line-clamp: 2;
           }
-
-
         }
       }
     }
@@ -894,6 +917,7 @@ const handleNext = () => {
 :deep(.home-device-carousel .el-carousel__container),
 :deep(.home-device-carousel__item.el-carousel__item) {
   height: 100%;
+  min-height: 0;
 }
 
 :deep(.home-device-carousel__item.el-carousel__item) {

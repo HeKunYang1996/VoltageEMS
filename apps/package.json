@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo": "vite --mode demo",
     "build": "vite build",
     "build:type-check": "run-p type-check \"build-only {@}\" --",
     "build:check": "vite build",
