@@ -114,7 +114,7 @@ pub async fn list_products(
                         "description": "Battery energy storage device.",
                         "topology": {
                             "image": "device-Battery.png",
-                            "connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": 1}]
+                            "connections": [{"products": ["Hybrid_Inverter", "PCS"], "min": 1, "max": null}]
                         },
                         "measurements": [
                             {"measurement_id": 1, "name": "SOC", "unit": "%", "description": null, "attr": {"isDisplay": "true"}}

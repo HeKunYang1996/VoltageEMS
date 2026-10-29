@@ -262,31 +262,11 @@ async fn create_rule(
         req.channel_id,
         &req.data_type,
         req.point_id,
+        None,
     )
     .await
     {
-        Ok(Some(existing)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "success": false,
-                    "message": format!(
-                        "A rule already monitors this point (service:{}, channel:{}, type:{}, point:{})",
-                        req.service_type, req.channel_id, req.data_type, req.point_id
-                    ),
-                    "data": {
-                        "conflict": "duplicate_point",
-                        "existing_rule": {
-                            "id": existing.id,
-                            "rule_name": existing.rule_name,
-                            "created_at": existing.created_at,
-                        },
-                        "suggestion": format!("Update the existing rule (id:{}) or choose a different point", existing.id),
-                    }
-                })),
-            )
-                .into_response();
-        },
+        Ok(Some(existing)) => return duplicate_point_response(&existing),
         Ok(None) => {},
         Err(e) => {
             error!("create_rule point check: {}", e);
@@ -370,10 +350,10 @@ async fn get_rule(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> im
 /// the rule's `enabled` flag flipped to false, its active alerts are
 /// resolved with reason "rule disabled" (stored as the Chinese literal "规则被禁用" in alert records).
 ///
-/// If the patch touches `service_type` / `data_type` / `point_id`, the
+/// If the patch touches `service_type` / `channel_id` / `data_type` / `point_id`, the
 /// resulting tuple is re-validated against the channel-online sentinel
-/// shape (see POST), so partial updates can't sneak a malformed rule
-/// through.
+/// shape and duplicate monitor bindings (see POST). The current rule is
+/// excluded from the duplicate check; disabled rules still reserve their point.
 #[utoipa::path(put, path = "/alarmApi/rules/{id}", tag = "Rules",
     params(("id" = i64, Path, description = "Rule ID")),
     request_body = UpdateRuleRequest,
@@ -381,46 +361,84 @@ async fn get_rule(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> im
         (status = 200, description = "Rule updated", body = AlertRule),
         (status = 400, description = "Invalid operator"),
         (status = 404, description = "Rule not found"),
+        (status = 409, description = "Duplicate rule name or monitored point"),
     ))]
 async fn update_rule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(req): Json<UpdateRuleRequest>,
 ) -> impl IntoResponse {
+    match update_rule_configuration(&state.db, id, &req).await {
+        Ok(true) => {
+            monitor::on_rule_updated(&state, id).await;
+            Json(ApiResponse::ok("Rule updated", json!({ "rule_id": id }))).into_response()
+        },
+        Ok(false) => not_found("Rule not found"),
+        Err(response) => response,
+    }
+}
+
+/// Validate a complete prospective binding before saving any patch fields.
+async fn update_rule_configuration(
+    pool: &sqlx::SqlitePool,
+    id: i64,
+    req: &UpdateRuleRequest,
+) -> Result<bool, Response> {
     if let Some(ref op) = req.operator
         && !is_valid_operator(op)
     {
-        return bad_request("Invalid operator. Allowed: >, <, >=, <=, ==, !=");
+        return Err(bad_request(
+            "Invalid operator. Allowed: >, <, >=, <=, ==, !=",
+        ));
     }
-    // If any of (service_type, data_type, point_id) is being updated we need
-    // to re-validate the sentinel shape against the resulting tuple. Pull the
-    // existing row and overlay the patch fields.
-    if req.service_type.is_some() || req.data_type.is_some() || req.point_id.is_some() {
-        match db::get_rule_by_id(&state.db, id).await {
+    if req.service_type.is_some()
+        || req.channel_id.is_some()
+        || req.data_type.is_some()
+        || req.point_id.is_some()
+    {
+        match db::get_rule_by_id(pool, id).await {
             Ok(Some(existing)) => {
                 let service_type = req
                     .service_type
                     .as_deref()
                     .unwrap_or(&existing.service_type);
                 let data_type = req.data_type.as_deref().unwrap_or(&existing.data_type);
+                let channel_id = req.channel_id.unwrap_or(existing.channel_id);
                 let point_id = req.point_id.unwrap_or(existing.point_id);
                 if let Err(msg) = validate_channel_online_shape(service_type, data_type, point_id) {
-                    return bad_request(&msg);
+                    return Err(bad_request(&msg));
+                }
+                match db::find_rule_by_point(
+                    pool,
+                    service_type,
+                    channel_id,
+                    data_type,
+                    point_id,
+                    Some(id),
+                )
+                .await
+                {
+                    Ok(Some(conflict)) => return Err(duplicate_point_response(&conflict)),
+                    Ok(None) => {},
+                    Err(e) => {
+                        error!("update_rule point check: {}", e);
+                        return Err(server_error("Failed to update rule"));
+                    },
                 }
             },
-            Ok(None) => return not_found("Rule not found"),
+            Ok(None) => return Err(not_found("Rule not found")),
             Err(e) => {
                 error!("update_rule fetch existing: {}", e);
-                return server_error("Failed to update rule");
+                return Err(server_error("Failed to update rule"));
             },
         }
     }
 
     // If renaming, ensure the new name does not clash with another rule
     if let Some(ref new_name) = req.rule_name {
-        match db::find_rule_by_name(&state.db, new_name).await {
+        match db::find_rule_by_name(pool, new_name).await {
             Ok(Some(existing)) if existing.id != id => {
-                return (
+                return Err((
                     StatusCode::CONFLICT,
                     Json(json!({
                         "success": false,
@@ -431,18 +449,18 @@ async fn update_rule(
                         }
                     })),
                 )
-                    .into_response();
+                    .into_response());
             },
             Ok(_) => {},
             Err(e) => {
                 error!("update_rule name check: {}", e);
-                return server_error("Failed to update rule");
+                return Err(server_error("Failed to update rule"));
             },
         }
     }
 
-    match db::update_rule(
-        &state.db,
+    db::update_rule(
+        pool,
         id,
         req.service_type.as_deref(),
         req.channel_id,
@@ -456,17 +474,33 @@ async fn update_rule(
         req.description.as_deref().map(Some),
     )
     .await
-    {
-        Ok(true) => {
-            monitor::on_rule_updated(&state, id).await;
-            Json(ApiResponse::ok("Rule updated", json!({ "rule_id": id }))).into_response()
-        },
-        Ok(false) => not_found("Rule not found"),
-        Err(e) => {
-            error!("update_rule: {}", e);
-            server_error("Failed to update rule")
-        },
-    }
+    .map_err(|e| {
+        error!("update_rule: {}", e);
+        server_error("Failed to update rule")
+    })
+}
+
+// Preserve the existing create-rule conflict response for both write paths.
+fn duplicate_point_response(existing: &AlertRule) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "success": false,
+            "message": format!(
+                "A rule already monitors this point (service:{}, channel:{}, type:{}, point:{})",
+                existing.service_type, existing.channel_id, existing.data_type, existing.point_id
+            ),
+            "data": {
+                "conflict": "duplicate_point",
+                "existing_rule": {
+                    "id": existing.id,
+                    "rule_name": existing.rule_name,
+                    "created_at": existing.created_at,
+                },
+                "suggestion": format!("Update the existing rule (id:{}) or choose a different point", existing.id),
+            }
+        })),
+    ).into_response()
 }
 
 /// Delete an alarm rule.
@@ -1042,6 +1076,181 @@ fn server_error(msg: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn rule_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        db::create_tables(&pool).await.unwrap();
+        pool
+    }
+
+    async fn add_rule(
+        pool: &sqlx::SqlitePool,
+        service: &str,
+        channel: i64,
+        data_type: &str,
+        point: i64,
+        name: &str,
+    ) -> i64 {
+        db::insert_rule(
+            pool, service, channel, data_type, point, name, 2, ">", 10.0, false, None,
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn partial_binding_updates_reject_duplicates_without_saving_other_fields() {
+        let pool = rule_pool().await;
+        // Disabled rules reserve their monitored point just like enabled rules.
+        let owner = add_rule(&pool, "inst", 4, "M", 1, "Battery current").await;
+        let cases = [
+            ("comsrv", 4, "M", 1, json!({"service_type":"inst"})),
+            ("inst", 5, "M", 1, json!({"channel_id":4})),
+            ("inst", 4, "A", 1, json!({"data_type":"M"})),
+            ("inst", 4, "M", 2, json!({"point_id":1})),
+        ];
+        for (index, (service, channel, data_type, point, mut patch)) in
+            cases.into_iter().enumerate()
+        {
+            let id = add_rule(
+                &pool,
+                service,
+                channel,
+                data_type,
+                point,
+                &format!("Rule {index}"),
+            )
+            .await;
+            let before =
+                serde_json::to_value(db::get_rule_by_id(&pool, id).await.unwrap()).unwrap();
+            patch["rule_name"] = json!("Changed name");
+            patch["value"] = json!(999.0);
+            patch["enabled"] = json!(true);
+            let request: UpdateRuleRequest = serde_json::from_value(patch).unwrap();
+            let response = update_rule_configuration(&pool, id, &request)
+                .await
+                .unwrap_err();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            let body = response_json(response).await;
+            assert_eq!(body["success"], false);
+            assert_eq!(body["data"]["conflict"], "duplicate_point");
+            assert_eq!(body["data"]["existing_rule"]["id"], owner);
+            assert!(body["data"]["suggestion"].is_string());
+            let after = serde_json::to_value(db::get_rule_by_id(&pool, id).await.unwrap()).unwrap();
+            assert_eq!(before, after);
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_binding_and_metadata_updates_do_not_conflict_with_self() {
+        let pool = rule_pool().await;
+        let id = add_rule(&pool, "inst", 4, "M", 1, "Battery current").await;
+        for patch in [
+            json!({"service_type":"inst","channel_id":4,"data_type":"M","point_id":1,"value":20.0}),
+            json!({"rule_name":"Current threshold","description":"Adjusted threshold","value":30.0}),
+        ] {
+            let request = serde_json::from_value(patch).unwrap();
+            assert!(
+                update_rule_configuration(&pool, id, &request)
+                    .await
+                    .unwrap()
+            );
+        }
+        let stored = db::get_rule_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(stored.rule_name, "Current threshold");
+        assert_eq!(stored.value, 30.0);
+        assert_eq!(stored.point_id, 1);
+    }
+
+    #[tokio::test]
+    async fn binding_can_change_to_a_free_point_or_distinct_service_channel_or_type() {
+        let pool = rule_pool().await;
+        let owner = add_rule(&pool, "inst", 4, "M", 1, "Battery current").await;
+        let id = add_rule(&pool, "inst", 4, "M", 2, "Temperature").await;
+        for patch in [
+            json!({"service_type":"comsrv","point_id":1}),
+            json!({"service_type":"inst","channel_id":5}),
+            json!({"channel_id":4,"data_type":"A"}),
+            json!({"data_type":"M","point_id":3}),
+        ] {
+            let request = serde_json::from_value(patch).unwrap();
+            assert!(
+                update_rule_configuration(&pool, id, &request)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            db::get_rule_by_id(&pool, owner)
+                .await
+                .unwrap()
+                .unwrap()
+                .point_id,
+            1
+        );
+        assert_eq!(
+            db::get_rule_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .point_id,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn excluding_self_does_not_hide_another_legacy_duplicate() {
+        let pool = rule_pool().await;
+        let id = add_rule(&pool, "inst", 4, "M", 1, "Original").await;
+        // Existing databases may already contain duplicates from the old edit path.
+        let other = add_rule(&pool, "inst", 4, "M", 1, "Legacy duplicate").await;
+        let request = serde_json::from_value(json!({"point_id":1})).unwrap();
+        let response = update_rule_configuration(&pool, id, &request)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = response_json(response).await;
+        assert_eq!(body["data"]["existing_rule"]["id"], other);
+        let found = db::find_rule_by_point(&pool, "inst", 4, "M", 1, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(found.id == id || found.id == other);
+    }
+
+    #[tokio::test]
+    async fn editing_missing_rule_and_invalid_online_binding_keeps_existing_errors() {
+        let pool = rule_pool().await;
+        let request = serde_json::from_value(json!({"point_id":1})).unwrap();
+        let response = update_rule_configuration(&pool, 999, &request)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let id = add_rule(&pool, "comsrv", 200, "online", 0, "Channel offline").await;
+        let response = update_rule_configuration(&pool, id, &request)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            db::get_rule_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .point_id,
+            0
+        );
+    }
 
     #[test]
     fn channel_online_shape_rejects_nonzero_point_id() {
