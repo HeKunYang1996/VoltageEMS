@@ -50,7 +50,7 @@ echarts.use([BarChart, TooltipComponent, GridComponent, LegendComponent, SVGRend
 
 interface SeriesData {
   name: string
-  data: number[]
+  data: (number | null)[]
   color: string
 }
 
@@ -177,7 +177,7 @@ function customTooltipFormatter(
           "></span>
           <span>${item.seriesName}</span>
         </div>
-        <div style="font-weight:600;">${item.value}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
+        <div style="font-weight:600;">${item.value ?? '--'}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
       </div>
     `
   })
@@ -524,7 +524,7 @@ const handleExport = () => {
   props.xAxiosOption.xAxiosData.forEach((time, index) => {
     const row: (string | number)[] = [time]
     props.series.forEach((series) => {
-      row.push(series.data[index] || 0)
+      row.push(series.data[index] ?? '')
     })
     exportData.push(row)
   })

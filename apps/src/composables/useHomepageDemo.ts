@@ -26,7 +26,7 @@ export function shouldSubscribeHomepageWebSocket(
 
 interface ChartSeriesItem {
   name: string
-  data: number[]
+  data: (number | null)[]
   color: string
 }
 

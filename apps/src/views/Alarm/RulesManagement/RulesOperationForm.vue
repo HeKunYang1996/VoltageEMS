@@ -262,9 +262,8 @@ const loadAllPoints = async (instanceId: number) => {
     const allPoints: InstancePointOption[] = []
 
     if (res.success && res.data) {
-      const measurements = res.data.measurements ?? {}
-      for (const [key, item] of Object.entries(measurements)) {
-        const pointId = Number(item.measurement_id ?? item.point_index ?? key)
+      for (const item of res.data.measurements) {
+        const pointId = item.measurement_id
         if (!Number.isFinite(pointId)) continue
         allPoints.push({
           point_id: pointId,
@@ -273,9 +272,8 @@ const loadAllPoints = async (instanceId: number) => {
         })
       }
 
-      const actions = res.data.actions ?? {}
-      for (const [key, item] of Object.entries(actions)) {
-        const pointId = Number(item.action_id ?? item.point_index ?? key)
+      for (const item of res.data.actions) {
+        const pointId = item.action_id
         if (!Number.isFinite(pointId)) continue
         allPoints.push({
           point_id: pointId,

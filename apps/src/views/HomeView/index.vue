@@ -165,11 +165,11 @@ import LineChart from '@/components/charts/lineChart.vue'
 import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
 import { getRecentHoursRange } from '@/utils/date'
-import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import { useEnergyStatistics } from '@/composables/useEnergyStatistics'
+import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } from '@/utils/energyStatistics'
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
-import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { watch, onUnmounted } from 'vue'
 
 import alarmL1 from '@/assets/icons/home-alarm-L1.svg'
@@ -501,15 +501,15 @@ if (!isDemoMode) {
 const chartXAxisData = ref<string[]>([])
 
 const lineChartSeries = ref([
-  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
-  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
-  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+  { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as (number | null)[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
 ])
 
 const exampleSeries = ref([
-  { name: 'PV', data: [] as number[], color: 'rgba(105, 203, 255, 1)' },
-  { name: 'DG', data: [] as number[], color: 'rgba(246, 200, 95, 1)' },
-  { name: 'ESS', data: [] as number[], color: 'rgba(29, 134, 255, 1)' },
+  { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as (number | null)[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
 ])
 
 const xAxiosOption = computed(() => ({ xAxiosData: chartXAxisData.value }))
@@ -517,79 +517,41 @@ const yAxiosOption = { yUnit: 'kWh' }
 const lineChartYAxiosOption = { yUnit: 'kW' }
 
 const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
-const fmtVal = (v: number | null | undefined) => Number(Number(v ?? 0).toFixed(3))
-
+const statistics = useEnergyStatistics(() => !isDemoMode)
 let chartRequestToken = 0
+let chartAbortController: AbortController | undefined
 
 const fetchHomeChartData = async () => {
-  const range = getRecentHoursRange(6)
+  const metrics = statistics.metrics.value
+  const series = statisticRequests(metrics)
   const myToken = ++chartRequestToken
+  chartAbortController?.abort()
+  chartAbortController = new AbortController()
+  chartXAxisData.value = []
+  lineChartSeries.value = []
+  exampleSeries.value = []
+  if (!series.length) return
+  const range = getRecentHoursRange(6)
   try {
-    const topoStore = useDeviceTopologyStore()
-    if (!topoStore.loaded) await topoStore.load()
-
-    // 选中组就绪前的空态保护：避免 series 为空触发后端 400
-    const instanceIds = {
-      pv: topoStore.selectedPvGroup?.relatedInstanceIds[0],
-      dg: topoStore.getLogicalDeviceInstanceIds('diesel')[0],
-      ess: topoStore.selectedBatteryGroup?.primaryInstanceIds[0],
-    }
-    const queryDefinitions = [
-      { instanceId: instanceIds.pv, pointId: '7' },
-      { instanceId: instanceIds.dg, pointId: '1' },
-      { instanceId: instanceIds.ess, pointId: '5' },
-      { instanceId: instanceIds.pv, pointId: '15' },
-      { instanceId: instanceIds.dg, pointId: '2' },
-      { instanceId: instanceIds.ess, pointId: '9' },
-    ].filter((item) => item.instanceId !== undefined)
-
-    if (queryDefinitions.length === 0) {
-      console.warn('[HomeView] no valid series to query, skip chart request')
-      return
-    }
-
     const res = await batchQueryHistory({
-      start_time: range.start!,
-      end_time: range.end!,
-      limit_per_series: 500,
-      series: queryDefinitions.map(({ instanceId, pointId }) => ({
-        redis_key: `inst:${instanceId}:M`,
-        point_id: pointId,
-      })),
-    })
-
-    // 组件卸载或已有更新的请求发出，丢弃过期结果
-    if (myToken !== chartRequestToken) return
-
-    const responses: BatchQueryResponse[] = res.data?.series ?? []
-    const find = (instanceId: number | undefined, pointId: string) =>
-      instanceId === undefined
-        ? undefined
-        : responses.find((r) => r.redis_key === `inst:${instanceId}:M` && r.point_id === pointId)
-
-    const allTs = new Set<string>()
-    responses.forEach((r) => (r.data ?? []).forEach((p) => allTs.add(p.timestamp)))
-    const sorted = [...allTs].sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
-    chartXAxisData.value = sorted.map(fmtLabel)
-
-    const makeVals = (s: BatchQueryResponse | undefined) => {
-      if (!s) return sorted.map(() => 0)
-      const map = new Map((s.data ?? []).map((p) => [p.timestamp, p.value]))
-      return sorted.map((ts) => fmtVal(map.get(ts)))
-    }
-
+      start_time: range.start!, end_time: range.end!,
+      limit_per_series: STATISTIC_HISTORY_LIMIT, series,
+    }, chartAbortController.signal)
+    if (myToken !== chartRequestToken || !res.success) return
+    const chart = buildStatisticChartData(metrics, res.data?.series ?? [])
+    chartXAxisData.value = chart.timestamps.map(fmtLabel)
     lineChartSeries.value = [
-      { name: 'PV', data: makeVals(find(instanceIds.pv, '7')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find(instanceIds.dg, '1')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find(instanceIds.ess, '5')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: chart.values('pvPower'), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: chart.values('dgPower'), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: chart.values('essPower'), color: 'rgba(29, 134, 255, 1)' },
     ]
-
     exampleSeries.value = [
-      { name: 'PV', data: makeVals(find(instanceIds.pv, '15')), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'DG', data: makeVals(find(instanceIds.dg, '2')), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'ESS', data: makeVals(find(instanceIds.ess, '9')), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: chart.values('pvEnergy'), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: chart.values('dgEnergy'), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS Discharge', data: chart.values('essEnergy'), color: 'rgba(29, 134, 255, 1)' },
     ]
   } catch (error) {
+    if (myToken !== chartRequestToken || chartAbortController.signal.aborted) return
     console.error('Failed to fetch home chart data:', error)
   }
 }
@@ -605,28 +567,13 @@ if (isDemoMode) {
     exampleSeries,
   })
 } else {
-  // 等拓扑加载完成且选中组就绪后再拉取图表数据，避免 series 为空触发后端 400
-  watch(
-    () => {
-      const topoStore = useDeviceTopologyStore()
-      return {
-        loaded: topoStore.loaded,
-        hasPv: !!topoStore.selectedPvGroup,
-        hasEss: !!topoStore.selectedBatteryGroup,
-      }
-    },
-    async (state) => {
-      if (state.loaded && (state.hasPv || state.hasEss)) {
-        await fetchHomeChartData()
-      }
-    },
-    { immediate: true },
-  )
+  watch(statistics.metrics, fetchHomeChartData, { immediate: true })
 }
 
 onUnmounted(() => {
   // 标记旧请求失效，防止卸载后回调写入已销毁组件
   chartRequestToken += 1
+  chartAbortController?.abort()
 })
 
 // Carousel引用

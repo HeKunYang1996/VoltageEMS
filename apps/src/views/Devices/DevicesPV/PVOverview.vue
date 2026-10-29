@@ -50,30 +50,30 @@ import voltageIcon from '@/assets/icons/Voltage.svg'
 import currentIcon from '@/assets/icons/Current.svg'
 import coolantTempIcon from '@/assets/icons/CoolantTemp.svg'
 import { formatNumber } from '@/utils/common'
-import useTopologySubscribe from '@/composables/useTopologySubscribe'
+import { useInstanceMeasurements } from '@/composables/useInstanceMeasurements'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
-import { ref, watch, reactive, computed } from 'vue'
+import { pvOverviewMeasurements } from '@/utils/deviceMeasurements'
+import { ref, reactive, computed } from 'vue'
 
 const topoStore = useDeviceTopologyStore()
-const pvInstanceIds = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds ?? [])
-const pvInstanceId = computed<number | undefined>(() => pvInstanceIds.value[0])
+const pvInstanceId = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds[0])
+const productName = computed(() => topoStore.selectedPvGroup?.relatedProductName ?? '')
+const { measurements, values } = useInstanceMeasurements(() => pvInstanceId.value)
 
 const hoveredRow = ref<number | null>(null)
-const rowData = reactive([
-  { id: 1, PValue: 32, VValue: 220, IValue: 10 },
-  { id: 2, PValue: 32, VValue: 220, IValue: 10 },
-  { id: 3, PValue: 32, VValue: 220, IValue: 10 },
-  { id: 4, PValue: 32, VValue: 220, IValue: 10 },
-  { id: 5, PValue: 32, VValue: 220, IValue: 10 },
-  { id: 6, PValue: 32, VValue: 220, IValue: 10 },
-])
-
-const energyCardData = reactive([
-  { title: 'PV Power',       icon: powerIcon,       value: '-', unit: 'kW',  pointId: 5 },
-  { title: 'PV Voltage',     icon: voltageIcon,     value: '-', unit: 'V',   pointId: 8 },
-  { title: 'PV Current',     icon: currentIcon,     value: '-', unit: 'A',   pointId: 9 },
-  { title: "Today's Energy", icon: coolantTempIcon, value: '-', unit: 'kWh', pointId: 5 },
-])
+// Per-string measurements are not defined by the current inverter products.
+const rowData = reactive(Array.from({ length: 6 }, (_, index) => ({
+  id: index + 1, PValue: null, VValue: null, IValue: null,
+})))
+const energyCardData = computed(() =>
+  pvOverviewMeasurements(productName.value, measurements.value).map((point) => ({
+    title: point.name,
+    icon: point.unit === 'V' ? voltageIcon : point.unit === 'A' ? currentIcon
+      : point.unit === 'kWh' ? coolantTempIcon : powerIcon,
+    value: formatNumber(values.value[String(point.measurement_id)]),
+    unit: point.unit ?? '',
+  })),
+)
 
 const handleHoveredRow = (r: number) => { hoveredRow.value = r - 1 }
 
@@ -94,35 +94,6 @@ const getRowCardStyle = (idx: number) => {
   }
 }
 
-const wsData = ref<any>(null)
-
-useTopologySubscribe(
-  () => {
-    return pvInstanceIds.value
-  },
-  { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
-  { onBatchDataUpdate: (data: any) => { wsData.value = data } },
-)
-
-watch(
-  wsData,
-  (data) => {
-    if (!data?.updates?.length) return
-    const instanceId = pvInstanceId.value
-    const mUpdate = data.updates.find(
-      (item: any) => item.channel_id === instanceId && item.data_type === 'M',
-    )
-    if (!mUpdate) return
-    const values = mUpdate.values || {}
-    energyCardData.forEach((item: any) => {
-      const pointValue = values[item.pointId]
-      if (pointValue !== undefined && pointValue !== null) {
-        item.value = formatNumber(pointValue)
-      }
-    })
-  },
-  { deep: true, immediate: true },
-)
 </script>
 <style scoped lang="scss">
 .pv-overview {

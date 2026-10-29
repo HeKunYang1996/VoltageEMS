@@ -1,6 +1,7 @@
 <template>
   <div class="pv-overview">
-    <div class="pv-overview__right">
+    <el-empty v-if="error" description="Unable to load device points" />
+    <div v-else class="pv-overview__right">
       <BatteryCard
         class="battery-card"
         v-for="item in batteryCardData"
@@ -13,69 +14,23 @@
   </div>
 </template>
 <script setup lang="ts">
+import { computed } from 'vue'
 import { formatNumber } from '@/utils/common'
-import { watch, ref, computed } from 'vue'
-import useTopologySubscribe from '@/composables/useTopologySubscribe'
+import { useInstanceMeasurements } from '@/composables/useInstanceMeasurements'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
-
-interface BatteryCardItem {
-  title: string
-  value?: number | null | string
-  unit?: string
-  pointId: number
-}
+import { BATTERY_OVERVIEW_MEASUREMENTS, selectMeasurements } from '@/utils/deviceMeasurements'
 
 const topoStore = useDeviceTopologyStore()
-const batteryInstanceIds = computed(() => topoStore.selectedBatteryGroup?.primaryInstanceIds ?? [])
-const batteryInstanceId = computed<number | undefined>(
-  () => topoStore.getInstanceIds('Battery')[0] ?? batteryInstanceIds.value[0],
+const instanceId = computed(() => topoStore.selectedBatteryGroup?.primaryInstanceIds[0])
+const { measurements, values, error } = useInstanceMeasurements(() => instanceId.value)
+const batteryCardData = computed(() =>
+  selectMeasurements(measurements.value, BATTERY_OVERVIEW_MEASUREMENTS).map((point) => ({
+    pointId: point.measurement_id,
+    title: point.name,
+    unit: point.unit ?? '',
+    value: formatNumber(values.value[String(point.measurement_id)]),
+  })),
 )
-const wsData = ref<any>(null)
-
-// 拓扑加载后自动订阅，加载前静默等待
-useTopologySubscribe(
-  () => batteryInstanceIds.value,
-  { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
-  { onBatchDataUpdate: (data: any) => { wsData.value = data } },
-)
-
-watch(
-  wsData,
-  (data) => {
-    if (!data?.updates?.length) return
-    const instanceId = batteryInstanceId.value
-    const mUpdate = data.updates.find(
-      (item: any) => item.channel_id === instanceId && item.data_type === 'M',
-    )
-    if (!mUpdate) return
-    const values = mUpdate.values || {}
-    batteryCardData.value.forEach((item) => {
-      const pointValue = values[item.pointId]
-      if (pointValue !== undefined && pointValue !== null) {
-        if (item.pointId === 15) {
-          item.value = pointValue === 1 ? 'Charge' : 'Discharge'
-        } else {
-          item.value = formatNumber(pointValue)
-        }
-      }
-    })
-  },
-  { deep: true, immediate: true },
-)
-
-const batteryCardData = ref<BatteryCardItem[]>([
-  { pointId: 15, title: 'Status',               value: '-', unit: '' },
-  { pointId: 3,  title: 'SoC',                  value: '-', unit: '%' },
-  { pointId: 4,  title: 'SoH',                  value: '-', unit: '%' },
-  { pointId: 1,  title: 'Voltage',              value: '-', unit: 'V' },
-  { pointId: 2,  title: 'Current',              value: '-', unit: 'A' },
-  { pointId: 3,  title: 'Power',                value: '-', unit: 'KW' },
-  { pointId: 7,  title: 'Max Cell Voltage',     value: '-', unit: 'V' },
-  { pointId: 8,  title: 'Min Cell Voltage',     value: '-', unit: 'V' },
-  { pointId: 9,  title: 'Avg Cell Voltage',     value: '-', unit: 'V' },
-  { pointId: 10, title: 'Cell Voltage Difference', value: '-', unit: 'V' },
-  { pointId: 11, title: 'Avg Cell Temperature', value: '-', unit: '℃' },
-])
 </script>
 <style scoped lang="scss">
 .pv-overview {

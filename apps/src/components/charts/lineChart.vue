@@ -80,7 +80,7 @@ echarts.use([
 // 定义数据类型
 export interface SeriesData {
   name: string
-  data: number[]
+  data: (number | null)[]
   color: string
 }
 
@@ -194,7 +194,7 @@ function customTooltipFormatter(
           "></span>
           <span>${item.seriesName}</span>
         </div>
-        <div style="font-weight:600;">${item.value}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
+        <div style="font-weight:600;">${item.value ?? '--'}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
       </div>
     `
   })
@@ -597,7 +597,7 @@ const handleExport = () => {
   props.xAxiosOption.xAxiosData.forEach((time: string, index: number) => {
     const row: (string | number)[] = [time]
     props.series.forEach((series: SeriesData) => {
-      row.push(series.data[index] || 0)
+      row.push(series.data[index] ?? '')
     })
     exportData.push(row)
   })
