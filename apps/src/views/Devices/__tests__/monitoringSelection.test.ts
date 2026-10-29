@@ -22,8 +22,8 @@ vi.mock('@/components/device/InstanceValueMonitoring.vue', () => ({ default: def
 
 const stubs = {
   ElTabs: { name: 'ElTabs', props: ['modelValue'], template: '<div><slot /></div>' },
-  ElTabPane: defineComponent({ props: ['label'], setup: (props, { slots }) =>
-    () => h('section', [h('h2', props.label), slots.default?.()]) }),
+  ElTabPane: defineComponent({ props: ['label', 'name'], setup: (props, { slots }) =>
+    () => h('section', { 'data-tab': props.name }, [h('h2', props.label), slots.default?.()]) }),
   ElSelect: { name: 'ElSelect', props: ['modelValue'], template: '<select><slot /></select>' },
   ElOption: { props: ['label'], template: '<option>{{ label }}</option>' },
 }
@@ -31,31 +31,81 @@ const stubs = {
 describe('device monitoring page selection', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('names and binds the converter tab to the actual Hybrid or PCS device', async () => {
+  it('names converter tabs by product and binds one instance at a time', async () => {
     const store = useDeviceTopologyStore()
-    const topology = (productName: string, instanceId: number) => ({ flow_json: {
+    store.instances = [
+      { id: 3, name: 'Battery-01', product_name: 'Battery' },
+      { id: 1, name: 'Hybrid-01', product_name: 'Hybrid_Inverter' },
+    ]
+    store.topology = { flow_json: {
       nodes: [
         { id: 'b', data: { label: 'Battery', productName: 'Battery', instanceId: 3 } },
-        { id: 'c', data: { label: 'Converter', productName, instanceId } },
+        { id: 'c', data: { label: 'Converter', productName: 'Hybrid_Inverter', instanceId: 1 } },
       ], edges: [{ source: 'b', target: 'c' }],
-    } }) as StationTopology
-    store.topology = topology('Hybrid_Inverter', 1)
+    } } as StationTopology
     const wrapper = mount(BatteryValue, { global: { stubs } })
     expect(wrapper.findAll('h2').map((item) => item.text())).toEqual(['Battery', 'Hybrid Inverter'])
     expect(wrapper.findAll('[data-instances]').map((item) => item.attributes('data-instances')))
       .toEqual(['3'])
-    wrapper.findComponent({ name: 'ElTabs' }).vm.$emit('update:modelValue', 'converter')
+    wrapper.findComponent({ name: 'ElTabs' }).vm.$emit('update:modelValue', 'Hybrid_Inverter')
     await nextTick()
     expect(wrapper.findAll('[data-instances]').map((item) => item.attributes('data-instances')))
       .toEqual(['1'])
-    store.topology = topology('PCS', 2)
+    store.instances = [
+      { id: 3, name: 'Battery-01', product_name: 'Battery' },
+      { id: 2, name: 'PCS-01', product_name: 'PCS' },
+    ]
+    store.topology = { flow_json: {
+      nodes: [
+        { id: 'b', data: { label: 'Battery', productName: 'Battery', instanceId: 3 } },
+        { id: 'c', data: { label: 'Converter', productName: 'PCS', instanceId: 2 } },
+      ], edges: [{ source: 'b', target: 'c' }],
+    } } as StationTopology
     await nextTick()
     expect(wrapper.findAll('h2').map((item) => item.text())).toEqual(['Battery', 'PCS'])
+    wrapper.findComponent({ name: 'ElTabs' }).vm.$emit('update:modelValue', 'PCS')
+    await nextTick()
     expect(wrapper.find('[data-instances]').attributes('data-instances')).toBe('2')
     wrapper.findComponent({ name: 'ElTabs' }).vm.$emit('update:modelValue', 'battery')
     await nextTick()
     expect(wrapper.findAll('[data-instances]').map((item) => item.attributes('data-instances')))
       .toEqual(['3'])
+    wrapper.unmount()
+  })
+
+  it('shows PCS and Hybrid tabs with counts when multiple converters exist', async () => {
+    const store = useDeviceTopologyStore()
+    store.instances = [
+      { id: 3, name: 'Battery-01', product_name: 'Battery' },
+      { id: 1, name: 'PCS-01', product_name: 'PCS' },
+      { id: 2, name: 'PCS-02', product_name: 'PCS' },
+      { id: 4, name: 'Hybrid-01', product_name: 'Hybrid_Inverter' },
+    ]
+    store.topology = { flow_json: {
+      nodes: [
+        { id: 'b', data: { productName: 'Battery', instanceId: 3 } },
+        { id: 'p1', data: { productName: 'PCS', instanceId: 1 } },
+        { id: 'p2', data: { productName: 'PCS', instanceId: 2 } },
+        { id: 'h1', data: { productName: 'Hybrid_Inverter', instanceId: 4 } },
+      ],
+      edges: [
+        { source: 'b', target: 'p1' },
+        { source: 'b', target: 'p2' },
+        { source: 'b', target: 'h1' },
+      ],
+    } } as StationTopology
+    const wrapper = mount(BatteryValue, { global: { stubs } })
+    expect(wrapper.findAll('h2').map((item) => item.text())).toEqual([
+      'Battery',
+      'PCS (2)',
+      'Hybrid Inverter',
+    ])
+    wrapper.findComponent({ name: 'ElTabs' }).vm.$emit('update:modelValue', 'PCS')
+    await nextTick()
+    expect(wrapper.find('[data-instances]').attributes('data-instances')).toBe('1')
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 2)
+    await nextTick()
+    expect(wrapper.find('[data-instances]').attributes('data-instances')).toBe('2')
     wrapper.unmount()
   })
 

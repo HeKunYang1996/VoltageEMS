@@ -7,7 +7,7 @@ import { resolveStatisticMetric, statisticLiveValue, type StatisticMetrics } fro
 export function useEnergyStatistics(enabled: () => boolean = () => true) {
   const topology = useDeviceTopologyStore()
   const pvId = () => enabled() ? topology.selectedPvGroup?.relatedInstanceIds[0] : undefined
-  const essId = () => enabled() ? topology.selectedBatteryGroup?.primaryInstanceIds[0] : undefined
+  const essId = () => enabled() ? topology.selectedBatterySystem?.primaryInstanceIds[0] : undefined
   const dgId = () => enabled() ? topology.selectedDieselId ?? undefined : undefined
   const loadId = () => enabled() ? topology.getLogicalDeviceInstanceIds('meterLoad')[0] : undefined
   const pv = useInstanceMeasurements(pvId)
