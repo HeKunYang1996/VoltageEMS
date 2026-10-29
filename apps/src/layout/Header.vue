@@ -1,7 +1,7 @@
 <template>
   <div class="header">
     <div class="header__left">
-      <div class="header__left-title">Norton Creek Solar Energy Center</div>
+      <div class="header__left-title">Voltage Solar Energy Center</div>
       <div class="header__left-status">
         <div class="header__left-statusIcon">
           <div class="header__left-statusIconCircle"></div>
@@ -21,11 +21,9 @@
         <el-dropdown trigger="click" @command="handleUserCommand">
           <div class="header__user">
             <div class="header__user-avatar">
-              <div class="header__user-avatar-initials">
-                {{ getAvatarName(userStore.userInfo?.username || 'Admin') }}
-              </div>
+              <img :src="userAvatar" :alt="`${displayName} avatar`" />
             </div>
-            <span class="header__user-name">{{ userStore.userInfo?.username || '' }}</span>
+            <span class="header__user-name">{{ displayName }}</span>
             <img :src="arrowDownIcon" alt="toggle user menu" class="header__user-arrow" />
           </div>
 
@@ -58,18 +56,23 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
 import arrowDownIcon from '@/assets/icons/arrowDownIcon.svg'
 import logoutIcon from '@/assets/icons/user-logout.svg'
 import noticeIcon from '@/assets/icons/notice.svg'
 import sunIcon from '@/assets/icons/sunny.svg'
+import userAvatar from '@/assets/images/header-profile.jpg'
 import { useGlobalStore } from '@/stores/global'
 import { useUserStore } from '@/stores/user'
+import { isHomepageDemoMode } from '@/composables/useHomepageDemo'
 
 const router = useRouter()
 const userStore = useUserStore()
 const globalStore = useGlobalStore()
+const isDemoMode = isHomepageDemoMode()
+const displayName = computed(() => (isDemoMode ? 'Esthera Jackson' : userStore.displayName))
 
 const toggleNotifications = () => {
   router.push({ name: 'alarmCurrentRecords' })
@@ -80,16 +83,6 @@ const handleUserCommand = async (command: string) => {
 
   await userStore.logout()
   router.push('/login')
-}
-
-const getAvatarName = (name: string) => {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-
-  if (parts.length <= 1) {
-    return (parts[0] || 'A').charAt(0).toUpperCase()
-  }
-
-  return `${parts[0].charAt(0)}${parts[1].charAt(0)}`.toUpperCase()
 }
 </script>
 
@@ -102,7 +95,8 @@ const getAvatarName = (name: string) => {
   justify-content: space-between;
   height: 0.85rem;
   padding: 0.2rem;
-  background: var(--vt-bg-glass-strong);
+  background: var(--vt-bg-chrome);
+  box-shadow: var(--vt-shadow-header);
   border-bottom: 0.01rem solid var(--vt-border-color);
 
   .header__left {
@@ -128,7 +122,7 @@ const getAvatarName = (name: string) => {
       height: 0.3rem;
       padding: 0.07rem 0 0.07rem 0.1rem;
       background: var(--vt-bg-glass-heavy);
-      border: 0.01rem solid transparent;
+      border: 0.01rem solid var(--vt-border-color);
       border-radius: 0.15rem;
       backdrop-filter: var(--vt-backdrop-blur);
 
@@ -145,7 +139,7 @@ const getAvatarName = (name: string) => {
         .header__left-statusIconCircle {
           width: 0.1rem;
           height: 0.1rem;
-          background-color: var(--vt-color-success);
+          background-color: var(--vt-color-status-online);
           border-radius: 50%;
         }
       }
@@ -230,27 +224,30 @@ const getAvatarName = (name: string) => {
 .header__user {
   display: flex;
   align-items: center;
-  gap: 0.08rem;
-  padding: 0.04rem 0.08rem;
+  gap: 0.1rem;
   border-radius: 0.08rem;
   transition: all 0.3s ease;
 }
 
 .header__user-avatar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 0.4rem;
   height: 0.4rem;
-  background-color: rgba(29, 134, 255, 0.2);
+  flex-shrink: 0;
   border-radius: 50%;
+  overflow: hidden;
 
-  .header__user-avatar-initials {
-    font-size: 0.19rem;
-    font-weight: var(--vt-font-weight-bold);
-    line-height: 100%;
-    letter-spacing: 0;
-    color: var(--vt-color-accent);
+  img {
+    position: absolute;
+    left: -0.045rem;
+    top: -0.04rem;
+    width: 0.455rem;
+    height: 0.575rem;
+    max-width: none;
+    object-fit: cover;
   }
 }
 
@@ -258,10 +255,12 @@ const getAvatarName = (name: string) => {
   font-family: var(--vt-font-family-base);
   font-size: var(--vt-font-size-lg);
   font-style: normal;
-  font-weight: var(--vt-font-weight-medium);
+  font-weight: var(--vt-font-weight-normal);
+  min-width: 1.435rem;
   line-height: 140%;
   letter-spacing: 0;
   color: var(--vt-text-primary);
+  white-space: nowrap;
 }
 
 .header__user-arrow {

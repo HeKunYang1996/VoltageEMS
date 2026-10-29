@@ -37,7 +37,7 @@ const globalStore = useGlobalStore()
   background-position: center;
   background-repeat: no-repeat;
   // background: transparent;
-  background-image: url('../assets/images/simple-bg.png');
+  background: var(--vt-bg-app);
 
   // z-index: -99;
   .main-layout__left {

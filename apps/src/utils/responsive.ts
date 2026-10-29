@@ -1,13 +1,12 @@
 // Responsive layout utilities
 
 const DESIGN_WIDTH = 1920
-const DESIGN_HEIGHT = 1080
 const BASE_FONT_SIZE = 100 // 100px = 1rem
 
 function getResponsiveScale(): number {
-  // The dashboard is designed for a 1920x1080 canvas. Scaling only from the
-  // width makes the vertical layout overflow on shorter Safari viewports.
-  return Math.min(window.innerWidth / DESIGN_WIDTH, window.innerHeight / DESIGN_HEIGHT)
+  // Scale from design width (1920px). Matches login/background layout expectations on wide viewports.
+  const width = document.documentElement.clientWidth || window.innerWidth
+  return width / DESIGN_WIDTH
 }
 
 /**
@@ -19,15 +18,22 @@ export function setRem(): void {
   html.style.fontSize = `${fontSize}px`
 }
 
+let remResizeTimer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleRemUpdate(): void {
+  clearTimeout(remResizeTimer)
+  remResizeTimer = setTimeout(setRem, 100)
+}
+
 /**
  * Initialize responsive behavior.
  */
 export function initResponsive(): void {
   setRem()
 
-  window.addEventListener('resize', function () {
-    clearTimeout((window as any).remResizeTimer)
-    ;(window as any).remResizeTimer = setTimeout(setRem, 100)
+  window.addEventListener('resize', scheduleRemUpdate)
+  window.addEventListener('orientationchange', () => {
+    setRem()
   })
 }
 

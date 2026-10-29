@@ -114,6 +114,9 @@ const props = withDefaults(
     showFullScreen?: boolean
     showDownload?: boolean
     title?: string
+    /** Render a filled area beneath the lines. */
+    showArea?: boolean
+    legendIcon?: 'circle' | 'rect'
     /** 进入视口后再初始化 ECharts，用于多图页面降低卡顿 */
     lazy?: boolean
   }>(),
@@ -133,6 +136,8 @@ const props = withDefaults(
     showToolbox: true,
     showFullScreen: true,
     showDownload: true,
+    showArea: true,
+    legendIcon: 'circle',
     lazy: false,
   },
 )
@@ -245,7 +250,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // legend/grid/axis样式参数
   const legend = isFullScreen
     ? {
-        icon: 'circle',
+        icon: props.legendIcon,
         show: true,
         type: 'plain',
         orient: 'horizontal',
@@ -263,7 +268,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         data: props.series.map((s: SeriesData) => s.name),
       }
     : {
-        icon: 'circle',
+        icon: props.legendIcon,
         show: true,
         type: 'plain',
         orient: 'horizontal',
@@ -402,7 +407,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       smooth: true,
       symbol: 'circle',
       symbolSize: isFullScreen ? pxToResponsive(8) : pxToResponsive(0),
-      areaStyle: {},
+      areaStyle: props.showArea ? {} : { opacity: 0 },
       lineStyle: {
         color: s.color,
         width: isFullScreen ? pxToResponsive(6) : pxToResponsive(4),
@@ -492,7 +497,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
     ? {
         itemSize: 20,
         itemGap: 26,
-        top: -10,
+        top: 16,
         right: 40,
         iconStyle: {
           borderColor: '#fff',
@@ -649,7 +654,7 @@ const resizeChart = () => {
 }
 
 watch(
-  () => [props.xAxiosOption.xAxiosData, props.series],
+  () => [props.xAxiosOption.xAxiosData, props.series, props.showArea, props.legendIcon],
   () => {
     if (props.lazy && !chartInstance) return
     initChart()
@@ -712,7 +717,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   background: #212c49;
-  overflow: hidden;
+  overflow: visible;
 
   .line-chart-full-screen__container {
     width: 100%;
