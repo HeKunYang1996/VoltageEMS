@@ -21,7 +21,7 @@ function productPoints(name: string): InstanceMeasurementItem[] {
 describe('selected product statistics contract', () => {
   const state = reactive({
     selectedPvGroup: { relatedInstanceIds: [1], relatedProductName: 'AC_Inverter' },
-    selectedBatteryGroup: { primaryInstanceIds: [2] }, selectedDieselId: 3,
+    selectedBatterySystem: { primaryInstanceIds: [2] }, selectedDieselId: 3,
     getLogicalDeviceInstanceIds: () => [4],
   })
   beforeEach(() => {

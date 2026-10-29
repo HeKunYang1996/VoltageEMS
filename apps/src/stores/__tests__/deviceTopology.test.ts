@@ -23,16 +23,46 @@ describe('device topology product selection', () => {
     expect(store.getProductInstances('Meter')).toEqual(store.instances.slice(0, 2))
   })
 
-  it.each(['Hybrid_Inverter', 'PCS'])('keeps the actual %s product on a Battery group', (product) => {
+  it('merges multiple converters under one Battery system', () => {
     const store = useDeviceTopologyStore()
+    store.instances = [
+      { id: 3, name: 'Battery-01', product_name: 'Battery' },
+      { id: 1, name: 'PCS-01', product_name: 'PCS' },
+      { id: 2, name: 'PCS-02', product_name: 'PCS' },
+      { id: 4, name: 'Hybrid-01', product_name: 'Hybrid_Inverter' },
+    ]
     store.topology = { flow_json: {
       nodes: [
         { id: 'battery', data: { productName: 'Battery', label: 'Battery', instanceId: 3 } },
-        { id: 'converter', data: { productName: product, label: 'Converter', instanceId: 1 } },
-      ], edges: [{ source: 'battery', target: 'converter' }],
+        { id: 'pcs1', data: { productName: 'PCS', label: 'PCS', instanceId: 1 } },
+        { id: 'pcs2', data: { productName: 'PCS', label: 'PCS', instanceId: 2 } },
+        { id: 'hybrid', data: { productName: 'Hybrid_Inverter', label: 'Hybrid', instanceId: 4 } },
+      ],
+      edges: [
+        { source: 'battery', target: 'pcs1' },
+        { source: 'battery', target: 'pcs2' },
+        { source: 'battery', target: 'hybrid' },
+      ],
     } } as StationTopology
-    expect(store.selectedBatteryGroup?.relatedProductName).toBe(product)
-    expect(store.selectedBatteryGroup?.relatedInstanceIds).toEqual([1])
-    expect(store.selectedBatteryGroup?.primaryInstanceIds).toEqual([3])
+    expect(store.batterySystems).toHaveLength(1)
+    expect(store.selectedBatterySystem?.displayName).toBe('Battery-01')
+    expect(store.selectedBatterySystem?.primaryInstanceIds).toEqual([3])
+    expect(store.selectedBatterySystem?.converters).toHaveLength(3)
+    expect(store.selectedBatterySystem?.converters.map((item) => item.productName).sort()).toEqual([
+      'Hybrid_Inverter',
+      'PCS',
+      'PCS',
+    ])
+  })
+
+  it('includes Battery-only systems when the battery instance exists', () => {
+    const store = useDeviceTopologyStore()
+    store.instances = [{ id: 3, name: 'Battery-01', product_name: 'Battery' }]
+    store.topology = { flow_json: {
+      nodes: [{ id: 'battery', data: { productName: 'Battery', label: 'Battery', instanceId: 3 } }],
+      edges: [],
+    } } as StationTopology
+    expect(store.batterySystems).toHaveLength(1)
+    expect(store.selectedBatterySystem?.converters).toEqual([])
   })
 })
