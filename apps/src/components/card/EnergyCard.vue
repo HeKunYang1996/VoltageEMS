@@ -89,7 +89,7 @@ const props = defineProps<{
           color: var(--vt-text-primary);
 
           .card__right-unit {
-            font-weight: var(--vt-font-weight-bold);
+            font-weight: var(--energy-card-unit-weight, var(--vt-font-weight-bold));
             font-size: var(--vt-font-size-base);
             color: var(--vt-text-secondary);
           }

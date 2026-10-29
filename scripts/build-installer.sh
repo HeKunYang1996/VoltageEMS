@@ -575,7 +575,6 @@ if csv_contains "$BUILD_IMAGES" "voltageems:latest"; then
             -t "$_DEV_TAG" \
             "$ROOT_DIR"; then
             docker save "$_DEV_TAG" | gzip > "$BUILD_DIR/docker/voltageems.tar.gz"
-            sync
             echo -e "${GREEN}✓ Saved voltageems.tar.gz (tag: ${_DEV_TAG})${NC}"
         else
             echo -e "${RED}Error: Docker build failed${NC}"
@@ -589,7 +588,6 @@ if csv_contains "$BUILD_IMAGES" "voltageems:latest"; then
             -t voltageems:latest \
             "$ROOT_DIR"; then
             docker save voltageems:latest | gzip > "$BUILD_DIR/docker/voltageems.tar.gz"
-            sync
             echo -e "${GREEN}✓ Saved voltageems.tar.gz${NC}"
         else
             echo -e "${RED}Error: Docker build failed${NC}"
@@ -613,7 +611,6 @@ if csv_contains "$BUILD_IMAGES" "voltage-apps:latest"; then
             -t voltage-apps:latest \
             "$ROOT_DIR/apps"; then
             docker save voltage-apps:latest | gzip > "$BUILD_DIR/docker/apps.tar.gz"
-            sync
             size=$(ls -lh "$BUILD_DIR/docker/apps.tar.gz" | awk '{print $5}')
             echo -e "${GREEN}✓ Saved apps.tar.gz ($size)${NC}"
         else

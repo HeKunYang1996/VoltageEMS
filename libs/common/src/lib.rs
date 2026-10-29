@@ -18,6 +18,8 @@ pub mod service_config;
 // Common modules
 pub mod admin_api;
 pub mod api_types;
+#[cfg(feature = "audit-auth")]
+pub mod audit_auth;
 pub mod config_loader;
 pub mod log_rotation;
 pub mod logging;

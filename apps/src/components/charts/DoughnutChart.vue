@@ -380,7 +380,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
     ? {
         itemSize: pxToResponsive(20),
         itemGap: pxToResponsive(26),
-        top: pxToResponsive(-10),
+        top: pxToResponsive(16),
         right: pxToResponsive(40),
         iconStyle: {
           // color: '#fff',

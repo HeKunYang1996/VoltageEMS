@@ -108,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
 
     // ── HTTP server ───────────────────────────────────────────────────────────
     let app = routes::create_routes(Arc::clone(&state))
+        .layer(axum::middleware::from_fn_with_state(
+            common::audit_auth::AuditAuth::from_env()?,
+            common::audit_auth::authenticate_operation,
+        ))
         .layer(axum::middleware::from_fn(
             common::logging::http_request_logger,
         ))

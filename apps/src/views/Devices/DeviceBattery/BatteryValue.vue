@@ -1,186 +1,158 @@
 <template>
-  <div class="devices-pv__content">
-    <div class="devices-pv__tables">
-      <LoadingBg :loading="globalStore.loading">
-        <el-tabs v-model="activeTab" type="card" class="devices-pv__tabs">
-          <el-tab-pane label="Battery" name="battery">
-            <div v-if="batteryChIds.length > 1" class="channel-toolbar">
-              <span class="channel-toolbar__label">Channel:</span>
-              <el-select v-model="selectedBatteryChId" size="small" fit-input-width>
-                <el-option v-for="id in batteryChIds" :key="id" :label="String(id)" :value="id" />
+  <div class="devices-battery-monitoring">
+    <el-tabs v-model="activeTab" type="card" class="devices-battery-monitoring__tabs">
+      <el-tab-pane label="Battery" name="battery">
+        <InstanceValueMonitoring v-if="activeTab === 'battery'" :instance-ids="batteryInstanceIds" />
+      </el-tab-pane>
+      <el-tab-pane
+        v-for="tab in converterTabs"
+        :key="tab.productName"
+        :label="tab.label"
+        :name="tab.productName"
+      >
+        <div v-if="activeTab === tab.productName" class="devices-battery-monitoring__converter">
+          <div v-if="tab.instances.length" class="devices-battery-monitoring__toolbar">
+            <template v-if="tab.instances.length > 1">
+              <span>Device:</span>
+              <el-select
+                v-model="selectedConverterInstanceId"
+                size="small"
+                fit-input-width
+                :title="selectedConverterName"
+              >
+                <el-option
+                  v-for="item in tab.instances"
+                  :key="item.instanceId"
+                  :label="item.name"
+                  :value="item.instanceId"
+                >
+                  <span class="select-option-text" :title="item.name">{{ item.name }}</span>
+                </el-option>
               </el-select>
-            </div>
-            <DeviceMonitoringTable
-              :leftTableData="BatteryleftTableData"
-              :rightTableData="BatteryrightTableData"
-            />
-          </el-tab-pane>
-          <el-tab-pane label="PCS" name="pcs">
-            <div v-if="pcsChIds.length > 1" class="channel-toolbar">
-              <span class="channel-toolbar__label">Channel:</span>
-              <el-select v-model="selectedPcsChId" size="small" fit-input-width>
-                <el-option v-for="id in pcsChIds" :key="id" :label="String(id)" :value="id" />
-              </el-select>
-            </div>
-            <DeviceMonitoringTable
-              :leftTableData="PCSleftTableData"
-              :rightTableData="PCSrightTableData"
-            />
-          </el-tab-pane>
-        </el-tabs>
-      </LoadingBg>
-    </div>
+            </template>
+            <span v-else class="devices-battery-monitoring__device-name">Device: {{ tab.instances[0].name }}</span>
+          </div>
+          <InstanceValueMonitoring :instance-ids="converterMonitoringInstanceIds" />
+        </div>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import LoadingBg from '@/components/common/LoadingBg.vue'
-import { useGlobalStore } from '@/stores/global'
+import { computed, ref, watch } from 'vue'
+import InstanceValueMonitoring from '@/components/device/InstanceValueMonitoring.vue'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
-import type { LeftTableItem, RightTableItem } from '@/types/deviceMonitoring'
-import { getPointsTables } from '@/api/channelsManagement'
-import type { PointInfoResponse } from '@/types/channelConfiguration'
-import { ref, computed, watch } from 'vue'
-import useTopologySubscribe from '@/composables/useTopologySubscribe'
+import { productDisplayName } from '@/utils/deviceMeasurements'
 
-const globalStore = useGlobalStore()
+const CONVERTER_PRODUCTS = ['PCS', 'Hybrid_Inverter'] as const
+
 const topoStore = useDeviceTopologyStore()
+const activeTab = ref('battery')
+const selectedConverterInstanceId = ref<number>()
 
-// 无回退值：store 未加载时为 undefined，响应式触发后再请求/订阅
-const batteryChIds = computed(() => topoStore.selectedBatteryGroup?.primaryChannelIds ?? [])
-const pcsChIds = computed(() => topoStore.selectedBatteryGroup?.relatedChannelIds ?? [])
-const selectedBatteryChId = ref<number>()
-const selectedPcsChId = ref<number>()
-const batteryChId = computed<number | undefined>(() => selectedBatteryChId.value)
-const pcsChId = computed<number | undefined>(() => selectedPcsChId.value)
+const batteryInstanceIds = computed(() => topoStore.selectedBatterySystem?.primaryInstanceIds ?? [])
 
-const BatteryleftTableData  = ref<LeftTableItem[]>([])
-const BatteryrightTableData = ref<RightTableItem[]>([])
-const PCSleftTableData      = ref<LeftTableItem[]>([])
-const PCSrightTableData     = ref<RightTableItem[]>([])
-
-// ── 点位表加载 ─────────────────────────────────────────────────────────────────
-
-async function loadPointTables(batteryId?: number, pcsId?: number) {
-  try {
-    const [batteryRes, pcsRes] = await Promise.all([
-      batteryId === undefined ? Promise.resolve(null) : getPointsTables(batteryId),
-      pcsId === undefined ? Promise.resolve(null) : getPointsTables(pcsId),
-    ])
-    if (batteryRes?.success && batteryRes.data) {
-      const d = batteryRes.data as PointInfoResponse
-      BatteryleftTableData.value = d.telemetry?.map((p) => ({
-        pointId: p.point_id, name: p.signal_name || '', unit: p.unit || '', value: null, updateTime: null,
-      })) || []
-      BatteryrightTableData.value = d.signal?.map((p) => ({
-        pointId: p.point_id, name: p.signal_name || '', status: null, updateTime: null,
-      })) || []
-    }
-    if (pcsRes?.success && pcsRes.data) {
-      const d = pcsRes.data as PointInfoResponse
-      PCSleftTableData.value = d.telemetry?.map((p) => ({
-        pointId: p.point_id, name: p.signal_name || '', unit: p.unit || '', value: null, updateTime: null,
-      })) || []
-      PCSrightTableData.value = d.signal?.map((p) => ({
-        pointId: p.point_id, name: p.signal_name || '', status: null, updateTime: null,
-      })) || []
-    }
-  } catch (err) {
-    console.error('[BatteryValue] 加载点位表失败:', err)
-  }
-}
-
-// 拓扑加载后（或通道变化时）拉取点位表；immediate: true 覆盖 onMounted
-watch(batteryChIds, (ids) => {
-  if (!ids.includes(selectedBatteryChId.value ?? -1)) selectedBatteryChId.value = ids[0]
-}, { immediate: true })
-watch(pcsChIds, (ids) => {
-  if (!ids.includes(selectedPcsChId.value ?? -1)) selectedPcsChId.value = ids[0]
-}, { immediate: true })
-watch([batteryChId, pcsChId], ([bId, pId]) => {
-  if (bId !== undefined || pId !== undefined) loadPointTables(bId, pId)
-}, { immediate: true })
-
-// ── WebSocket 订阅 ─────────────────────────────────────────────────────────────
-
-const makeHandlers = () => ({
-  onBatchDataUpdate: (data: any) => {
-    const bId = batteryChId.value
-    const pId = pcsChId.value
-
-    const ch2T = data.updates?.find((i: any) => i.channel_id === bId && i.data_type === 'T')
-    if (ch2T) {
-      const { values = {}, ts = {} } = ch2T
-      BatteryleftTableData.value.forEach((item) => {
-        const v = values[String(item.pointId)]
-        const t = ts[String(item.pointId)]
-        if (v != null) item.value = v
-        if (t != null) item.updateTime = t
-      })
-    }
-
-    const ch2S = data.updates?.find((i: any) => i.channel_id === bId && i.data_type === 'S')
-    if (ch2S) {
-      const { values = {}, ts = {} } = ch2S
-      BatteryrightTableData.value.forEach((item) => {
-        const v = values[String(item.pointId)]
-        const t = ts[String(item.pointId)]
-        if (v != null) item.status = v
-        if (t != null) item.updateTime = t
-      })
-    }
-
-    const ch1T = data.updates?.find((i: any) => i.channel_id === pId && i.data_type === 'T')
-    if (ch1T) {
-      const { values = {}, ts = {} } = ch1T
-      PCSleftTableData.value.forEach((item) => {
-        const v = values[String(item.pointId)]
-        const t = ts[String(item.pointId)]
-        if (v != null) item.value = v
-        if (t != null) item.updateTime = t
-      })
-    }
-
-    const ch1S = data.updates?.find((i: any) => i.channel_id === pId && i.data_type === 'S')
-    if (ch1S) {
-      const { values = {}, ts = {} } = ch1S
-      PCSrightTableData.value.forEach((item) => {
-        const v = values[String(item.pointId)]
-        const t = ts[String(item.pointId)]
-        if (v != null) item.status = v
-        if (t != null) item.updateTime = t
-      })
-    }
-  },
+const converterTabs = computed(() => {
+  const converters = topoStore.selectedBatterySystem?.converters ?? []
+  return CONVERTER_PRODUCTS.flatMap((productName) => {
+    const links = converters.filter((item) => item.productName === productName)
+    const instances = links.flatMap((link) =>
+      link.instanceIds.map((instanceId) => ({
+        instanceId,
+        name: topoStore.getInstanceDisplayName(instanceId),
+      })),
+    )
+    if (!instances.length) return []
+    const label =
+      instances.length > 1
+        ? `${productDisplayName(productName)} (${instances.length})`
+        : productDisplayName(productName)
+    return [{ productName, label, instances }]
+  })
 })
 
-useTopologySubscribe(
-  () => {
-    return [batteryChId.value, pcsChId.value].filter((id): id is number => id !== undefined)
-  },
-  { source: 'comsrv', dataTypes: ['T', 'S'], interval: 1000 },
-  makeHandlers(),
+const activeConverterTab = computed(() =>
+  converterTabs.value.find((tab) => tab.productName === activeTab.value),
 )
 
-const activeTab = ref<'battery' | 'pcs'>('battery')
+const converterMonitoringInstanceIds = computed(() => {
+  const tab = activeConverterTab.value
+  if (!tab?.instances.length) return []
+  const id = tab.instances.some((item) => item.instanceId === selectedConverterInstanceId.value)
+    ? selectedConverterInstanceId.value
+    : tab.instances[0]?.instanceId
+  return id === undefined ? [] : [id]
+})
+
+const selectedConverterName = computed(() => {
+  const id = selectedConverterInstanceId.value
+  if (id === undefined) return ''
+  return topoStore.getInstanceDisplayName(id)
+})
+
+watch(
+  () => topoStore.selectedBatterySystem?.id,
+  () => {
+    activeTab.value = 'battery'
+    selectedConverterInstanceId.value = undefined
+  },
+)
+
+watch(
+  activeConverterTab,
+  (tab) => {
+    if (!tab?.instances.length) {
+      selectedConverterInstanceId.value = undefined
+      return
+    }
+    if (!tab.instances.some((item) => item.instanceId === selectedConverterInstanceId.value)) {
+      selectedConverterInstanceId.value = tab.instances[0]?.instanceId
+    }
+  },
+  { immediate: true },
+)
+
+watch(converterTabs, (tabs) => {
+  if (activeTab.value === 'battery') return
+  if (!tabs.some((tab) => tab.productName === activeTab.value)) activeTab.value = 'battery'
+})
 </script>
 
 <style scoped lang="scss">
-.devices-pv__content {
-  width: 100%;
+.devices-battery-monitoring {
   height: 100%;
-
-  .devices-pv__tables {
-    position: relative;
-    height: 100%;
-    width: 100%;
-  }
+  min-height: 0;
 }
-
-:deep(.devices-pv__tabs.el-tabs) { height: 100%; }
-:deep(.devices-pv__tabs .el-tab-pane) { height: 100%; }
-.group-toolbar, .channel-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 0.16rem; height: 0.38rem; margin-bottom: 0.1rem; }
-.channel-toolbar__label { color: var(--vt-text-primary); font-size: 0.14rem; }
-.channel-toolbar .el-select { width: 1.2rem; }
-.group-toolbar .el-select { width: 2rem; }
+.devices-battery-monitoring__tabs {
+  height: 100%;
+}
+.devices-battery-monitoring__converter {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.devices-battery-monitoring__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.16rem;
+  padding-bottom: 0.1rem;
+  color: var(--vt-text-primary);
+  font-size: 0.14rem;
+}
+.devices-battery-monitoring__toolbar .el-select {
+  width: 1.6rem;
+}
+.devices-battery-monitoring__device-name {
+  color: var(--vt-text-primary);
+}
+:deep(.devices-battery-monitoring__tabs .el-tab-pane) {
+  height: 100%;
+}
+.devices-battery-monitoring__converter > .instance-monitoring {
+  flex: 1;
+  min-height: 0;
+}
 </style>

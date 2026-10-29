@@ -616,7 +616,15 @@ async fn main() -> Result<()> {
     let rule_routes = create_rule_routes(rule_state);
 
     // Merge rule routes into the main app (both on port 6002)
-    let app = app.merge(rule_routes);
+    let app = app
+        .merge(rule_routes)
+        .layer(axum::middleware::from_fn_with_state(
+            common::audit_auth::AuditAuth::from_env()?,
+            common::audit_auth::authenticate_operation,
+        ))
+        .layer(axum::middleware::from_fn(
+            common::logging::http_request_logger,
+        ));
 
     // Start HTTP service (model API + rule engine - port 6002)
     let addr = SocketAddr::from(([0, 0, 0, 0], state.config.api.port));

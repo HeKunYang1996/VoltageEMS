@@ -184,7 +184,10 @@ pub async fn require_loopback(
         IpAddr::V6(v6) => v6.is_loopback(),
     };
 
-    if !is_local {
+    if !is_local
+        || req.headers().contains_key("x-forwarded-for")
+        || req.headers().contains_key("x-real-ip")
+    {
         return (StatusCode::FORBIDDEN, "broadcast endpoint is internal-only").into_response();
     }
 

@@ -998,13 +998,11 @@ async fn apply_password_change(
 
 // ── GET /api/v1/auth/validate ────────────────────────────────────────────────
 
-/// Lightweight token validation for nginx `auth_request`.
+/// Token validation for nginx `auth_request` and the backend services.
 ///
 /// Returns 200 with empty body if the Authorization header carries a valid
-/// JWT; 401 otherwise. Designed to be cheap — nginx issues an internal
-/// subrequest here to gate backend service locations (/comApi/, /modApi/,
-/// etc.) so the FE bearer token is enforced uniformly without each backend
-/// service needing its own auth layer.
+/// JWT; 401 otherwise. The backend services use the returned identity and
+/// role headers only after receiving this response directly from apigateway.
 pub async fn validate_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1022,12 +1020,11 @@ pub async fn validate_token(
         (status = 401, description = "Missing or invalid token"),
         (status = 403, description = "Viewer role — insufficient privileges")
     ))]
-/// nginx `auth_request` guard — Engineer or Admin role required.
+/// Engineer or Admin token validation endpoint.
 ///
 /// Returns 200 if the token is valid and the role is Admin or Engineer.
 /// Returns 401 for missing/invalid tokens, 403 for Viewer accounts.
-/// nginx uses this for write operations on backend services (POST/PUT/DELETE
-/// on /modApi/, /comApi/, etc.) so those services need no role-awareness.
+/// nginx may use this for protected routes on the gateway itself.
 pub async fn validate_engineer_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1045,11 +1042,10 @@ pub async fn validate_engineer_token(
         (status = 401, description = "Missing or invalid token"),
         (status = 403, description = "Non-admin role — insufficient privileges")
     ))]
-/// nginx `auth_request` guard — Admin role only.
+/// Admin token validation endpoint.
 ///
 /// Returns 200 only for Admin tokens. 401 for invalid tokens, 403 for all
-/// non-admin roles. Used by nginx for system-level routes that should be
-/// locked down to administrators.
+/// non-admin roles.
 pub async fn validate_admin_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1081,6 +1077,13 @@ fn audit_validation_response(claims: &crate::auth::Claims) -> axum::response::Re
             username,
         );
     }
+    if let Some(role) = claims.role.as_deref()
+        && let Ok(role) = HeaderValue::from_str(role)
+    {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-voltage-audit-role"), role);
+    }
     response
 }
 
@@ -1102,6 +1105,7 @@ mod operation_log_tests {
         };
         let response = audit_validation_response(&claims);
         assert_eq!(response.headers()["x-voltage-audit-user-id"], "42");
+        assert_eq!(response.headers()["x-voltage-audit-role"], "Admin");
         assert_eq!(
             common::operation_log::decode_header_value(
                 response.headers()["x-voltage-audit-username"]

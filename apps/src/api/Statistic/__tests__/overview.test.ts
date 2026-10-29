@@ -1,31 +1,30 @@
-import { describe, expect, it, vi } from 'vitest'
-import { queryPowerTrend } from '../overview'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { batchQueryHistory } from '../overview'
+import Request from '@/utils/request'
 
-vi.mock('@/utils/request', () => {
-  const Request = {
-    get: vi.fn(),
-  }
-  return {
-    default: Request,
-    Request,
-  }
-})
+vi.mock('@/utils/request', () => ({ default: { post: vi.fn() } }))
+const params = {
+  start_time: '2026-10-29T00:00:00Z', end_time: '2026-10-29T06:00:00Z',
+  series: [{ redis_key: 'inst:1:M', point_id: '14' }],
+}
 
-describe('api/Statistic/overview.ts', () => {
-  it('queries power trend with the provided params', async () => {
-    const mockData = { success: true, data: { series: [] } }
-    const RequestModule = await import('@/utils/request')
-    vi.mocked(RequestModule.default.get).mockResolvedValue(mockData)
+describe('history timestamp contract', () => {
+  beforeEach(() => vi.clearAllMocks())
 
-    const params = {
-      start_time: '2026-04-14 00:00:00',
-      end_time: '2026-04-14 23:59:59',
-      point_ids: [1, 2],
-    }
-
-    const result = await queryPowerTrend(params as any)
-
-    expect(result).toEqual(mockData)
-    expect(RequestModule.default.get).toHaveBeenCalledWith('/hisApi/data/query', params)
+  it('normalizes hissrv time and legacy timestamp, preserves null and zero', async () => {
+    vi.mocked(Request.post).mockResolvedValue({ code: 200, success: true, message: 'OK', data: {
+      series: [{ ...params.series[0], count: 3, data: [
+        { time: '2026-10-29T00:00:00Z', value: 0 },
+        { timestamp: '2026-10-29T08:01:00+08:00', value: null },
+        { time: 'invalid', value: 99 },
+      ] }],
+    } })
+    const signal = new AbortController().signal
+    const result = await batchQueryHistory(params, signal)
+    expect(Request.post).toHaveBeenCalledWith('/hisApi/data/batch-query', params, { signal })
+    expect(result.data.series[0].data).toEqual([
+      { timestamp: '2026-10-29T00:00:00.000Z', value: 0 },
+      { timestamp: '2026-10-29T00:01:00.000Z', value: null },
+    ])
   })
 })

@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Local libraries
-common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum"] }
+common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum", "audit-auth"] }
 voltage-rtdb = { path = "../../libs/voltage-rtdb" }
 voltage-model = { path = "../../libs/voltage-model" }
 

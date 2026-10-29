@@ -469,9 +469,12 @@ pub async fn create_app_state(service_info: &ServiceInfo) -> Result<Arc<AppState
     // Initialize environment
     init_environment(service_info)?;
 
-    // Wait for comsrv to be healthy before opening SHM (comsrv must create the SHM file first)
+    // Wait for local dependencies and SHM, independently of field device connectivity.
     let comsrv_base = common::comsrv_url();
-    let comsrv_health = format!("{comsrv_base}/health");
+    let comsrv_health = format!(
+        "{}/health?local_only=true",
+        comsrv_base.trim_end_matches('/')
+    );
     if let Err(e) = common::dependency::wait_for_dependency(
         "comsrv",
         &comsrv_health,

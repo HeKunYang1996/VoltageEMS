@@ -26,6 +26,7 @@ export interface TopologyEquipmentGroup {
   primaryNodeIds: string[]
   /** The directly connected product node or Hybrid component node. */
   relatedNodeId: string
+  relatedProductName: string
   /** Hybrid_Inverter container when relatedNodeId is one of its components. */
   containerNodeId?: string
   nodeIds: string[]
@@ -41,6 +42,25 @@ export interface TopologyEquipmentGroup {
 
 export interface TopologyEquipmentGroupOption extends TopologyEquipmentGroup {
   label: string
+}
+
+/** One PCS or Hybrid_Inverter node linked to a Battery in the topology graph. */
+export interface BatteryLinkedConverter {
+  nodeId: string
+  productName: string
+  instanceIds: number[]
+  channelIds: number[]
+}
+
+/** Operational Battery page context: one Battery node and its converter neighbours. */
+export interface BatterySystemGroup {
+  id: string
+  primaryNodeId: string
+  nodeIds: string[]
+  primaryInstanceIds: number[]
+  primaryChannelIds: number[]
+  converters: BatteryLinkedConverter[]
+  displayName: string
 }
 
 const LOGICAL_DEVICE_PRODUCTS: Record<LogicalTopologyDevice, string[]> = {
@@ -114,6 +134,11 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     return bindings.value
       .filter((b) => b.productName === productName)
       .flatMap((b) => b.instances.map((i) => i.instanceId))
+  }
+
+  /** Actual instances, including devices that are not connected to a Load node. */
+  function getProductInstances(productName: string): DeviceInstanceListItem[] {
+    return instances.value.filter((item) => item.product_name === productName)
   }
 
   /**
@@ -204,18 +229,12 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     return getLogicalDeviceBinding(device).channelIds
   }
 
-  /**
-   * Records topology relationships that are useful to later business features.
-   * This is derived from the saved graph; it is deliberately not persisted as
-   * a second source of truth.
-   */
-  function getEquipmentGroups(): TopologyEquipmentGroup[] {
+  function createTopologyContext() {
     const nodes = topology.value?.flow_json?.nodes ?? []
     const edges = topology.value?.flow_json?.edges ?? []
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
     const neighbours = buildTopologyNeighbours(nodes, edges)
 
-    const groups: TopologyEquipmentGroup[] = []
     const getNodeBinding = (nodeId: string) => {
       const instanceIds = new Set<number>()
       const channelIds = new Set<number>()
@@ -252,6 +271,19 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
       return undefined
     }
 
+    return { nodes, nodeById, neighbours, getNodeBinding, getNodeInstanceName }
+  }
+
+  /**
+   * Records topology relationships that are useful to later business features.
+   * This is derived from the saved graph; it is deliberately not persisted as
+   * a second source of truth.
+   */
+  function getEquipmentGroups(): TopologyEquipmentGroup[] {
+    const { nodes, nodeById, neighbours, getNodeBinding, getNodeInstanceName } = createTopologyContext()
+
+    const groups: TopologyEquipmentGroup[] = []
+
     const formatGroupName = (primaryNodeIds: string[], relatedNodeId: string, containerNodeId?: string) => {
       const names = [
         ...primaryNodeIds.map(getNodeInstanceName),
@@ -276,6 +308,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
       if (!groups.some((group) => group.id === id)) {
         groups.push({
           id, kind, relation, primaryNodeId, primaryNodeIds: [primaryNodeId], relatedNodeId, containerNodeId, nodeIds,
+          relatedProductName: nodeById.get(relatedNodeId)?.data.productName ?? '',
           ...binding,
           primaryInstanceIds: primaryBinding.instanceIds,
           relatedInstanceIds: relatedBinding.instanceIds,
@@ -283,9 +316,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
           relatedChannelIds: relatedBinding.channelIds,
           // PV monitoring is sourced from AC_Inverter. PV_Group is a topology
           // relation node and does not need its own instance binding.
-          complete: kind === 'pv'
-            ? relatedBinding.instanceIds.length > 0
-            : primaryBinding.instanceIds.length > 0 && relatedBinding.instanceIds.length > 0,
+          complete: relatedBinding.instanceIds.length > 0,
           displayName: formatGroupName([primaryNodeId], relatedNodeId, containerNodeId),
         })
       }
@@ -313,27 +344,18 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     }
 
     for (const primary of nodes) {
-      const primaryProduct = primary.data.productName
-      const kind: TopologyEquipmentGroupKind | undefined =
-        primaryProduct === 'PV_Group' ? 'pv' : primaryProduct === 'Battery' ? 'battery' : undefined
-      if (!kind) continue
+      if (primary.data.productName !== 'PV_Group') continue
 
       for (const neighbourId of neighbours.get(primary.id) ?? []) {
         const neighbour = nodeById.get(neighbourId)
         if (!neighbour) continue
-        const neighbourProduct = neighbour.data.productName
-        const directTarget = kind === 'pv' ? 'AC_Inverter' : 'PCS'
-        if (neighbourProduct === directTarget || neighbourProduct === 'Hybrid_Inverter') {
-          addGroup(kind, 'direct', primary.id, neighbour.id)
+        if (neighbour.data.productName === 'AC_Inverter') {
+          addGroup('pv', 'direct', primary.id, neighbour.id)
         }
       }
     }
     const grouped: TopologyEquipmentGroup[] = []
     for (const group of groups) {
-      if (group.kind !== 'pv') {
-        grouped.push(group)
-        continue
-      }
       const key = `${group.relation}:${group.relatedNodeId}:${group.containerNodeId ?? ''}`
       const existing = grouped.find((item) => item.kind === 'pv' && `${item.relation}:${item.relatedNodeId}:${item.containerNodeId ?? ''}` === key)
       if (!existing) {
@@ -353,21 +375,72 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     return grouped
   }
 
+  function getBatterySystems(): BatterySystemGroup[] {
+    const { nodes, nodeById, neighbours, getNodeBinding, getNodeInstanceName } = createTopologyContext()
+    const systems = new Map<string, BatterySystemGroup>()
+
+    const ensureSystem = (batteryNodeId: string) => {
+      let system = systems.get(batteryNodeId)
+      if (system) return system
+      const primaryBinding = getNodeBinding(batteryNodeId)
+      const label = nodeById.get(batteryNodeId)?.data.label
+      system = {
+        id: `battery:${batteryNodeId}`,
+        primaryNodeId: batteryNodeId,
+        nodeIds: [batteryNodeId],
+        primaryInstanceIds: primaryBinding.instanceIds,
+        primaryChannelIds: primaryBinding.channelIds,
+        converters: [],
+        displayName: getNodeInstanceName(batteryNodeId) ?? label ?? 'Battery',
+      }
+      systems.set(batteryNodeId, system)
+      return system
+    }
+
+    for (const node of nodes) {
+      if (node.data.productName !== 'Battery') continue
+      const system = ensureSystem(node.id)
+      for (const neighbourId of neighbours.get(node.id) ?? []) {
+        const neighbour = nodeById.get(neighbourId)
+        if (!neighbour) continue
+        const productName = neighbour.data.productName ?? ''
+        if (productName !== 'PCS' && productName !== 'Hybrid_Inverter') continue
+        if (system.converters.some((item) => item.nodeId === neighbourId)) continue
+        const relatedBinding = getNodeBinding(neighbourId)
+        system.converters.push({
+          nodeId: neighbourId,
+          productName,
+          instanceIds: relatedBinding.instanceIds,
+          channelIds: relatedBinding.channelIds,
+        })
+        system.nodeIds = [...new Set([...system.nodeIds, neighbourId])]
+      }
+    }
+
+    return [...systems.values()].filter((system) => system.primaryInstanceIds.length > 0)
+  }
+
+  function getInstanceDisplayName(instanceId: number): string {
+    return instances.value.find((item) => Number(item.id) === instanceId)?.name ?? String(instanceId)
+  }
+
   const equipmentGroups = computed(getEquipmentGroups)
   const pvGroups = computed(() => equipmentGroups.value.filter((group) => group.kind === 'pv' && group.complete))
-  const batteryGroups = computed(() => equipmentGroups.value.filter((group) => group.kind === 'battery' && group.complete))
+  const batterySystems = computed(getBatterySystems)
   const selectedPvGroupId = ref<string | null>(null)
-  const selectedBatteryGroupId = ref<string | null>(null)
+  const selectedBatterySystemId = ref<string | null>(null)
   const selectedDieselInstanceId = ref<number | null>(null)
   const selectedPvGroup = computed(() => {
     const groups = pvGroups.value
     if (!groups.some((group) => group.id === selectedPvGroupId.value)) selectedPvGroupId.value = groups[0]?.id ?? null
     return groups.find((group) => group.id === selectedPvGroupId.value) ?? null
   })
-  const selectedBatteryGroup = computed(() => {
-    const groups = batteryGroups.value
-    if (!groups.some((group) => group.id === selectedBatteryGroupId.value)) selectedBatteryGroupId.value = groups[0]?.id ?? null
-    return groups.find((group) => group.id === selectedBatteryGroupId.value) ?? null
+  const selectedBatterySystem = computed(() => {
+    const systems = batterySystems.value
+    if (!systems.some((system) => system.id === selectedBatterySystemId.value)) {
+      selectedBatterySystemId.value = systems[0]?.id ?? null
+    }
+    return systems.find((system) => system.id === selectedBatterySystemId.value) ?? null
   })
   const selectedDieselId = computed(() => {
     const ids = getLogicalDeviceInstanceIds('diesel')
@@ -384,6 +457,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     load,
     reload,
     getInstanceIds,
+    getProductInstances,
     getChannelIds,
     getByNodeId,
     getAllInstanceIds,
@@ -393,13 +467,15 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     getLogicalDeviceInstanceIds,
     getLogicalDeviceChannelIds,
     getEquipmentGroups,
+    getBatterySystems,
     equipmentGroups,
     pvGroups,
-    batteryGroups,
+    batterySystems,
     selectedPvGroupId,
-    selectedBatteryGroupId,
+    selectedBatterySystemId,
     selectedPvGroup,
-    selectedBatteryGroup,
+    selectedBatterySystem,
+    getInstanceDisplayName,
     selectedDieselInstanceId,
     selectedDieselId,
   }

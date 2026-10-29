@@ -725,6 +725,26 @@ fi
 # Smart Update may recreate containers before the later configuration step.
 ensure_jwt_secret
 
+# Remember the prior installation before copying the packaged Compose file.
+# Otherwise preloaded images could make a fresh install enter Smart Update.
+EXISTING_COMPOSE=false
+if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+    EXISTING_COMPOSE=true
+fi
+
+# Smart Update must recreate containers with the new mounts and environment.
+# Ownership is set later, after the docker group has been created if necessary.
+if [[ -f docker-compose.yml ]]; then
+    echo "Installing docker-compose.yml..."
+    if [[ ! docker-compose.yml -ef "$INSTALL_DIR/docker-compose.yml" ]]; then
+        $SUDO cp docker-compose.yml "$INSTALL_DIR/docker-compose.yml"
+    fi
+    $SUDO chmod 644 "$INSTALL_DIR/docker-compose.yml"
+    echo -e "${GREEN}docker-compose.yml installed${NC}"
+else
+    echo -e "${YELLOW}Warning: docker-compose.yml not found${NC}"
+fi
+
 # Step 1: Install CLI tools
 echo -e "${YELLOW}[1/3] Installing CLI tools...${NC}"
 $SUDO mkdir -p /usr/local/bin
@@ -758,7 +778,7 @@ if command -v docker &> /dev/null; then
         EXISTING_IMAGES=true
     fi
 
-    if [ "$EXISTING_IMAGES" = true ] && [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+    if [ "$EXISTING_IMAGES" = true ] && [[ "$EXISTING_COMPOSE" == true ]]; then
         echo -e "${BLUE}Existing VoltageEMS installation detected.${NC}"
         echo ""
         echo -e "${BLUE}Smart Update Mode:${NC}"
@@ -1396,15 +1416,9 @@ fi
 
 # Additional config samples are not needed - already handled above
 
-# Install docker-compose.yml
-if [[ -f docker-compose.yml ]]; then
-    echo "Installing docker-compose.yml..."
-    $SUDO cp docker-compose.yml "$INSTALL_DIR/docker-compose.yml"
+# Compose was installed before Smart Update; finalize ownership after group setup.
+if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     $SUDO chown $ACTUAL_USER:docker "$INSTALL_DIR/docker-compose.yml"
-    $SUDO chmod 644 "$INSTALL_DIR/docker-compose.yml"
-    echo -e "${GREEN}docker-compose.yml installed${NC}"
-else
-    echo -e "${YELLOW}Warning: docker-compose.yml not found${NC}"
 fi
 
 echo -e "${GREEN}[DONE] Configuration installed${NC}"

@@ -127,17 +127,7 @@ async fn test_get_service_status_returns_200() {
 
 #[tokio::test]
 async fn test_health_check_returns_503_when_shm_not_initialized() {
-    // After commit ddea2937 ("fix(comsrv): SHM Degraded must flip
-    // overall_healthy so /health returns 503"), a comsrv instance
-    // running without an initialized ShmHandle reports the SHM
-    // component as Degraded and flips overall_healthy false, returning
-    // 503 from /health. That is the correct behavior — Docker
-    // readiness probes must not see a node that has no hot data path
-    // as fully healthy. This test setup deliberately does not create
-    // a ShmHandle, so 503 is the expected status here. A separate
-    // test would be needed to cover the 200 path with a fully
-    // initialized SHM mmap; that requires real-file plumbing that
-    // belongs in an integration test rather than the unit suite.
+    // A server without its shared-memory data path must not report readiness.
     let channel_manager = Arc::new(ChannelManager::new(
         crate::test_utils::create_test_rtdb(),
         crate::test_utils::create_test_routing_cache(),
@@ -152,6 +142,119 @@ async fn test_health_check_returns_503_when_shm_not_initialized() {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_health_local_readiness_ignores_offline_channels_but_requires_shm_and_sqlite() {
+    use std::sync::atomic::Ordering;
+    use voltage_rtdb_shm::{
+        ChannelPointCounts, ChannelToSlotIndex, SharedConfig, ShmHandle, UnifiedWriter,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = SharedConfig::default()
+        .with_path(dir.path().join("health.shm"))
+        .with_max_slots(8);
+    let points =
+        ChannelPointCounts::from_map(std::collections::BTreeMap::from([(200, [1, 0, 0, 0])]));
+    let writer = UnifiedWriter::create(&config, &points).unwrap();
+    let index = ChannelToSlotIndex::from_unified_writer(&writer);
+    let shm = Arc::new(ShmHandle::new(config.clone(), writer, index));
+    let pool = create_test_sqlite_pool().await;
+    let manager = Arc::new(ChannelManager::with_shared_memory(
+        crate::test_utils::create_test_rtdb(),
+        crate::test_utils::create_test_routing_cache(),
+        pool.clone(),
+        Some(shm),
+        None,
+    ));
+    // Use an entirely local virtual channel and stop its task to simulate an
+    // offline field channel, without making any device/network connections.
+    let channel =
+        serde_json::from_value(json!({"id":200,"name":"Offline channel","protocol":"virtual"}))
+            .unwrap();
+    let entry = manager.create_channel(Arc::new(channel)).await.unwrap();
+    if let Some(task) = entry.take_task_handle() {
+        task.abort();
+        let _ = task.await;
+    }
+    entry.last_successful_read_ms.store(1, Ordering::Relaxed);
+    assert_eq!(manager.running_channel_count().await, 0);
+    let app = create_test_api_with_pool(manager, pool.clone()).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health?local_only=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = extract_json(response).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["checks"]["channels"]["message"], "0/1 running");
+
+    pool.close().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health?local_only=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = extract_json(response).await;
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("sqlite")
+    );
+    assert!(
+        !body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("channels:")
+    );
+
+    let pool = create_test_sqlite_pool().await;
+    let manager = Arc::new(ChannelManager::with_shared_memory(
+        crate::test_utils::create_test_rtdb(),
+        crate::test_utils::create_test_routing_cache(),
+        pool.clone(),
+        Some(Arc::new(ShmHandle::empty(config))),
+        None,
+    ));
+    let app = create_test_api_with_pool(manager, pool).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health?local_only=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = extract_json(response).await;
+    assert!(body["error"]["message"].as_str().unwrap().contains("shm:"));
 }
 
 // ========================================================================

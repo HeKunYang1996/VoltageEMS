@@ -15,6 +15,12 @@ Object.defineProperty(window, 'innerWidth', {
   value: 1920,
 })
 
+Object.defineProperty(window, 'innerHeight', {
+  writable: true,
+  configurable: true,
+  value: 1080,
+})
+
 Object.defineProperty(document, 'documentElement', {
   writable: true,
   configurable: true,
@@ -84,6 +90,7 @@ describe('Responsive Utils', () => {
       const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
       initResponsive()
       expect(addEventListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function))
+      expect(addEventListenerSpy).toHaveBeenCalledWith('orientationchange', expect.any(Function))
     })
   })
 })
