@@ -26,6 +26,7 @@ export interface TopologyEquipmentGroup {
   primaryNodeIds: string[]
   /** The directly connected product node or Hybrid component node. */
   relatedNodeId: string
+  relatedProductName: string
   /** Hybrid_Inverter container when relatedNodeId is one of its components. */
   containerNodeId?: string
   nodeIds: string[]
@@ -114,6 +115,11 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     return bindings.value
       .filter((b) => b.productName === productName)
       .flatMap((b) => b.instances.map((i) => i.instanceId))
+  }
+
+  /** Actual instances, including devices that are not connected to a Load node. */
+  function getProductInstances(productName: string): DeviceInstanceListItem[] {
+    return instances.value.filter((item) => item.product_name === productName)
   }
 
   /**
@@ -276,6 +282,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
       if (!groups.some((group) => group.id === id)) {
         groups.push({
           id, kind, relation, primaryNodeId, primaryNodeIds: [primaryNodeId], relatedNodeId, containerNodeId, nodeIds,
+          relatedProductName: nodeById.get(relatedNodeId)?.data.productName ?? '',
           ...binding,
           primaryInstanceIds: primaryBinding.instanceIds,
           relatedInstanceIds: relatedBinding.instanceIds,
@@ -384,6 +391,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     load,
     reload,
     getInstanceIds,
+    getProductInstances,
     getChannelIds,
     getByNodeId,
     getAllInstanceIds,

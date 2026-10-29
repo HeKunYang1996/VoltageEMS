@@ -15,6 +15,12 @@ Object.defineProperty(window, 'innerWidth', {
   value: 1920,
 })
 
+Object.defineProperty(window, 'innerHeight', {
+  writable: true,
+  configurable: true,
+  value: 1080,
+})
+
 Object.defineProperty(document, 'documentElement', {
   writable: true,
   configurable: true,
@@ -62,6 +68,15 @@ describe('Responsive Utils', () => {
     it('should return current scale ratio', () => {
       const scale = getCurrentScale()
       expect(scale).toBe(1) // At 1920px width, scale is 1
+    })
+
+    it('keeps the original height constraint on short viewports', () => {
+      window.innerHeight = 810
+      try {
+        expect(getCurrentScale()).toBe(0.75)
+      } finally {
+        window.innerHeight = 1080
+      }
     })
   })
 
