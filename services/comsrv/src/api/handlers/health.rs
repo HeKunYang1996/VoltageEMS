@@ -2,7 +2,10 @@
 //!
 //! Provides endpoints for monitoring service health and operational status.
 
-use axum::{extract::State, response::Json};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+};
 use chrono::Utc;
 use common::system_metrics::SystemMetrics;
 use common::{ComponentHealth, ServiceStatus as HealthServiceStatus};
@@ -12,6 +15,13 @@ use std::time::Instant;
 use crate::api::routes::{AppState, get_service_start_time};
 use crate::dto::{AppError, HealthStatus, ServiceStatus, SuccessResponse};
 use voltage_rtdb::Rtdb;
+
+#[derive(Default, serde::Deserialize, utoipa::IntoParams)]
+pub struct HealthQuery {
+    /// Check local dependencies and SHM without requiring field devices to be online.
+    #[serde(default)]
+    pub local_only: bool,
+}
 
 /// comsrv runtime summary: total channels, active channels, uptime, and version.
 ///
@@ -59,6 +69,7 @@ pub async fn get_service_status<R: Rtdb>(
 #[utoipa::path(
     get,
     path = "/health",
+    params(HealthQuery),
     responses(
         (status = 200, description = "Service is healthy"),
         (status = 503, description = "Service is unhealthy")
@@ -67,6 +78,7 @@ pub async fn get_service_status<R: Rtdb>(
 )]
 pub async fn health_check<R: Rtdb>(
     State(state): State<AppState<R>>,
+    Query(query): Query<HealthQuery>,
 ) -> Result<Json<SuccessResponse<HealthStatus>>, AppError> {
     // Get actual uptime from service start time
     let start_time = get_service_start_time();
@@ -144,7 +156,7 @@ pub async fn health_check<R: Rtdb>(
 
     // Fix: channels check should report Unhealthy when < 50% are running
     let channels_healthy = total_channels == 0 || running_channels * 2 >= total_channels;
-    if !channels_healthy {
+    if !query.local_only && !channels_healthy {
         overall_healthy = false;
     }
 
@@ -176,7 +188,7 @@ pub async fn health_check<R: Rtdb>(
     let total_reconnects: u64 = all_stats.iter().map(|s| s.reconnect_total_attempts).sum();
 
     let watchdog_healthy = stuck_count == 0;
-    if !watchdog_healthy {
+    if !query.local_only && !watchdog_healthy {
         overall_healthy = false;
     }
 
@@ -222,7 +234,7 @@ pub async fn health_check<R: Rtdb>(
     // path silently dropped the entry when the handle was None and
     // returned 200 alongside Redis/SQLite health, masking a degraded SHM.
     match manager.shm_handle() {
-        Some(handle) => {
+        Some(handle) if handle.layout().is_some() => {
             let mut parts = Vec::new();
 
             if let Some(guard) = handle.layout()
@@ -250,7 +262,7 @@ pub async fn health_check<R: Rtdb>(
                 },
             );
         },
-        None => {
+        _ => {
             // SHM never initialized — the writer thread either hasn't
             // started yet or failed to create the mmap. Report Degraded
             // AND flip overall_healthy so the response gets 503 instead
@@ -288,6 +300,8 @@ pub async fn health_check<R: Rtdb>(
             "Service dependencies are unhealthy: {}",
             checks
                 .iter()
+                .filter(|(name, _)| !query.local_only
+                    || matches!(name.as_str(), "redis" | "sqlite" | "shm"))
                 .filter(|(_, c)| matches!(
                     c.status,
                     HealthServiceStatus::Unhealthy | HealthServiceStatus::Degraded

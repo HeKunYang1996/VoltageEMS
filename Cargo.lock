@@ -142,6 +142,7 @@ dependencies = [
  "dashmap 6.1.0",
  "futures",
  "jsonwebtoken",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

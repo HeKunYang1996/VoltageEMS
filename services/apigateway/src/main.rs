@@ -28,6 +28,7 @@ use utoipa_swagger_ui::{Config, SwaggerUi};
 
 mod auth;
 mod config;
+mod config_services;
 mod config_versions;
 mod db;
 mod middleware_auth;
