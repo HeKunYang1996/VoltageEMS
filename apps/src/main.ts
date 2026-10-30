@@ -16,6 +16,7 @@ import {
   throttleDirective,
   debounceDirective,
 } from './utils/directives'
+import { initResponsive } from './utils/responsive'
 import VueVirtualScroller from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 const app = createApp(App)
@@ -37,6 +38,8 @@ app.directive('fit-columns', fitColumnsDirective)
 app.directive('throttle', throttleDirective)
 // 注册自定义指令 v-debounce
 app.directive('debounce', debounceDirective)
+// 初始化响应式配置
+initResponsive()
 
 // 启动应用
 app.mount('#app')

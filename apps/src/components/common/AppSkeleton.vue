@@ -13,7 +13,7 @@
     </div>
     <div class="app-skeleton__right">
       <div class="app-skeleton__header">
-        <div class="app-skeleton__header-title">Voltage Solar Energy Center</div>
+        <div class="app-skeleton__header-title">Norton Creek Solar Energy Center</div>
         <div class="app-skeleton__header-right">
           <div class="app-skeleton__avatar skeleton-block skeleton-circle" />
           <div class="app-skeleton__notice skeleton-block" />

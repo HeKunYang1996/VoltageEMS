@@ -13,7 +13,6 @@
             placeholder="All Devices"
             :teleported="false"
             :append-to="deviceSelectWrapperRef"
-            @change="fetchAllData"
           >
             <el-option label="All Devices" value="all" />
             <el-option
@@ -56,10 +55,10 @@
 
       <!-- 图表区域（可滚动） -->
       <div class="curves__charts-outer">
-      <LoadingBg :loading="isConfigLoading || isLoading">
+      <LoadingBg :loading="isConfigLoading">
       <div class="curves__charts">
         <template v-for="dev in activeDevices" :key="dev.id">
-          <div class="curves__device-section">
+          <div class="curves__device-section" :aria-busy="pendingDeviceIds.has(dev.id)">
             <!-- 设备区块标题（点击收起/展开） -->
             <div
               class="curves__device-header"
@@ -68,6 +67,7 @@
             >
               <span class="curves__device-label">{{ dev.label }}</span>
               <span class="curves__device-sub">{{ dev.subtitle }}</span>
+              <span v-if="pendingDeviceIds.has(dev.id)" class="curves__device-loading" role="status">Loading...</span>
               <span
                 class="device-collapse-arrow"
                 :class="{ 'is-collapsed': collapsedMap[dev.id] }"
@@ -75,6 +75,9 @@
             </div>
 
             <!-- 该设备的点位图表网格（可收起） -->
+            <div v-if="!collapsedMap[dev.id] && deviceErrors[dev.id]" role="alert">
+              Historical data unavailable
+            </div>
             <div class="curves__device-charts" v-if="!collapsedMap[dev.id]">
               <div
                 class="curves__chart-item"
@@ -84,9 +87,9 @@
                 <ModuleCard :title="`${point.name} Curve`">
                   <lineChart
                     lazy
-                    :xAxiosOption="{ xAxiosData: getPointXAxis(dev.redisKey, point.id) }"
+                    :xAxiosOption="getPointChartProps(dev.redisKey, point.id, point.name, getColor(pIdx)).xAxis"
                     :yAxiosOption="{ yUnit: point.unit }"
-                    :series="getPointSeries(dev.redisKey, point.id, point.name, getColor(pIdx))"
+                    :series="getPointChartProps(dev.redisKey, point.id, point.name, getColor(pIdx)).series"
                   />
                 </ModuleCard>
               </div>
@@ -132,7 +135,7 @@ interface DeviceConfig {
 
 interface ChartSeriesData {
   xLabels: string[]
-  values: number[]
+  values: (number | null)[]
 }
 
 const PRODUCT_ACCENT: Record<string, string> = {
@@ -171,38 +174,28 @@ const getColor = (index: number) => CHART_COLORS[index % CHART_COLORS.length]
 const topoStore = useDeviceTopologyStore()
 const deviceConfigs = ref<DeviceConfig[]>([])
 const isConfigLoading = ref(false)
+let disposed = false
+let configVersion = 0
 
 const loadDeviceConfigs = async () => {
+  const version = ++configVersion
   isConfigLoading.value = true
   try {
-    if (!topoStore.loaded) {
-      await topoStore.load()
-    }
-
-    const selectedNodeIds = new Set(
-      topoStore.topology?.flow_json?.nodes.map((node) => node.id) ?? [],
-    )
-    const instancesById = new Map<number, { binding: typeof topoStore.bindings[number]; inst: typeof topoStore.bindings[number]['instances'][number] }>()
-    topoStore.bindings
-      .filter((binding) => selectedNodeIds.has(binding.nodeId))
-      .forEach((binding) => binding.instances.forEach((inst) => {
-        if (!instancesById.has(inst.instanceId)) instancesById.set(inst.instanceId, { binding, inst })
-      }))
-    const instances = [...instancesById.values()]
+    const instances = topoStore.getTopologyDevices()
 
     const configs = await Promise.all(
-      instances.map(async ({ binding, inst }) => {
+      instances.map(async (instance) => {
         try {
-          const res = await getInstancePoints(inst.instanceId)
+          const res = await getInstancePoints(instance.id)
           const points = res.success && res.data
             ? mapMeasurementPoints(res.data.measurements)
             : []
           return {
-            id: String(inst.instanceId),
-            label: topoStore.instances.find((item) => item.id === inst.instanceId)?.name ?? inst.instanceName,
-            subtitle: binding.productName,
-            redisKey: `inst:${inst.instanceId}:M`,
-            accentColor: getAccentColor(binding.productName),
+            id: String(instance.id),
+            label: instance.name,
+            subtitle: instance.product_name,
+            redisKey: `inst:${instance.id}:M`,
+            accentColor: getAccentColor(instance.product_name),
             points,
           } satisfies DeviceConfig
         } catch {
@@ -211,21 +204,28 @@ const loadDeviceConfigs = async () => {
       }),
     )
 
+    if (disposed || version !== configVersion) return false
     deviceConfigs.value = configs.filter(
       (item): item is DeviceConfig => Boolean(item && item.points.length > 0),
     )
     initCollapseState()
+    if (selectedDevice.value !== 'all' && !deviceConfigs.value.some((dev) => dev.id === selectedDevice.value)) {
+      selectedDevice.value = 'all'
+    }
+    return true
   } catch (error) {
+    if (disposed || version !== configVersion) return false
     console.error('Failed to load curves device configs:', error)
     deviceConfigs.value = []
+    return false
   } finally {
-    isConfigLoading.value = false
+    if (version === configVersion) isConfigLoading.value = false
   }
 }
 
 // ─── 时间选择 ─────────────────────────────────────────────────
 const defaultTime: [Date, Date] = [new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 1, 23, 59, 59)]
-const rangeArray = ref<string[]>([])
+const rangeArray = ref<string[] | null>([])
 const selectedTimeBtn = ref<'6h' | '1d' | '1w' | '1m' | 'custom'>('6h')
 const timeBtnList: { label: string; value: '6h' | '1d' | '1w' | '1m' | 'custom' }[] = [
   { label: 'Custom', value: 'custom' },
@@ -257,11 +257,6 @@ const toggleCollapse = (deviceId: string) => {
     if (dev && !loadedDeviceIds.value.has(deviceId)) {
       void fetchDevicesData([dev])
     }
-    nextTick(() => {
-      setTimeout(() => {
-        window.dispatchEvent(new Event('resize'))
-      }, 50)
-    })
   }
 }
 
@@ -285,26 +280,46 @@ watch(selectedDevice, (value) => {
 })
 
 // ─── 图表数据 ─────────────────────────────────────────────────
-const isLoading = ref(false)
-let fetchAbortController: AbortController | null = null
+const pendingDeviceIds = ref<Set<string>>(new Set())
+const isLoading = computed(() => pendingDeviceIds.value.size > 0)
+const deviceRequests = new Map<string, { controller: AbortController; promise: Promise<void> }>()
+const deviceErrors = reactive<Record<string, boolean>>({})
+let queryGeneration = 0
+let chartRangeKey = JSON.stringify([selectedTimeBtn.value, null])
 const chartDataMap = ref<Map<string, ChartSeriesData>>(new Map())
 const loadedDeviceIds = ref<Set<string>>(new Set())
 
-const getPointXAxis = (redisKey: string, pointId: string): string[] => {
-  return chartDataMap.value.get(`${redisKey}:${pointId}`)?.xLabels ?? []
+interface PointChartProps {
+  source: ChartSeriesData | undefined
+  xAxis: { xAxiosData: string[] }
+  series: { name: string; data: (number | null)[]; color: string }[]
 }
-
-const getPointSeries = (redisKey: string, pointId: string, name: string, color: string) => {
-  const data = chartDataMap.value.get(`${redisKey}:${pointId}`)
-  return [{ name, data: data?.values ?? [], color }]
+const pointChartProps = new Map<string, PointChartProps>()
+// Panel/loading updates must not reset unchanged ECharts options and animations.
+const getPointChartProps = (redisKey: string, pointId: string, name: string, color: string): PointChartProps => {
+  const key = `${redisKey}:${pointId}`
+  const source = chartDataMap.value.get(key)
+  const cached = pointChartProps.get(key)
+  if (cached && cached.source === source && cached.series[0].name === name && cached.series[0].color === color) return cached
+  const props = {
+    source,
+    xAxis: { xAxiosData: source?.xLabels ?? [] },
+    series: [{ name, data: source?.values ?? [], color }],
+  }
+  pointChartProps.set(key, props)
+  return props
 }
 
 // ─── 时间范围 ─────────────────────────────────────────────────
-const getTimeRange = (): { start_time: string; end_time: string } => {
-  if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
+const getTimeRange = (): { start_time: string; end_time: string } | null => {
+  if (selectedTimeBtn.value === 'custom') {
+    if (!Array.isArray(rangeArray.value) || rangeArray.value.length !== 2) return null
+    const start = dayjs(rangeArray.value[0])
+    const end = dayjs(rangeArray.value[1])
+    if (!start.isValid() || !end.isValid() || !end.isAfter(start)) return null
     return {
-      start_time: dayjs(rangeArray.value[0]).toISOString(),
-      end_time: dayjs(rangeArray.value[1]).toISOString(),
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
     }
   }
   const rangeMap: Record<string, { start?: string; end?: string }> = {
@@ -324,82 +339,101 @@ const formatLabel = (ts: string): string => {
     : dayjs(ts).format('MM-DD HH:mm')
 }
 
-const formatValue = (v: number | null | undefined): number =>
-  Number(Number(v ?? 0).toFixed(3))
+const formatValue = (v: number | null | undefined): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(3)) : null
 
 const getExpandedDevices = () =>
   activeDevices.value.filter((dev) => !collapsedMap[dev.id])
 
 const fetchDevicesData = async (devs: DeviceConfig[]) => {
-  if (devs.length === 0) return
+  const range = getTimeRange()
+  if (disposed || isConfigLoading.value || !range) return
+  const generation = queryGeneration
+  await Promise.all(devs.map((dev) => {
+    if (loadedDeviceIds.value.has(dev.id)) return
+    const pending = deviceRequests.get(dev.id)
+    if (pending) return pending.promise
 
-  fetchAbortController?.abort()
-  fetchAbortController = new AbortController()
-  const signal = fetchAbortController.signal
-
-  isLoading.value = true
-
-  const { start_time, end_time } = getTimeRange()
-
-  const allRequests = devs.flatMap((dev) => {
-    const chunks: Array<Array<{ redis_key: string; point_id: string }>> = []
-    for (let i = 0; i < dev.points.length; i += 20) {
-      chunks.push(
-        dev.points.slice(i, i + 20).map((p) => ({
-          redis_key: dev.redisKey,
-          point_id: p.id,
-        })),
-      )
-    }
-    return chunks.map((chunk) =>
-      batchQueryHistory({ start_time, end_time, limit_per_series: 300, series: chunk }, signal),
-    )
-  })
-
-  try {
-    const results = await Promise.all(allRequests)
-    const newMap = new Map(chartDataMap.value)
-
-    results.forEach((res) => {
-      const responses: BatchQueryResponse[] = res.data?.series ?? []
-      responses.forEach((r) => {
-        const sorted = [...(r.data ?? [])].sort(
-          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-        )
-        newMap.set(`${r.redis_key}:${r.point_id}`, {
-          xLabels: sorted.map((p) => formatLabel(p.timestamp)),
-          values: sorted.map((p) => formatValue(p.value)),
+    const controller = new AbortController()
+    const request = { controller, promise: Promise.resolve() }
+    deviceRequests.set(dev.id, request)
+    pendingDeviceIds.value = new Set(deviceRequests.keys())
+    deviceErrors[dev.id] = false
+    request.promise = (async () => {
+      try {
+        const chunks = []
+        for (let i = 0; i < dev.points.length; i += 20) {
+          chunks.push(dev.points.slice(i, i + 20).map((point) => ({
+            redis_key: dev.redisKey, point_id: point.id,
+          })))
+        }
+        const results = await Promise.all(chunks.map((series) => batchQueryHistory({
+          ...range, limit_per_series: 300, series,
+        }, controller.signal)))
+        if (controller.signal.aborted || generation !== queryGeneration || disposed) return
+        if (results.some((result) => !result.success)) throw new Error('History query failed')
+        const newMap = new Map(chartDataMap.value)
+        results.forEach((res) => {
+          const responses: BatchQueryResponse[] = res.data?.series ?? []
+          responses.forEach((r) => {
+            const sorted = [...(r.data ?? [])].sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+            )
+            newMap.set(`${r.redis_key}:${r.point_id}`, {
+              xLabels: sorted.map((p) => formatLabel(p.timestamp)),
+              values: sorted.map((p) => formatValue(p.value)),
+            })
+          })
         })
-      })
-    })
-
-    chartDataMap.value = newMap
-    devs.forEach((dev) => loadedDeviceIds.value.add(dev.id))
-  } catch (error: unknown) {
-    const err = error as { name?: string; code?: string }
-    if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError') {
-      return
-    }
-    console.error('Failed to load curves data:', error)
-  } finally {
-    isLoading.value = false
-  }
+        chartDataMap.value = newMap
+        loadedDeviceIds.value.add(dev.id)
+      } catch (error: unknown) {
+        if (controller.signal.aborted || generation !== queryGeneration || disposed) return
+        const err = error as { name?: string; code?: string }
+        if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError') return
+        deviceErrors[dev.id] = true
+        controller.abort()
+        console.error('Failed to load curves data:', error)
+      } finally {
+        if (deviceRequests.get(dev.id) === request) {
+          deviceRequests.delete(dev.id)
+          pendingDeviceIds.value = new Set(deviceRequests.keys())
+        }
+      }
+    })()
+    return request.promise
+  }))
 }
 
 const fetchExpandedDevicesData = async () => {
-  loadedDeviceIds.value = new Set()
-  chartDataMap.value = new Map()
   await fetchDevicesData(getExpandedDevices())
 }
 
-const fetchAllData = async () => {
+const resetChartData = () => {
+  queryGeneration++
+  deviceRequests.forEach((request) => request.controller.abort())
+  deviceRequests.clear()
+  pendingDeviceIds.value = new Set()
   loadedDeviceIds.value = new Set()
   chartDataMap.value = new Map()
+  pointChartProps.clear()
+  Object.keys(deviceErrors).forEach((id) => { delete deviceErrors[id] })
+}
+
+const fetchAllData = async () => {
+  const key = JSON.stringify([selectedTimeBtn.value,
+    selectedTimeBtn.value === 'custom' ? rangeArray.value : null])
+  if (key !== chartRangeKey) {
+    chartRangeKey = key
+    resetChartData()
+  }
   await fetchDevicesData(getExpandedDevices())
 }
 
 onUnmounted(() => {
-  fetchAbortController?.abort()
+  disposed = true
+  configVersion++
+  resetChartData()
 })
 
 // ─── 事件处理 ─────────────────────────────────────────────────
@@ -408,24 +442,30 @@ const handleTimeBtnClick = (event: MouseEvent) => {
     '.curves__toolbar-time-btn',
   ) as HTMLElement | null
   if (btn?.dataset.value) {
+    if (btn.dataset.value === selectedTimeBtn.value) return
     selectedTimeBtn.value = btn.dataset.value as '6h' | '1d' | '1w' | '1m' | 'custom'
     rangeArray.value = []
-    if (selectedTimeBtn.value !== 'custom') {
-      void fetchAllData()
-    }
-  }
-}
-
-const handleDateRangeChange = () => {
-  if (selectedTimeBtn.value === 'custom' && rangeArray.value.length === 2) {
     void fetchAllData()
   }
 }
 
-onMounted(async () => {
-  await loadDeviceConfigs()
-  await fetchExpandedDevicesData()
-})
+const handleDateRangeChange = () => {
+  if (selectedTimeBtn.value === 'custom') {
+    void fetchAllData()
+  }
+}
+
+watch(
+  () => JSON.stringify(topoStore.getTopologyDevices().map((item) => [item.id, item.product_name])
+    .sort((a, b) => Number(a[0]) - Number(b[0]))),
+  async () => {
+    resetChartData()
+    deviceConfigs.value = []
+    if (await loadDeviceConfigs()) await fetchExpandedDevicesData()
+  },
+  { immediate: true },
+)
+onMounted(() => { if (!topoStore.loaded) void topoStore.load() })
 </script>
 
 <style scoped lang="scss">
@@ -501,6 +541,7 @@ onMounted(async () => {
   .curves__charts {
     height: 100%;
     overflow-y: auto;
+    scrollbar-gutter: stable;
 
     // 自定义滚动条
     &::-webkit-scrollbar {
@@ -546,6 +587,12 @@ onMounted(async () => {
           color: rgba(255, 255, 255, 0.45);
           font-family: Arimo, sans-serif;
           flex: 1;
+        }
+
+        .curves__device-loading {
+          font-size: 0.12rem;
+          color: rgba(255, 255, 255, 0.65);
+          white-space: nowrap;
         }
 
         .device-collapse-arrow {

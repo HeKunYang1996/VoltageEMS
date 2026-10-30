@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatNumber, formatTimestamp } from '../common'
+import { formatNumber, formatSampleValue, formatTimestamp } from '../common'
 
 describe('formatNumber', () => {
   it('returns "-" for null', () => {
@@ -40,6 +40,19 @@ describe('formatNumber', () => {
 
   it('handles negative numbers', () => {
     expect(formatNumber(-3.14159)).toBe('-3.142')
+  })
+})
+
+describe('formatSampleValue', () => {
+  it('returns "-" when ts is missing or zero even if value exists', () => {
+    expect(formatSampleValue(12.3, null)).toBe('-')
+    expect(formatSampleValue(12.3, 0)).toBe('-')
+    expect(formatSampleValue(0, 0)).toBe('-')
+  })
+
+  it('formats value when ts is valid', () => {
+    expect(formatSampleValue(3.14159, 1_700_000_000_000)).toBe('3.142')
+    expect(formatSampleValue(0, 1)).toBe('0')
   })
 })
 

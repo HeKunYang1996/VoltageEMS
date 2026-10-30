@@ -11,9 +11,9 @@
     <!-- dialog-head插槽，默认显示标题 -->
     <template #header>
       <slot name="dialog-head">
-        <div class="dialog-head">
-          <img class="dialog-head-icon" src="../../assets/icons/card-icon.svg" />
-          <span class="dialog-head-title">{{ props.title }}</span>
+        <div class="dialog-head-container">
+          <img class="dialog-head-icon" :src="cardIcon" />
+          <span>{{ props.title }}</span>
         </div>
       </slot>
     </template>
@@ -31,6 +31,7 @@
 </template>
 
 <script setup lang="ts">
+import cardIcon from '@/assets/icons/card-icon.svg'
 const props = defineProps<{
   title: string
 }>()
@@ -41,23 +42,24 @@ defineExpose({
 })
 </script>
 
-<style lang="scss" scoped>
-.dialog-head {
+<style scoped lang="scss">
+.dialog-head-container {
   display: flex;
   align-items: center;
+  // justify-content: center;
 
   .dialog-head-icon {
     width: 0.2rem;
     height: 0.2rem;
-    margin-right: 0.03rem;
+    margin-right: 0.05rem;
   }
 
   .dialog-head-title {
     font-weight: 700;
-    font-size: 0.18rem;
-    line-height: 0.2rem;
+    font-size: 18px;
+    line-height: 100%;
     letter-spacing: 0%;
-    color: rgba(245, 247, 255, 1);
+    color: var(--vt-text-primary);
   }
 }
 </style>

@@ -522,7 +522,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
     ? {
         itemSize: 20,
         itemGap: 26,
-        top: 16,
+        top: -18,
         right: 40,
         iconStyle: {
           // color: '#fff',

@@ -1,3 +1,5 @@
+import dayjs from 'dayjs'
+
 /** homepage_batch 推送的单条点位 */
 export interface DemoPointUpdate {
   id: number
@@ -32,155 +34,193 @@ export interface MicrogridSnapshot {
   savingUsd: number
 }
 
-/** Fixed, idealized six-hour off-grid scene for repeatable marketing screenshots. */
-export const DEMO_SCENARIO = {
-  startHour: 10,
-  endHour: 16,
-  intervalMinutes: 10,
-  batteryCapacityKwh: 500,
-  initialSoc: 64,
-  batteryMaxKw: 100,
-  dieselMaxKw: 180,
-  avoidedDieselCostPerKwh: 0.24,
-} as const
+const INTERVAL_HOURS = 10 / 60
+const ESS_MAX_KW = 100
+const DG_MAX_KW = 180
+const PV_PEAK_KW = 420
+const ESS_CAPACITY_KWH = 500
 
-// Totals share the six-hour scenario. Savings use an illustrative diesel-only
-// baseline ($0.24/kWh). The idealized 500 kWh battery starts at 64% SOC;
-// conversion losses are excluded. Positive BESS power discharges, negative charges.
 const round1 = (v: number) => Number(v.toFixed(1))
 const round2 = (v: number) => Number(v.toFixed(2))
 
-/** 演示用提前补油提示阈值，不代表设备故障阈值。 */
-const DEMO_FUEL_NOTICE_THRESHOLD = 40
+/** 演示模式 Header 铃铛告警数 */
+export const DEMO_ALARM_NUM = 1
 
 /** 离网功率平衡校验：P_pv + P_dg + P_ess = P_load */
 export function isOffGridBalanced(pv: number, load: number, dg: number, ess: number): boolean {
   return Math.abs(pv + dg + ess - load) < 0.15
 }
 
-/** 根据剩余油量生成 L3 阈值提示，与拓扑中的 Fuel 数值保持一致。 */
-export function buildDemoAlarms(snapshot: MicrogridSnapshot): DemoAlarmItem[] {
-  const oil = snapshot.oilPct
-  if (!Number.isFinite(oil) || oil < 0 || oil >= DEMO_FUEL_NOTICE_THRESHOLD) return []
-
+/** 根据当前快照生成 1 条 ESS 演示告警 */
+export function buildDemoAlarms(s: MicrogridSnapshot): DemoAlarmItem[] {
+  if (s.soc >= 88) {
+    return [
+      { id: 'demo-1', deviceName: 'ESS', alarmLevel: 'Info Alarm', alarmMsg: 'SOC near full' },
+    ]
+  }
+  if (s.soc <= 28) {
+    return [
+      {
+        id: 'demo-1',
+        deviceName: 'ESS',
+        alarmLevel: 'Warning Alarm',
+        alarmMsg: 'SOC below 25%',
+      },
+    ]
+  }
   return [
-    {
-      id: 'demo-1',
-      deviceName: 'Diesel',
-      alarmLevel: 'Info Alarm',
-      alarmMsg: `Fuel level low (${oil}% < ${DEMO_FUEL_NOTICE_THRESHOLD}%)`,
-    },
+    { id: 'demo-1', deviceName: 'ESS', alarmLevel: 'Info Alarm', alarmMsg: 'Battery normal' },
   ]
 }
 
-interface DemoSample {
-  time: string
-  snapshot: MicrogridSnapshot
-  intervalEnergy: { pv: number; diesel: number; bess: number; load: number }
+/** 确定性云遮波动 */
+function cloudFactor(hour: number): number {
+  const w1 = Math.sin(hour * 2.7) * 0.06
+  const w2 = Math.sin(hour * 5.3 + 1.2) * 0.04
+  const w3 = Math.sin(hour * 11.1 + 0.5) * 0.025
+  return Math.max(0.72, Math.min(1, 1 + w1 + w2 + w3))
 }
 
-/** Deterministic daylight profile; never feeds curtailed output back into solar availability. */
-function demoPower(hour: number) {
-  const progress = (hour - DEMO_SCENARIO.startHour) / 6
-  const pvAvailable = round1(
-    80 +
-      50 * progress +
-      140 * Math.sin(Math.PI * progress) +
-      10 * Math.sin(4 * Math.PI * progress) * Math.sin(Math.PI * progress),
-  )
-  const load = round1(
-    175 +
-      55 * Math.exp(-Math.pow((hour - 10.1) / 0.6, 2)) +
-      20 * Math.exp(-Math.pow((hour - 15.5) / 0.85, 2)),
-  )
-  const bess = round1(
-    Math.max(-DEMO_SCENARIO.batteryMaxKw, Math.min(DEMO_SCENARIO.batteryMaxKw, load - pvAvailable)),
-  )
-  const diesel = round1(Math.max(0, load - pvAvailable - bess))
-  // Surplus beyond the battery rating is curtailed rather than inventing extra demand.
-  const pv = round1(load - diesel - bess)
-  return { pv, load, bess, diesel }
+/** 负载曲线 */
+function loadKw(hour: number): number {
+  const base = 125
+  const morning = 85 * Math.exp(-Math.pow((hour - 8.3) / 1.1, 2))
+  const evening = 95 * Math.exp(-Math.pow((hour - 18.8) / 2, 2))
+  const hvac = 30 * Math.exp(-Math.pow((hour - 14.2) / 2.8, 2))
+  return base + morning + evening + hvac
 }
 
-/** Power samples are boundaries; each bar integrates the preceding ten-minute interval. */
-function simulateMicrogridSeries(): DemoSample[] {
-  const samples: DemoSample[] = []
-  const intervalHours = DEMO_SCENARIO.intervalMinutes / 60
-  const intervals = (DEMO_SCENARIO.endHour - DEMO_SCENARIO.startHour) / intervalHours
-  let pvEnergy = 0
-  let dieselEnergy = 0
-  let usedEnergy = 0
-  let soc = DEMO_SCENARIO.initialSoc as number
+/** 光伏可发潜力 */
+function pvAvailableKw(hour: number): number {
+  if (hour < 6.5 || hour > 19) return 0
+  const x = (hour - 6.5) / 12.5
+  const bell = Math.sin(x * Math.PI)
+  return PV_PEAK_KW * Math.pow(bell, 0.9) * cloudFactor(hour)
+}
 
-  for (let i = 0; i <= intervals; i++) {
-    const hour = DEMO_SCENARIO.startHour + i * intervalHours
-    const power = demoPower(hour)
-    const previous = samples.at(-1)?.snapshot
-    const integrate = (previousPower: number, currentPower: number) =>
-      previous ? ((previousPower + currentPower) / 2) * intervalHours : 0
-    const intervalEnergy = {
-      pv: integrate(previous?.pvKw ?? 0, power.pv),
-      diesel: integrate(previous?.dgKw ?? 0, power.diesel),
-      bess: integrate(previous?.essKw ?? 0, power.bess),
-      load: integrate(previous?.loadKw ?? 0, power.load),
-    }
-    pvEnergy += intervalEnergy.pv
-    dieselEnergy += intervalEnergy.diesel
-    usedEnergy += intervalEnergy.load
-    soc -= (intervalEnergy.bess / DEMO_SCENARIO.batteryCapacityKwh) * 100
-    const minuteOfDay = Math.round(hour * 60)
+/** 按 SOC 限制 ESS 充放功率（负=充电，正=放电） */
+function essPowerLimit(soc: number, desired: number): number {
+  if (desired < 0) {
+    if (soc >= 92) return 0
+    const headroom = Math.max(0, (92 - soc) / 40)
+    return -Math.min(ESS_MAX_KW, Math.abs(desired) * headroom)
+  }
+  if (desired > 0) {
+    if (soc <= 22) return 0
+    const reserve = Math.max(0, (soc - 22) / 50)
+    return Math.min(ESS_MAX_KW, desired * reserve)
+  }
+  return 0
+}
 
-    samples.push({
-      time: `${String(Math.floor(minuteOfDay / 60)).padStart(2, '0')}:${String(minuteOfDay % 60).padStart(2, '0')}`,
-      intervalEnergy,
-      snapshot: {
-        pvKw: power.pv,
-        loadKw: power.load,
-        dgKw: power.diesel,
-        essKw: power.bess,
+/**
+ * 离网功率平衡
+ * - 富余：储能充电 + 弃光（降低 PV 显示值）
+ * - 缺口：储能放电 → 柴发补位
+ * 恒满足：P_pv + P_dg + P_ess = P_load
+ */
+function balanceOffGrid(
+  soc: number,
+  pvAvailable: number,
+  loadTarget: number,
+): { pv: number; load: number; ess: number; dg: number } {
+  const load = round1(loadTarget)
+  const available = round1(Math.max(0, pvAvailable))
+
+  if (available >= load) {
+    const surplus = available - load
+    const ess = round1(essPowerLimit(soc, -Math.min(ESS_MAX_KW, surplus)))
+    const pv = round1(load - ess)
+    return { pv, load, ess, dg: 0 }
+  }
+
+  const deficit = load - available
+  const ess = round1(essPowerLimit(soc, Math.min(ESS_MAX_KW, deficit)))
+  const dg = round1(Math.min(DG_MAX_KW, Math.max(0, load - available - ess)))
+  const pv = round1(load - dg - ess)
+
+  return { pv: Math.max(0, pv), load, ess, dg }
+}
+
+/** 离网场景逐步仿真 6 小时 */
+function simulateMicrogridSeries(points = 36) {
+  const now = dayjs()
+  let soc = 58
+  let cumPv = 12800
+  let cumDg = 3240
+  let cumUsed = 9480
+
+  const xAxisData: string[] = []
+  const pvSeries: number[] = []
+  const dgSeries: number[] = []
+  const essSeries: number[] = []
+  const pvEnergy: number[] = []
+  const dgEnergy: number[] = []
+  const essEnergy: number[] = []
+  let lastSnapshot: MicrogridSnapshot | null = null
+
+  for (let i = points - 1; i >= 0; i--) {
+    const t = now.subtract(i * 10, 'minute')
+    const hour = t.hour() + t.minute() / 60
+    xAxisData.push(t.format('HH:mm'))
+
+    const { pv, load, ess, dg } = balanceOffGrid(soc, pvAvailableKw(hour), loadKw(hour))
+
+    const deltaSoc = (-ess * INTERVAL_HOURS / ESS_CAPACITY_KWH) * 100
+    soc = round1(Math.max(20, Math.min(95, soc + deltaSoc)))
+
+    cumPv += pv * INTERVAL_HOURS
+    cumDg += dg * INTERVAL_HOURS
+    cumUsed += load * INTERVAL_HOURS
+
+    pvSeries.push(pv)
+    dgSeries.push(dg)
+    essSeries.push(ess)
+    pvEnergy.push(round2(pv * INTERVAL_HOURS))
+    dgEnergy.push(round2(dg * INTERVAL_HOURS))
+    essEnergy.push(round2(Math.max(0, ess) * INTERVAL_HOURS))
+
+    if (i === 0) {
+      lastSnapshot = {
+        pvKw: pv,
+        loadKw: load,
+        dgKw: dg,
+        essKw: ess,
         soc,
-        oilPct: 38.5,
+        oilPct: 68.5,
         pvVoltage: 398.2,
         essVoltage: 768.5,
         dgVoltage: 400.1,
-        pvEnergyKwh: pvEnergy,
-        dgEnergyKwh: dieselEnergy,
-        usedEnergyKwh: usedEnergy,
-        savingUsd: (usedEnergy - dieselEnergy) * DEMO_SCENARIO.avoidedDieselCostPerKwh,
-      },
-    })
+        pvEnergyKwh: round1(cumPv),
+        dgEnergyKwh: round1(cumDg),
+        usedEnergyKwh: round1(cumUsed),
+        savingUsd: round2(cumPv * 0.12 + cumDg * 0.08),
+      }
+    }
   }
-  return samples
+
+  return {
+    xAxisData,
+    pvSeries,
+    dgSeries,
+    essSeries,
+    pvEnergy,
+    dgEnergy,
+    essEnergy,
+    snapshot: lastSnapshot!,
+  }
 }
 
 /** 快照 → homepage_batch 点位（拓扑/站点/设备数值一致） */
 export function snapshotToPointUpdates(s: MicrogridSnapshot): DemoPointUpdate[] {
-  const updates: DemoPointUpdate[] = [
+  return [
     { id: 1, name: 'PV Energy', values: s.pvEnergyKwh, unit: 'kWh', imgurl: 'icon-pv-energy' },
-    {
-      id: 2,
-      name: 'Diesel Energy',
-      values: s.dgEnergyKwh,
-      unit: 'kWh',
-      imgurl: 'icon-diesel-energy',
-    },
-    {
-      id: 3,
-      name: 'Energy Used',
-      values: s.usedEnergyKwh,
-      unit: 'kWh',
-      imgurl: 'icon-energy-used',
-    },
-    {
-      id: 4,
-      name: 'Saving Billing',
-      values: s.savingUsd,
-      unit: '$',
-      imgurl: 'icon-saving-billing',
-    },
+    { id: 2, name: 'Diesel Energy', values: s.dgEnergyKwh, unit: 'kWh', imgurl: 'icon-diesel-energy' },
+    { id: 3, name: 'Energy Used', values: s.usedEnergyKwh, unit: 'kWh', imgurl: 'icon-energy-used' },
+    { id: 4, name: 'Saving Billing', values: s.savingUsd, unit: '$', imgurl: 'icon-saving-billing' },
     { id: 5, name: 'PV Power', values: s.pvKw, unit: 'kW', imgurl: 'icon-pv-energy' },
     { id: 6, name: 'Diesel Power', values: s.dgKw, unit: 'kW', imgurl: 'icon-diesel-energy' },
-    { id: 7, name: 'BESS Power', values: s.essKw, unit: 'kW', imgurl: 'icon-ess-energy' },
+    { id: 7, name: 'ESS Power', values: s.essKw, unit: 'kW', imgurl: 'icon-ess-energy' },
     { id: 8, name: 'P', values: s.pvKw, unit: 'kW' },
     { id: 9, name: 'U', values: s.pvVoltage, unit: 'V' },
     { id: 10, name: 'P', values: s.dgKw, unit: 'kW' },
@@ -190,48 +230,64 @@ export function snapshotToPointUpdates(s: MicrogridSnapshot): DemoPointUpdate[] 
     { id: 14, name: 'P', values: s.pvKw, unit: 'kW' },
     { id: 15, name: 'P', values: s.loadKw, unit: 'kW' },
     { id: 16, name: 'P', values: s.dgKw, unit: 'kW' },
-    { id: 17, name: 'Fuel', values: s.oilPct, unit: '%' },
+    { id: 17, name: 'Oil', values: s.oilPct, unit: '%' },
     { id: 18, name: 'P', values: s.essKw, unit: 'kW' },
     { id: 19, name: 'SOC', values: s.soc, unit: '%' },
   ]
-  return updates.map((point) => ({
-    ...point,
-    values: point.id === 4 ? round2(point.values) : round1(point.values),
-  }))
 }
 
-/** One source for chart history, period totals and the exact current snapshot. */
+/** 生成近 6 小时图表 + 当前时刻一致快照 */
 export function buildDemoChartData() {
-  const samples = simulateMicrogridSeries()
+  const sim = simulateMicrogridSeries()
+
   return {
-    samples,
-    xAxisData: samples.map((sample) => sample.time),
-    snapshot: samples.at(-1)!.snapshot,
+    xAxisData: sim.xAxisData,
+    snapshot: sim.snapshot,
     lineChartSeries: [
-      { name: 'PV', data: samples.map((s) => s.snapshot.pvKw), color: 'rgba(105, 203, 255, 1)' },
-      { name: 'Diesel', data: samples.map((s) => s.snapshot.dgKw), color: 'rgba(246, 200, 95, 1)' },
-      { name: 'BESS', data: samples.map((s) => s.snapshot.essKw), color: 'rgba(29, 134, 255, 1)' },
+      { name: 'PV', data: sim.pvSeries, color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: sim.dgSeries, color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: sim.essSeries, color: 'rgba(29, 134, 255, 1)' },
     ],
     energyChartSeries: [
-      {
-        name: 'PV',
-        data: samples.map((s) => s.intervalEnergy.pv),
-        color: 'rgba(105, 203, 255, 1)',
-      },
-      {
-        name: 'Diesel',
-        data: samples.map((s) => s.intervalEnergy.diesel),
-        color: 'rgba(246, 200, 95, 1)',
-      },
-      {
-        name: 'BESS',
-        data: samples.map((s) => s.intervalEnergy.bess),
-        color: 'rgba(29, 134, 255, 1)',
-      },
+      { name: 'PV', data: sim.pvEnergy, color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: sim.dgEnergy, color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: sim.essEnergy, color: 'rgba(29, 134, 255, 1)' },
     ],
   }
 }
 
-/** Keep the header alarm count consistent with the displayed fuel notice. */
-export const DEMO_ALARM_NUM = buildDemoAlarms(buildDemoChartData().snapshot).length
-export const DEMO_HOMEPAGE_UPDATES = snapshotToPointUpdates(buildDemoChartData().snapshot)
+/** 初始点位（由仿真末帧导出） */
+export const DEMO_HOMEPAGE_UPDATES: DemoPointUpdate[] = snapshotToPointUpdates(
+  buildDemoChartData().snapshot,
+)
+
+/** 实时刷新：扰动负载后重新离网平衡 */
+export function jitterDemoUpdates(base: DemoPointUpdate[]): {
+  updates: DemoPointUpdate[]
+  snapshot: MicrogridSnapshot
+} {
+  const get = (id: number) => Number(base.find((p) => p.id === id)?.values ?? 0)
+  const soc = round1(Math.max(20, Math.min(95, get(19) + (Math.random() - 0.5) * 0.3)))
+  const loadTarget = get(15) + (Math.random() - 0.5) * 6
+  const pvAvailable = get(5) + (Math.random() - 0.5) * 12
+
+  const { pv, load, ess, dg } = balanceOffGrid(soc, pvAvailable, loadTarget)
+
+  const snap: MicrogridSnapshot = {
+    pvKw: pv,
+    loadKw: load,
+    dgKw: dg,
+    essKw: ess,
+    soc,
+    oilPct: get(17),
+    pvVoltage: round1(get(9) + (Math.random() - 0.5) * 2),
+    essVoltage: get(13),
+    dgVoltage: get(11),
+    pvEnergyKwh: round1(get(1) + Math.random() * 0.4),
+    dgEnergyKwh: round1(get(2) + dg * INTERVAL_HOURS),
+    usedEnergyKwh: round1(get(3) + load * INTERVAL_HOURS * 0.01),
+    savingUsd: round2(get(4) + Math.random() * 0.15),
+  }
+
+  return { updates: snapshotToPointUpdates(snap), snapshot: snap }
+}

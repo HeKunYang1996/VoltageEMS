@@ -43,20 +43,14 @@
     .el-sub-menu.is-active > .el-sub-menu__title,
     .el-menu-item.is-active,
     .el-menu-item.is-active:hover {
-      background: var(--vt-bg-menu-active);
-      clip-path: polygon(
-        10px 0,
-        100% 0,
-        100% calc(100% - 10px),
-        calc(100% - 10px) 100%,
-        0 100%,
-        0 10px
-      );
+      background: url('@/assets/images/sidebar-collapseTag-selected.png') center / 100% 100%
+        no-repeat;
     }
 
     .el-menu-item:not(.is-active):hover,
     .el-sub-menu > .el-sub-menu__title:hover {
-      background: var(--vt-bg-hover);
+      background: url('@/assets/images/sidebar-collapseTag-hover.png') center / 100% 100%
+        no-repeat;
     }
   }
 
@@ -113,34 +107,18 @@
 
   &:hover {
     color: var(--vt-text-primary);
-    background: var(--vt-bg-hover);
+    background: url('@/assets/images/sidebar-tag-hover.png') center / 100% 100% no-repeat;
   }
 }
 
 // ---- Active states ----
 .el-menu-item.is-active,
 .el-sub-menu.is-active > .el-sub-menu__title {
-  background: var(--vt-bg-menu-active);
-  clip-path: polygon(
-    10px 0,
-    100% 0,
-    100% calc(100% - 10px),
-    calc(100% - 10px) 100%,
-    0 100%,
-    0 10px
-  );
+  background: url('@/assets/images/sidebar-tag-selected.png') center / 100% 100% no-repeat;
 }
 
 .el-menu-item-group .el-menu-item.is-active {
-  background: var(--vt-bg-menu-active);
-  clip-path: polygon(
-    10px 0,
-    100% 0,
-    100% calc(100% - 10px),
-    calc(100% - 10px) 100%,
-    0 100%,
-    0 10px
-  );
+  background: url('@/assets/images/sidebar-tag-selected.png') center / 100% 100% no-repeat;
 }
 
 // ==============================

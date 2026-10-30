@@ -13,20 +13,22 @@ import powerIcon from '@/assets/icons/Power.svg'
 import oilIcon from '@/assets/icons/Oil.svg'
 import voltageIcon from '@/assets/icons/Voltage.svg'
 import coolantTempIcon from '@/assets/icons/CoolantTemp.svg'
-import { formatNumber } from '@/utils/common'
+import { formatSampleValue, parseSampleTimestamp } from '@/utils/common'
 import { watch, ref, reactive, computed } from 'vue'
 import useTopologySubscribe from '@/composables/useTopologySubscribe'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
+import wsManager from '@/utils/websocket'
 
 const topoStore = useDeviceTopologyStore()
-const dgInstanceIds = computed(() => topoStore.getLogicalDeviceInstanceIds('diesel'))
-const dgInstanceId = computed<number | undefined>(() => topoStore.selectedDieselId ?? dgInstanceIds.value[0])
+const dgInstanceId = computed<number | undefined>(() => topoStore.selectedDieselId ?? undefined)
 const wsData = ref<any>(null)
 
 useTopologySubscribe(
-  () => dgInstanceIds.value,
+  () => dgInstanceId.value === undefined ? [] : [dgInstanceId.value],
   { source: 'inst', dataTypes: ['A', 'M', 'P'] as any, interval: 1000 },
-  { onBatchDataUpdate: (data: any) => { wsData.value = data } },
+  { onBatchDataUpdate: (data: any) => {
+    if (wsManager.status.value === 'connected') wsData.value = data
+  } },
 )
 
 const energyCardData = reactive([
@@ -36,10 +38,19 @@ const energyCardData = reactive([
   { pointId: 14, title: 'Temperature', icon: coolantTempIcon, value: '-', unit: '℃' },
 ])
 
+const clearValues = () => {
+  wsData.value = null
+  energyCardData.forEach((item) => { item.value = '-' })
+}
+watch(dgInstanceId, clearValues, { flush: 'sync' })
+watch(wsManager.status, (status) => {
+  if (status !== 'connected') clearValues()
+}, { flush: 'sync' })
+
 watch(
   wsData,
   (data) => {
-    if (!data?.updates?.length) return
+    if (wsManager.status.value !== 'connected' || !data?.updates?.length) return
     const instanceId = dgInstanceId.value
     const mUpdate = data.updates.find(
       (item: any) => item.channel_id === instanceId && item.data_type === 'M',
@@ -47,10 +58,9 @@ watch(
     if (!mUpdate) return
     const values = mUpdate.values || {}
     energyCardData.forEach((item: any) => {
-      const pointValue = values[item.pointId]
-      if (pointValue !== undefined && pointValue !== null) {
-        item.value = formatNumber(pointValue)
-      }
+      const field = String(item.pointId)
+      const sampleTs = parseSampleTimestamp(mUpdate.ts?.[field])
+      item.value = formatSampleValue(values[field] ?? values[item.pointId], sampleTs)
     })
   },
   { deep: true, immediate: true },

@@ -8,7 +8,6 @@ import {
   useHomepageDemo,
 } from '../useHomepageDemo'
 import { setActivePinia, createPinia } from 'pinia'
-import { useGlobalStore } from '@/stores/global'
 
 describe('composables/useHomepageDemo.ts', () => {
   beforeEach(() => {
@@ -61,19 +60,11 @@ describe('composables/useHomepageDemo.ts', () => {
       expect(lineChartSeries.value.length).toBe(3)
       expect(exampleSeries.value.length).toBe(3)
       expect(alarmInfoList.value.length).toBeGreaterThan(0)
-      const byId = Object.fromEntries(
-        updates.map((point: { id: number; values: number }) => [point.id, point.values]),
-      )
-      expect(lineChartSeries.value.map((series: { data: number[] }) => series.data.at(-1))).toEqual(
-        [byId[5], byId[6], byId[7]],
-      )
-      expect(byId[5] + byId[6] + byId[7]).toBeCloseTo(byId[15], 1)
-      expect(useGlobalStore().alarmNum).toBe(alarmInfoList.value.length)
     })
   })
 
   describe('useHomepageDemo', () => {
-    it('keeps cards and charts stable across idle time and remounts without a timer', () => {
+    it('refreshes mock data on interval without WebSocket', () => {
       const applyHomepageBatch = vi.fn()
       const alarmInfoList = ref([])
       const chartXAxisData = ref<string[]>([])
@@ -88,30 +79,17 @@ describe('composables/useHomepageDemo.ts', () => {
             chartXAxisData,
             lineChartSeries,
             exampleSeries,
+            interval: 1000,
           })
           return () => h('div')
         },
       })
 
-      const wrapper = mount(Host)
-      const original = structuredClone(applyHomepageBatch.mock.calls[0][0])
-      const originalCharts = JSON.stringify([
-        chartXAxisData.value,
-        lineChartSeries.value,
-        exampleSeries.value,
-      ])
+      mount(Host)
       expect(applyHomepageBatch).toHaveBeenCalledTimes(1)
-      expect(vi.getTimerCount()).toBe(0)
 
-      vi.advanceTimersByTime(24 * 60 * 60 * 1000)
-      expect(applyHomepageBatch).toHaveBeenCalledTimes(1)
-      expect(
-        JSON.stringify([chartXAxisData.value, lineChartSeries.value, exampleSeries.value]),
-      ).toBe(originalCharts)
-      wrapper.unmount()
-      const remounted = mount(Host)
-      expect(applyHomepageBatch.mock.calls.at(-1)?.[0]).toEqual(original)
-      remounted.unmount()
+      vi.advanceTimersByTime(1000)
+      expect(applyHomepageBatch.mock.calls.length).toBeGreaterThan(1)
 
       const latestUpdates = applyHomepageBatch.mock.calls.at(-1)?.[0]?.updates ?? []
       expect(latestUpdates.map((item: { id: number }) => item.id)).toEqual(

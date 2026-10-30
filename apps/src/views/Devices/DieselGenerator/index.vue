@@ -20,7 +20,7 @@
           Value Monitoring
         </el-button>
       </div>
-      <div v-if="dieselInstances.length > 1" class="device-instance-selector">
+      <div v-if="dieselInstances.length" class="device-instance-selector">
         <span>Diesel Generator:</span>
         <el-select v-model="topoStore.selectedDieselInstanceId" size="small" fit-input-width :title="selectedDieselName">
           <el-option v-for="item in dieselInstances" :key="item.id" :label="item.name" :value="item.id">
@@ -47,13 +47,11 @@ import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 const route = useRoute()
 const router = useRouter()
 const topoStore = useDeviceTopologyStore()
-const dieselInstances = computed(() => topoStore.getLogicalDeviceInstanceIds('diesel').map((id) => ({
-  id,
-  name: topoStore.instances.find((item) => item.id === id)?.name
-    ?? topoStore.bindings.flatMap((binding) => binding.instances).find((item) => item.instanceId === id)?.instanceName
-    ?? String(id),
+const dieselInstances = computed(() => topoStore.dieselGroups.map((group) => ({
+  id: group.instanceId,
+  name: group.displayName,
 })))
-const selectedDieselName = computed(() => dieselInstances.value.find((item) => item.id === topoStore.selectedDieselInstanceId)?.name ?? '')
+const selectedDieselName = computed(() => dieselInstances.value.find((item) => item.id === topoStore.selectedDieselId)?.name ?? '')
 
 // 根据当前路由计算激活的标签
 const activeTab = computed(() => {
@@ -78,7 +76,7 @@ const handleTabClick = (tab: 'overview' | 'monitoring') => {
 .devices-diesel {
   .devices-diesel__header { display: flex; align-items: center; justify-content: space-between; }
   .device-instance-selector { display: flex; align-items: center; gap: 0.16rem; margin-left: auto; }
-  .device-instance-selector .el-select { width: 1.8rem; }
+  .device-instance-selector .el-select { width: 2rem; }
   .devices-diesel__main {
     min-height: 0;
   }

@@ -2,9 +2,9 @@
   color-scheme: dark;
 
   /* Brand */
-  --vt-color-primary: #005ee8;
-  --vt-color-primary-hover: #3aa8ff;
-  --vt-color-primary-active: #0035a2;
+  --vt-color-primary: #ff6900;
+  --vt-color-primary-hover: #ff8733;
+  --vt-color-primary-active: #e55f00;
   --vt-color-success: #52c41a;
   --vt-color-success-hover: #49aa15;
   --vt-color-success-active: #409611;
@@ -17,55 +17,55 @@
   --vt-color-info: #8c8c8c;
   --vt-color-info-hover: #7a7a7a;
   --vt-color-info-active: #686868;
-  --vt-color-chart-pv: #6786b3;
-  --vt-color-chart-ess: #005ee8;
-  --vt-color-chart-dg: #0035a2;
+  --vt-color-chart-pv: #69cbff;
+  --vt-color-chart-ess: #4fadf7;
+  --vt-color-chart-dg: #f6c85f;
   --vt-color-chart-online: #6dd400;
   --vt-color-chart-alarm: #ff4d4f;
 
   /* Accent */
-  --vt-color-accent: #005ee8;
+  --vt-color-accent: #1d86ff;
   --vt-color-level-critical: #da2d2c;
   --vt-color-level-warning: #ff6e08;
   --vt-color-level-info: #fe9900;
 
   /* Text */
-  --vt-text-primary: #f2f2f2;
-  --vt-text-regular: #d9d9d9;
-  --vt-text-secondary: #c7c7c7;
+  --vt-text-primary: #ffffff;
+  --vt-text-regular: #d7deed;
+  --vt-text-secondary: #a6b6d2;
   --vt-text-placeholder: #a8abb2;
   --vt-text-disabled: #d1d5db;
 
   /* Surface */
-  --vt-bg-body: #04142a;
-  --vt-bg-page: #091e3c;
-  --vt-bg-panel: rgba(4, 20, 42, 0.92);
+  --vt-bg-body: #17233d;
+  --vt-bg-page: #212c49;
+  --vt-bg-panel: rgba(33, 44, 73, 0.92);
   --vt-bg-overlay: transparent;
-  --vt-bg-elevated: rgba(0, 53, 162, 0.32);
-  --vt-bg-input: rgba(0, 53, 162, 0.2);
+  --vt-bg-elevated: rgba(58, 82, 121, 0.32);
+  --vt-bg-input: rgba(84, 98, 140, 0.2);
   --vt-bg-muted: rgba(255, 255, 255, 0.08);
-  --vt-bg-glass: rgba(0, 53, 162, 0.15);
-  --vt-bg-glass-strong: rgba(0, 53, 162, 0.3);
-  --vt-bg-glass-heavy: rgba(0, 53, 162, 0.35);
+  --vt-bg-glass: rgba(84, 98, 140, 0.2);
+  --vt-bg-glass-strong: rgba(84, 98, 140, 0.3);
+  --vt-bg-glass-heavy: rgba(84, 98, 140, 0.5);
   --vt-bg-status-online: rgba(106, 193, 97, 0.2);
   --vt-bg-hover: rgba(255, 255, 255, 0.1);
 
   /* Brand — interaction */
-  --vt-color-hover: #163e72;
+  --vt-color-hover: #505f79;
 
   /* Table */
   --vt-table-header-bg: rgba(84, 98, 140, 0.2);
-  --vt-table-fixed-bg: #0d2547;
-  --vt-table-row-hover-bg: #143560;
+  --vt-table-fixed-bg: #243b65;
+  --vt-table-row-hover-bg: #283f69;
   --vt-table-sort-color: #3b82f6;
   --vt-text-empty: #9ca3af;
 
   /* Dialog */
-  --vt-dialog-fixed-bg: #0d2547;
-  --vt-dialog-row-hover-bg: #143560;
+  --vt-dialog-fixed-bg: #2b3755;
+  --vt-dialog-row-hover-bg: #38425c;
 
   /* Message box / notification */
-  --vt-message-box-bg: #0d2547;
+  --vt-message-box-bg: #1f2e4a;
   --vt-notification-error-bg: #3c1212;
   --vt-notification-error-border: #e53935;
   --vt-notification-success-bg: #0d2e14;
@@ -75,8 +75,8 @@
   --vt-picker-popper-bg: rgba(30, 47, 80, 0.3);
 
   /* Border */
-  --vt-border-color: rgba(199, 199, 199, 0.3);
-  --vt-border-color-strong: rgba(199, 199, 199, 0.4);
+  --vt-border-color: rgba(148, 166, 197, 0.3);
+  --vt-border-color-strong: rgba(148, 166, 197, 0.5);
   --vt-border-color-soft: rgba(255, 255, 255, 0.1);
   --vt-border-color-dashed: rgba(255, 255, 255, 0.2);
   --vt-border-gradient: linear-gradient(
@@ -93,37 +93,13 @@
     rgba(148, 166, 197, 0.72) 98.58%
   );
   --vt-border-gradient-popper: linear-gradient(
-      117.64deg,
-      rgba(148, 166, 197, 0.3) 2.73%,
-      rgba(148, 166, 197, 0) 25.27%,
-      rgba(148, 166, 197, 0.3) 41.05%,
-      rgba(148, 166, 197, 0.103266) 61.63%,
-      rgba(148, 166, 197, 0.3) 97.67%
-    )
-    1;
-
-  /* EMS homepage theme (Figma 4024:740) */
-  --vt-bg-app: linear-gradient(252.44deg, #04142a 0%, #091e3c 100%);
-  --vt-bg-chrome: #0d2547;
-  --vt-shadow-header: inset 0 -0.04rem 0.16rem rgba(0, 53, 162, 0.25);
-  --vt-shadow-sidebar: inset -0.04rem 0 0.16rem rgba(0, 53, 162, 0.25);
-  --vt-bg-topology-card: rgba(199, 199, 199, 0.15);
-  --vt-border-topology-card: linear-gradient(
     117.64deg,
-    #c7c7c7 2.73%,
-    rgba(0, 53, 162, 0) 31.73%,
-    rgba(0, 53, 162, 0.344221) 71.62%,
-    #c7c7c7 97.67%
-  );
-  --vt-color-status-online: #6ac161;
-  --vt-text-unit: rgba(242, 242, 242, 0.5);
-  /* The homepage background includes the highlight in the image itself. */
-  --vt-bg-home: url('../images/home-background.jpg');
-  --vt-bg-module: linear-gradient(90deg, rgba(0, 53, 162, 0.15), rgba(4, 20, 42, 0));
-  --vt-border-module: linear-gradient(90deg, rgba(199, 199, 199, 0.4), rgba(0, 53, 162, 0.58));
-  --vt-shadow-module: inset 0 0 0.16rem rgba(255, 255, 255, 0.25);
-  --vt-radius-module: 0.14rem;
-  --vt-bg-menu-active: linear-gradient(90deg, #0035a2, #005ee8);
+    rgba(148, 166, 197, 0.3) 2.73%,
+    rgba(148, 166, 197, 0) 25.27%,
+    rgba(148, 166, 197, 0.3) 41.05%,
+    rgba(148, 166, 197, 0.103266) 61.63%,
+    rgba(148, 166, 197, 0.3) 97.67%
+  ) 1;
 
   /* Radius */
   --vt-radius-none: 0rem;

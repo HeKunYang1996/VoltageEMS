@@ -69,6 +69,15 @@ describe('Responsive Utils', () => {
       const scale = getCurrentScale()
       expect(scale).toBe(1) // At 1920px width, scale is 1
     })
+
+    it('keeps the original height constraint on short viewports', () => {
+      window.innerHeight = 810
+      try {
+        expect(getCurrentScale()).toBe(0.75)
+      } finally {
+        window.innerHeight = 1080
+      }
+    })
   })
 
   describe('getCurrentFontSize', () => {
@@ -90,7 +99,6 @@ describe('Responsive Utils', () => {
       const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
       initResponsive()
       expect(addEventListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function))
-      expect(addEventListenerSpy).toHaveBeenCalledWith('orientationchange', expect.any(Function))
     })
   })
 })

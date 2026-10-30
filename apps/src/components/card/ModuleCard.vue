@@ -2,7 +2,7 @@
   <div class="card">
     <LoadingBg :loading="props.loading">
       <div class="card__header">
-        <img :src="moduleTitleIcon" class="card__header-icon" alt="" aria-hidden="true" />
+        <div class="card__header-icon"></div>
         <div class="card__header-title">{{ props.title }}</div>
       </div>
       <div class="card__content">
@@ -16,8 +16,6 @@
 </template>
 
 <script lang="ts" setup>
-import moduleTitleIcon from '@/assets/images/home-topology/module-title.svg'
-
 const props = defineProps({
   title: {
     type: String,
@@ -32,42 +30,28 @@ const props = defineProps({
 
 <style lang="scss" scoped>
 .card {
-  position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
+  background: var(--vt-bg-glass);
   padding: 0.2rem;
-  border-radius: var(--vt-radius-module);
-  background: var(--vt-bg-module);
-  box-shadow: var(--vt-shadow-module);
+  border: 0.01rem solid;
+  border-image: var(--vt-border-gradient) 1;
   backdrop-filter: var(--vt-backdrop-blur);
   display: flex;
   flex-direction: column;
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    padding: 0.01rem;
-    border-radius: inherit;
-    background: var(--vt-border-module);
-    mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-    pointer-events: none;
-  }
 
   .card__header {
     display: flex;
     align-items: center;
 
     .card__header-icon {
-      display: block;
       width: 0.2rem;
       height: 0.2rem;
-      flex-shrink: 0;
-      object-fit: contain;
+      background-image: url('@/assets/images/card-icon.png');
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
     }
 
     .card__header-title {

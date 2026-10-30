@@ -5,7 +5,7 @@ import { getAllInstances } from '@/api/devicesManagement'
 import type { NodeChannelBinding, StationTopology } from '@/types/stationTopology'
 import type { DeviceInstanceListItem } from '@/types/deviceConfiguration'
 import { buildTopologyNeighbours, resolveMeterLoadNodeIds } from '@/utils/topologyGraph'
-import { collectFlowNodeInstanceIds, getFlowNodeInstanceId } from '@/utils/topologyNode'
+import { getFlowNodeInstanceId } from '@/utils/topologyNode'
 
 export type LogicalTopologyDevice = 'pv' | 'diesel' | 'battery' | 'meterLoad'
 
@@ -16,6 +16,13 @@ export interface LogicalTopologyBinding {
 }
 
 export type TopologyEquipmentGroupKind = 'pv' | 'battery'
+
+export interface PVLinkedGroup {
+  nodeId: string
+  instanceIds: number[]
+  channelIds: number[]
+  displayName: string
+}
 
 export interface TopologyEquipmentGroup {
   id: string
@@ -38,6 +45,7 @@ export interface TopologyEquipmentGroup {
   relatedChannelIds: number[]
   complete: boolean
   displayName: string
+  pvNodes: PVLinkedGroup[]
 }
 
 export interface TopologyEquipmentGroupOption extends TopologyEquipmentGroup {
@@ -64,7 +72,7 @@ export interface BatterySystemGroup {
 }
 
 const LOGICAL_DEVICE_PRODUCTS: Record<LogicalTopologyDevice, string[]> = {
-  pv: ['AC_Inverter'],
+  pv: ['AC_Inverter', 'Hybrid_Inverter'],
   diesel: ['Diesel'],
   battery: ['PCS', 'Battery'],
   meterLoad: ['Meter'],
@@ -126,30 +134,65 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     await load()
   }
 
-  /**
-   * 获取某产品类型的所有 instanceId（inst 源 WebSocket 用）。
-   * productName 同 modsrv products 表，如 'Battery'、'Diesel'、'PCS'、'PV DCDC'。
-   */
+  /** Resolve only bindings belonging to a node currently present on the canvas. */
+  function resolveNodeBinding(nodeId: string) {
+    const node = topology.value?.flow_json?.nodes.find((item) => item.id === nodeId)
+    const instanceIds = new Set<number>()
+    const channelIds = new Set<number>()
+    if (!node) return { instanceIds: [], channelIds: [] }
+    const explicitBinding = Object.prototype.hasOwnProperty.call(node.data, 'instanceId')
+    const flowInstanceId = getFlowNodeInstanceId(node.data)
+    if (flowInstanceId !== null) instanceIds.add(flowInstanceId)
+    for (const binding of bindings.value) {
+      if (binding.nodeId !== nodeId) continue
+      const productName = node.data.productName ?? node.data.label
+      if (productName && binding.productName !== productName) continue
+      for (const instance of binding.instances ?? []) {
+        const id = Number(instance.instanceId)
+        if (!Number.isFinite(id) || id <= 0) continue
+        // Explicit null means unbound; a changed instanceId must not pull the
+        // previous instance back from an older channel-bindings response.
+        if (explicitBinding && id !== flowInstanceId) continue
+        instanceIds.add(id)
+        for (const raw of instance.channelIds ?? []) {
+          const channelId = Number(raw)
+          if (Number.isFinite(channelId) && channelId > 0) channelIds.add(channelId)
+        }
+      }
+    }
+    return { instanceIds: [...instanceIds], channelIds: [...channelIds] }
+  }
+
+  /** Device instances used by the saved topology, not the entire instance registry. */
+  function getTopologyDevices(productName?: string) {
+    const devices = new Map<number, DeviceInstanceListItem & { nodeId: string; channelIds: number[] }>()
+    for (const node of topology.value?.flow_json?.nodes ?? []) {
+      const product = node.data.productName ?? node.data.label
+      if (!product || (productName && product !== productName)) continue
+      const binding = resolveNodeBinding(node.id)
+      for (const id of binding.instanceIds) {
+        const existing = devices.get(id)
+        if (existing) {
+          existing.channelIds = [...new Set([...existing.channelIds, ...binding.channelIds])]
+        } else {
+          devices.set(id, { id, name: getInstanceDisplayName(id), product_name: product,
+            nodeId: node.id, channelIds: binding.channelIds })
+        }
+      }
+    }
+    return [...devices.values()]
+  }
+
   function getInstanceIds(productName: string): number[] {
-    return bindings.value
-      .filter((b) => b.productName === productName)
-      .flatMap((b) => b.instances.map((i) => i.instanceId))
+    return getTopologyDevices(productName).map((item) => item.id)
   }
 
-  /** Actual instances, including devices that are not connected to a Load node. */
   function getProductInstances(productName: string): DeviceInstanceListItem[] {
-    return instances.value.filter((item) => item.product_name === productName)
+    return getTopologyDevices(productName).map(({ id, name, product_name }) => ({ id, name, product_name }))
   }
 
-  /**
-   * 获取某产品类型的所有 channelId（comsrv 源 WebSocket 和 getPointsTables 用）。
-   * 自动去重，因为多个实例可能复用同一通道。
-   */
   function getChannelIds(productName: string): number[] {
-    const ids = bindings.value
-      .filter((b) => b.productName === productName)
-      .flatMap((b) => b.instances.flatMap((i) => i.channelIds))
-    return [...new Set(ids)]
+    return [...new Set(getTopologyDevices(productName).flatMap((item) => item.channelIds))]
   }
 
   /** 按 nodeId 精确查询（Visual Modeling 画布节点用） */
@@ -157,16 +200,13 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     return bindings.value.find((b) => b.nodeId === nodeId)
   }
 
-  /** 全站所有 instanceId（统计/概览汇总用） */
+  /** All device instances/channels currently used by the topology. */
   function getAllInstanceIds(): number[] {
-    return [...new Set(bindings.value.flatMap((b) => b.instances.map((i) => i.instanceId)))]
+    return getTopologyDevices().map((item) => item.id)
   }
 
-  /** 全站所有 channelId */
   function getAllChannelIds(): number[] {
-    return [
-      ...new Set(bindings.value.flatMap((b) => b.instances.flatMap((i) => i.channelIds))),
-    ]
+    return [...new Set(getTopologyDevices().flatMap((item) => item.channelIds))]
   }
 
   /**
@@ -191,27 +231,12 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
   /** Resolve instance and channel IDs for one logical page device. */
   function getLogicalDeviceBinding(device: LogicalTopologyDevice): LogicalTopologyBinding {
     const nodeIds = getLogicalDeviceNodeIds(device)
-    const nodeIdSet = new Set(nodeIds)
     const instanceIds = new Set<number>()
     const channelIds = new Set<number>()
-
-    for (const id of collectFlowNodeInstanceIds(
-      topology.value?.flow_json?.nodes ?? [],
-      nodeIdSet,
-    )) {
-      instanceIds.add(id)
-    }
-
-    for (const binding of bindings.value) {
-      if (!nodeIdSet.has(binding.nodeId)) continue
-      for (const instance of binding.instances ?? []) {
-        const instanceId = Number(instance.instanceId)
-        if (Number.isFinite(instanceId) && instanceId > 0) instanceIds.add(instanceId)
-        for (const channelId of instance.channelIds ?? []) {
-          const id = Number(channelId)
-          if (Number.isFinite(id) && id > 0) channelIds.add(id)
-        }
-      }
+    for (const nodeId of nodeIds) {
+      const binding = resolveNodeBinding(nodeId)
+      binding.instanceIds.forEach((id) => instanceIds.add(id))
+      binding.channelIds.forEach((id) => channelIds.add(id))
     }
 
     return {
@@ -235,40 +260,10 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     const nodeById = new Map(nodes.map((node) => [node.id, node]))
     const neighbours = buildTopologyNeighbours(nodes, edges)
 
-    const getNodeBinding = (nodeId: string) => {
-      const instanceIds = new Set<number>()
-      const channelIds = new Set<number>()
-      const flowInstanceId = getFlowNodeInstanceId(nodeById.get(nodeId)?.data)
-      if (flowInstanceId !== null) instanceIds.add(flowInstanceId)
-      for (const binding of bindings.value.filter((item) => item.nodeId === nodeId)) {
-        for (const instance of binding.instances ?? []) {
-          const instanceId = Number(instance.instanceId)
-          if (Number.isFinite(instanceId) && instanceId > 0) instanceIds.add(instanceId)
-          for (const channelId of instance.channelIds ?? []) {
-            const id = Number(channelId)
-            if (Number.isFinite(id) && id > 0) channelIds.add(id)
-          }
-        }
-      }
-      return { instanceIds: [...instanceIds], channelIds: [...channelIds] }
-    }
-
+    const getNodeBinding = resolveNodeBinding
     const getNodeInstanceName = (nodeId: string) => {
-      const node = nodeById.get(nodeId)
-      const nodeBindings = bindings.value.filter((item) => item.nodeId === nodeId)
-      const ids: number[] = []
-      const flowInstanceId = getFlowNodeInstanceId(node?.data)
-      if (flowInstanceId !== null) ids.push(flowInstanceId)
-      ids.push(
-        ...nodeBindings.flatMap((item) =>
-          item.instances.map((instance) => Number(instance.instanceId)),
-        ),
-      )
-      const apiInstance = instances.value.find((item) => ids.includes(Number(item.id)))
-      if (apiInstance?.name) return apiInstance.name
-      const bindingInstance = nodeBindings[0]?.instances?.[0]?.instanceName
-      if (bindingInstance) return bindingInstance
-      return undefined
+      const id = getNodeBinding(nodeId).instanceIds[0]
+      return id === undefined ? undefined : getInstanceDisplayName(id)
     }
 
     return { nodes, nodeById, neighbours, getNodeBinding, getNodeInstanceName }
@@ -281,98 +276,48 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
    */
   function getEquipmentGroups(): TopologyEquipmentGroup[] {
     const { nodes, nodeById, neighbours, getNodeBinding, getNodeInstanceName } = createTopologyContext()
-
-    const groups: TopologyEquipmentGroup[] = []
-
-    const formatGroupName = (primaryNodeIds: string[], relatedNodeId: string, containerNodeId?: string) => {
-      const names = [
-        ...primaryNodeIds.map(getNodeInstanceName),
-        getNodeInstanceName(relatedNodeId),
-        ...(containerNodeId ? [getNodeInstanceName(containerNodeId)] : []),
-      ].filter((name): name is string => Boolean(name))
-      return names.join(' / ')
-    }
-
-    const addGroup = (
-      kind: TopologyEquipmentGroupKind,
-      relation: TopologyEquipmentGroup['relation'],
-      primaryNodeId: string,
-      relatedNodeId: string,
-      containerNodeId?: string,
-    ) => {
-      const nodeIds = [...new Set([primaryNodeId, relatedNodeId, ...(containerNodeId ? [containerNodeId] : [])])]
-      const primaryBinding = getNodeBinding(primaryNodeId)
-      const relatedBinding = getNodeBinding(relatedNodeId)
-      const binding = thisBinding(nodeIds)
-      const id = `${kind}:${relation}:${primaryNodeId}:${relatedNodeId}`
-      if (!groups.some((group) => group.id === id)) {
-        groups.push({
-          id, kind, relation, primaryNodeId, primaryNodeIds: [primaryNodeId], relatedNodeId, containerNodeId, nodeIds,
-          relatedProductName: nodeById.get(relatedNodeId)?.data.productName ?? '',
-          ...binding,
-          primaryInstanceIds: primaryBinding.instanceIds,
-          relatedInstanceIds: relatedBinding.instanceIds,
-          primaryChannelIds: primaryBinding.channelIds,
-          relatedChannelIds: relatedBinding.channelIds,
-          // PV monitoring is sourced from AC_Inverter. PV_Group is a topology
-          // relation node and does not need its own instance binding.
-          complete: relatedBinding.instanceIds.length > 0,
-          displayName: formatGroupName([primaryNodeId], relatedNodeId, containerNodeId),
-        })
-      }
-    }
-
-    const thisBinding = (nodeIds: string[]): Pick<TopologyEquipmentGroup, 'instanceIds' | 'channelIds'> => {
-      const ids = new Set(nodeIds)
-      const instanceIds = new Set<number>()
-      const channelIds = new Set<number>()
-      for (const id of collectFlowNodeInstanceIds(nodes, ids)) {
-        instanceIds.add(id)
-      }
-      for (const binding of bindings.value) {
-        if (!ids.has(binding.nodeId)) continue
-        for (const instance of binding.instances ?? []) {
-          const instanceId = Number(instance.instanceId)
-          if (Number.isFinite(instanceId) && instanceId > 0) instanceIds.add(instanceId)
-          for (const channelId of instance.channelIds ?? []) {
-            const id = Number(channelId)
-            if (Number.isFinite(id) && id > 0) channelIds.add(id)
+    // The inverter instance is the system identity. Adding/removing/reordering
+    // PV_Group neighbours must not create a second system or change selection.
+    const systems = new Map<number, TopologyEquipmentGroup>()
+    for (const inverter of nodes) {
+      const productName = inverter.data.productName ?? ''
+      if (productName !== 'AC_Inverter' && productName !== 'Hybrid_Inverter') continue
+      const inverterBinding = getNodeBinding(inverter.id)
+      for (const instanceId of inverterBinding.instanceIds) {
+        let system = systems.get(instanceId)
+        if (!system) {
+          system = {
+            id: `pv:inverter:${instanceId}`, kind: 'pv', relation: 'direct',
+            primaryNodeId: inverter.id, primaryNodeIds: [],
+            relatedNodeId: inverter.id, relatedProductName: productName,
+            nodeIds: [], instanceIds: [instanceId], channelIds: [],
+            primaryInstanceIds: [], relatedInstanceIds: [instanceId],
+            primaryChannelIds: [], relatedChannelIds: [],
+            complete: true, displayName: getInstanceDisplayName(instanceId), pvNodes: [],
           }
+          systems.set(instanceId, system)
         }
-      }
-      return { instanceIds: [...instanceIds], channelIds: [...channelIds] }
-    }
-
-    for (const primary of nodes) {
-      if (primary.data.productName !== 'PV_Group') continue
-
-      for (const neighbourId of neighbours.get(primary.id) ?? []) {
-        const neighbour = nodeById.get(neighbourId)
-        if (!neighbour) continue
-        if (neighbour.data.productName === 'AC_Inverter') {
-          addGroup('pv', 'direct', primary.id, neighbour.id)
+        system.nodeIds = [...new Set([...system.nodeIds, inverter.id])]
+        system.relatedChannelIds = [...new Set([...system.relatedChannelIds, ...inverterBinding.channelIds])]
+        for (const neighbourId of neighbours.get(inverter.id) ?? []) {
+          const pv = nodeById.get(neighbourId)
+          if (pv?.data.productName !== 'PV_Group' || system.pvNodes.some((item) => item.nodeId === pv.id)) continue
+          const binding = getNodeBinding(pv.id)
+          system.pvNodes.push({
+            nodeId: pv.id, ...binding,
+            displayName: getNodeInstanceName(pv.id) ?? pv.data.label ?? 'PV Group',
+          })
         }
+        system.primaryNodeIds = system.pvNodes.map((item) => item.nodeId)
+        system.primaryNodeId = system.primaryNodeIds[0] ?? system.relatedNodeId
+        system.primaryInstanceIds = [...new Set(system.pvNodes.flatMap((item) => item.instanceIds))]
+        system.primaryChannelIds = [...new Set(system.pvNodes.flatMap((item) => item.channelIds))]
+        system.nodeIds = [...new Set([...system.nodeIds, ...system.primaryNodeIds])]
+        system.instanceIds = [...new Set([instanceId, ...system.primaryInstanceIds])]
+        system.channelIds = [...new Set([...system.relatedChannelIds, ...system.primaryChannelIds])]
       }
     }
-    const grouped: TopologyEquipmentGroup[] = []
-    for (const group of groups) {
-      const key = `${group.relation}:${group.relatedNodeId}:${group.containerNodeId ?? ''}`
-      const existing = grouped.find((item) => item.kind === 'pv' && `${item.relation}:${item.relatedNodeId}:${item.containerNodeId ?? ''}` === key)
-      if (!existing) {
-        grouped.push(group)
-        continue
-      }
-      existing.primaryNodeIds.push(...group.primaryNodeIds)
-      existing.primaryNodeId = existing.primaryNodeIds[0]
-      existing.nodeIds = [...new Set([...existing.nodeIds, ...group.nodeIds])]
-      existing.primaryInstanceIds = [...new Set([...existing.primaryInstanceIds, ...group.primaryInstanceIds])]
-      existing.primaryChannelIds = [...new Set([...existing.primaryChannelIds, ...group.primaryChannelIds])]
-      existing.instanceIds = [...new Set([...existing.instanceIds, ...group.instanceIds])]
-      existing.channelIds = [...new Set([...existing.channelIds, ...group.channelIds])]
-      existing.complete = existing.relatedInstanceIds.length > 0
-      existing.displayName = formatGroupName(existing.primaryNodeIds, existing.relatedNodeId, existing.containerNodeId)
-    }
-    return grouped
+    return [...systems.values()]
   }
 
   function getBatterySystems(): BatterySystemGroup[] {
@@ -421,7 +366,9 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
   }
 
   function getInstanceDisplayName(instanceId: number): string {
-    return instances.value.find((item) => Number(item.id) === instanceId)?.name ?? String(instanceId)
+    return instances.value.find((item) => Number(item.id) === instanceId)?.name
+      ?? bindings.value.flatMap((binding) => binding.instances).find((item) => Number(item.instanceId) === instanceId)?.instanceName
+      ?? String(instanceId)
   }
 
   const equipmentGroups = computed(getEquipmentGroups)
@@ -442,8 +389,14 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     }
     return systems.find((system) => system.id === selectedBatterySystemId.value) ?? null
   })
+  const dieselGroups = computed(() => {
+    const ids = getInstanceIds('Diesel')
+    return ids.map((instanceId) => ({
+      id: `diesel:${instanceId}`, instanceId, displayName: getInstanceDisplayName(instanceId),
+    }))
+  })
   const selectedDieselId = computed(() => {
-    const ids = getLogicalDeviceInstanceIds('diesel')
+    const ids = dieselGroups.value.map((group) => group.instanceId)
     if (!ids.includes(selectedDieselInstanceId.value ?? -1)) selectedDieselInstanceId.value = ids[0] ?? null
     return selectedDieselInstanceId.value
   })
@@ -458,6 +411,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     reload,
     getInstanceIds,
     getProductInstances,
+    getTopologyDevices,
     getChannelIds,
     getByNodeId,
     getAllInstanceIds,
@@ -471,6 +425,7 @@ export const useDeviceTopologyStore = defineStore('deviceTopology', () => {
     equipmentGroups,
     pvGroups,
     batterySystems,
+    dieselGroups,
     selectedPvGroupId,
     selectedBatterySystemId,
     selectedPvGroup,

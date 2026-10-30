@@ -49,7 +49,7 @@ import powerIcon from '@/assets/icons/Power.svg'
 import voltageIcon from '@/assets/icons/Voltage.svg'
 import currentIcon from '@/assets/icons/Current.svg'
 import coolantTempIcon from '@/assets/icons/CoolantTemp.svg'
-import { formatNumber } from '@/utils/common'
+import { formatNumber, formatSampleValue } from '@/utils/common'
 import { useInstanceMeasurements } from '@/composables/useInstanceMeasurements'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { pvOverviewMeasurements } from '@/utils/deviceMeasurements'
@@ -58,7 +58,7 @@ import { ref, reactive, computed } from 'vue'
 const topoStore = useDeviceTopologyStore()
 const pvInstanceId = computed(() => topoStore.selectedPvGroup?.relatedInstanceIds[0])
 const productName = computed(() => topoStore.selectedPvGroup?.relatedProductName ?? '')
-const { measurements, values } = useInstanceMeasurements(() => pvInstanceId.value)
+const { measurements, values, timestamps } = useInstanceMeasurements(() => pvInstanceId.value)
 
 const hoveredRow = ref<number | null>(null)
 // Per-string measurements are not defined by the current inverter products.
@@ -70,7 +70,10 @@ const energyCardData = computed(() =>
     title: point.name,
     icon: point.unit === 'V' ? voltageIcon : point.unit === 'A' ? currentIcon
       : point.unit === 'kWh' ? coolantTempIcon : powerIcon,
-    value: formatNumber(values.value[String(point.measurement_id)]),
+    value: formatSampleValue(
+      values.value[String(point.measurement_id)],
+      timestamps.value[String(point.measurement_id)],
+    ),
     unit: point.unit ?? '',
   })),
 )

@@ -40,7 +40,6 @@ import { ZoomIn, Download } from '@element-plus/icons-vue'
 import FullSceenDialog from '@/components/dialog/fullSceenDialog.vue'
 import { downloadCsv } from '@/utils/csv'
 import { pxToResponsive } from '@/utils/responsive'
-import { formatNumber } from '@/utils/common'
 
 const fullScreenDialogRef = ref()
 const fullScreenChartRef = ref<HTMLDivElement | null>(null)
@@ -76,7 +75,6 @@ const props = withDefaults(
     xAxiosOption: XAxisOption
     yAxiosOption: YAxisOption
     series: SeriesData[]
-    legendIcon?: 'circle' | 'rect'
     // Grid配置参数
     gridConfig?: GridConfig
     // 全屏模式Grid配置参数
@@ -100,7 +98,6 @@ const props = withDefaults(
       bottom: 50,
     }),
     showToolbox: true,
-    legendIcon: 'circle',
     showFullScreen: true,
     showDownload: true,
   },
@@ -180,7 +177,7 @@ function customTooltipFormatter(
           "></span>
           <span>${item.seriesName}</span>
         </div>
-        <div style="font-weight:600;">${item.value == null ? '--' : formatNumber(item.value)}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
+        <div style="font-weight:600;">${item.value ?? '--'}${props.yAxiosOption.yUnit ? ' ' + props.yAxiosOption.yUnit : ''}</div>
       </div>
     `
   })
@@ -222,7 +219,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   // legend/grid/axis样式参数
   const legend = isFullScreen
     ? {
-        icon: props.legendIcon,
+        icon: 'circle',
         show: true,
         type: 'plain',
         orient: 'horizontal',
@@ -240,7 +237,7 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
         data: props.series.map((s) => s.name),
       }
     : {
-        icon: props.legendIcon,
+        icon: 'circle',
         show: true,
         type: 'plain',
         orient: 'horizontal',
@@ -567,7 +564,7 @@ const resizeChart = () => {
   }, 300)
 }
 watch(
-  () => [props.xAxiosOption.xAxiosData, props.series, props.legendIcon],
+  () => [props.xAxiosOption.xAxiosData, props.series],
   () => {
     initChart()
   },

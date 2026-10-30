@@ -59,8 +59,8 @@ describe('actual device channel monitoring', () => {
     expect(getPointsTables).toHaveBeenCalledWith(7)
     expect(state.leftTableData.value.map((point) => point.pointId)).toEqual([42, 99])
     push([
-      { source: 'comsrv', channel_id: 7, data_type: 'T', values: { 42: 0, 99: 230 }, ts: { 42: 1 } },
-      { source: 'comsrv', channel_id: 7, data_type: 'S', values: { 3: 0 } },
+      { source: 'comsrv', channel_id: 7, data_type: 'T', values: { 42: 0, 99: 230 }, ts: { 42: 1, 99: 2 } },
+      { source: 'comsrv', channel_id: 7, data_type: 'S', values: { 3: 0 }, ts: { 3: 3 } },
     ])
     expect(state.leftTableData.value.map((point) => point.value)).toEqual([0, 230])
     expect(state.rightTableData.value[0].status).toBe(0)
@@ -68,8 +68,8 @@ describe('actual device channel monitoring', () => {
     expect(state.leftTableData.value[0].value).toBe(0)
     push([{ channel_id: 7, data_type: 'T', values: { 42: 999 } }])
     expect(state.leftTableData.value[0].value).toBe(0)
-    push([{ source: 'comsrv', channel_id: 7, data_type: 'T', values: { 42: 10 } }])
-    expect(state.leftTableData.value[1].value).toBeNull()
+    push([{ source: 'comsrv', channel_id: 7, data_type: 'T', values: { 42: 10, 99: 11 }, ts: { 99: 4 } }])
+    expect(state.leftTableData.value.map((point) => point.value)).toEqual([null, 11])
     wsManager.status.value = 'disconnected'
     expect(state.leftTableData.value[0].value).toBeNull()
     expect(state.rightTableData.value[0].status).toBeNull()

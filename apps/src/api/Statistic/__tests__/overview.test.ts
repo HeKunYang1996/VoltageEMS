@@ -21,7 +21,7 @@ describe('history timestamp contract', () => {
     } })
     const signal = new AbortController().signal
     const result = await batchQueryHistory(params, signal)
-    expect(Request.post).toHaveBeenCalledWith('/hisApi/data/batch-query', params, { signal })
+    expect(Request.post).toHaveBeenCalledWith('/hisApi/data/batch-query', params, { signal, skipGlobalLoading: true })
     expect(result.data.series[0].data).toEqual([
       { timestamp: '2026-10-29T00:00:00.000Z', value: 0 },
       { timestamp: '2026-10-29T00:01:00.000Z', value: null },

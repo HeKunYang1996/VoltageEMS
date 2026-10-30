@@ -21,22 +21,21 @@
       <div class="home-left-bottom">
         <div class="home-left-LineChart">
           <ModuleCard title="Power Curve">
-            <LineChart
+            <div v-if="historyState !== 'ready'" class="home-chart-empty">{{ historyNotice }}</div>
+            <LineChart v-else
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="lineChartYAxiosOption"
               :series="lineChartSeries"
-              :showArea="false"
-              legendIcon="rect"
             />
           </ModuleCard>
         </div>
         <div class="home-left-EnergyChart">
           <ModuleCard title="Energy Chart">
-            <StackedBarChart
+            <div v-if="historyState !== 'ready'" class="home-chart-empty">{{ historyNotice }}</div>
+            <StackedBarChart v-else
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="yAxiosOption"
-              :series="exampleSeries"
-              legendIcon="rect"
+              :series="energySeries"
             />
           </ModuleCard>
         </div>
@@ -120,13 +119,7 @@
             @touchend="handleAlarmTouchEnd"
           >
             <div v-if="alarmPullDistance > 0" class="home-alarmsRefreshHint">
-              {{
-                refreshingAlarms
-                  ? 'Refreshing...'
-                  : alarmPullDistance >= ALARM_PULL_TRIGGER
-                    ? 'Release to refresh'
-                    : 'Pull to refresh'
-              }}
+              {{ refreshingAlarms ? 'Refreshing...' : alarmPullDistance >= ALARM_PULL_TRIGGER ? 'Release to refresh' : 'Pull to refresh' }}
             </div>
             <div class="home-alarmsItem" v-for="item in alarmInfoList" :key="item.id">
               <div class="alarms__item-name" :title="item.deviceName">{{ item.deviceName }}</div>
@@ -147,8 +140,8 @@
               />
               <div class="alarms__item-msg" :title="item.alarmMsg">{{ item.alarmMsg }}</div>
             </div>
-            <div v-if="!alarmInfoList.length && !refreshingAlarms" class="home-alarmsEmpty">
-              No current alarms
+            <div v-if="!alarmInfoList.length" class="home-alarmsEmpty">
+              {{ refreshingAlarms ? 'Loading alarms...' : alarmLoadState === 'ready' ? 'No current alarms' : 'Alarm data unavailable' }}
             </div>
           </div>
         </ModuleCard>
@@ -158,18 +151,11 @@
 </template>
 
 <script setup lang="ts">
-import { homepageChartColor } from '@/utils/theme'
 import type { EnergyCard } from '@/types/home'
 import { HOMEPAGE_POINT_IDS } from '@/types/home'
 import useWebSocket from '@/composables/useWebSocket'
-import {
-  isHomepageDemoMode,
-  shouldSubscribeHomepageWebSocket,
-  useHomepageDemo,
-} from '@/composables/useHomepageDemo'
-import { formatNumber } from '@/utils/common'
+import { formatNumber, parseSampleTimestamp } from '@/utils/common'
 
-const isDemoMode = isHomepageDemoMode()
 
 import ModuleCard from '@/components/card/ModuleCard.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
@@ -182,14 +168,15 @@ import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } f
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
-import { watch, onUnmounted } from 'vue'
+import { watch, onMounted, onUnmounted } from 'vue'
+import wsManager from '@/utils/websocket'
 
 import alarmL1 from '@/assets/icons/home-alarm-L1.svg'
 import alarmL2 from '@/assets/icons/home-alarm-L2.svg'
-import alarmL3 from '@/assets/images/home-topology/alert-l3.svg'
+import alarmL3 from '@/assets/icons/home-alarm-L3.svg'
 
-import arrowLeftImg from '@/assets/images/home-topology/device-prev.svg'
-import arrowRightImg from '@/assets/images/home-topology/device-next.svg'
+import arrowLeftImg from '@/assets/icons/arrow-left.svg'
+import arrowRightImg from '@/assets/icons/arrow-right.svg'
 
 import devicePV from '@/assets/icons/device-pv.svg'
 import deviceDiesel from '@/assets/icons/device-diesel.svg'
@@ -226,7 +213,7 @@ function getIconByImgurl(imgurl?: string): string {
 interface PointInfo {
   id: number
   name: string
-  values: string | number
+  values: number | null
   unit: string
   imgurl?: string
 }
@@ -245,7 +232,7 @@ const HOMEPAGE_POINT_DEFAULTS: Record<number, { name: string; unit: string; imgu
   4: { name: 'Saving Billing', unit: '$', imgurl: 'icon-saving-billing' },
   5: { name: 'PV Power', unit: 'kW', imgurl: 'icon-pv-energy' },
   6: { name: 'Diesel Power', unit: 'kW', imgurl: 'icon-diesel-energy' },
-  7: { name: 'BESS Power', unit: 'kW', imgurl: 'icon-ess-energy' },
+  7: { name: 'ESS Power', unit: 'kW', imgurl: 'icon-ess-energy' },
   8: { name: 'P', unit: 'kW' },
   9: { name: 'U', unit: 'V' },
   10: { name: 'P', unit: 'kW' },
@@ -255,7 +242,7 @@ const HOMEPAGE_POINT_DEFAULTS: Record<number, { name: string; unit: string; imgu
   14: { name: 'P', unit: 'kW' },
   15: { name: 'P', unit: 'kW' },
   16: { name: 'P', unit: 'kW' },
-  17: { name: 'Fuel', unit: '%' },
+  17: { name: 'Oil', unit: '%' },
   18: { name: 'P', unit: 'kW' },
   19: { name: 'SOC', unit: '%' },
 }
@@ -282,7 +269,7 @@ const stationInfoList = computed<EnergyCard[]>(() =>
     const def = HOMEPAGE_POINT_DEFAULTS[id]
     return {
       id,
-      title: id === 7 ? def.name : (p?.name ?? def?.name),
+      title: p?.name ?? def?.name,
       icon: getIconByImgurl(p?.imgurl ?? def?.imgurl),
       value: displayValue(p?.values),
       unit: p?.unit ?? def?.unit,
@@ -298,17 +285,11 @@ const tuopuData = computed(() => {
       ? {
           ...p,
           name: p.name ?? defaultName,
-          value: displayValue(p.values),
           rawValue: p.values,
+          value: displayValue(p.values),
           unit: p.unit ?? defaultUnit,
         }
-      : {
-          id: undefined,
-          name: defaultName,
-          value: '-' as const,
-          rawValue: undefined,
-          unit: defaultUnit,
-        }
+      : { id: undefined, name: defaultName, rawValue: null, value: '-' as const, unit: defaultUnit }
   return {
     pv: {
       P: fmt(
@@ -364,7 +345,7 @@ interface DeviceSlide {
   name: string
 }
 const deviceIcons = [devicePV, deviceDiesel, deviceBattery]
-const deviceNames = ['PV', 'Diesel Generator', 'BESS']
+const deviceNames = ['PV', 'Diesel Generator', 'ESS']
 const deviceInfoList = computed<DeviceSlide[]>(() =>
   HOMEPAGE_POINT_IDS.deviceInfo.map((ids, idx) => ({
     data: ids.map((pointId) => {
@@ -384,38 +365,42 @@ const deviceInfoList = computed<DeviceSlide[]>(() =>
 
 /** 应用 homepage_batch 推送数据*/
 function applyHomepageBatch(data: {
-  updates?: Array<{ id: number; name: string; values?: number; unit: string; imgurl?: string }>
+  updates?: Array<{ id: number; name: string; values?: number | null; ts?: number | null; unit: string; imgurl?: string }>
 }) {
   const updates = data?.updates ?? []
-
+  // Every batch is a full snapshot. Removed points must not retain old readings.
+  Object.keys(pointStore).forEach((id) => { delete pointStore[Number(id)] })
   for (const u of updates) {
     pointStore[u.id] = {
       id: u.id,
       name: u.name,
-      values: u.values !== null && u.values !== undefined ? formatNumber(u.values) : '-',
+      // A push timestamp is not a measurement timestamp. Initial SHM zeros have no sample.
+      values: parseSampleTimestamp(u.ts) !== null && typeof u.values === 'number' && Number.isFinite(u.values)
+        ? u.values : null,
       unit: u.unit,
       imgurl: u.imgurl,
     }
   }
 }
 
-/** 首页 WebSocket 订阅：进入订阅、离开取消（演示模式跳过） */
-if (shouldSubscribeHomepageWebSocket()) {
-  useWebSocket(
-    {
-      source: 'homepage',
-      interval: 1000,
+/** Homepage cards and topology always use backend custom bindings. */
+watch(wsManager.status, (status) => {
+  if (status !== 'connected') Object.keys(pointStore).forEach((id) => { delete pointStore[Number(id)] })
+}, { flush: 'sync' })
+useWebSocket(
+  {
+    source: 'homepage',
+    interval: 1000,
+  },
+  {
+    onBatchDataUpdate: (data: any) => {
+      if (wsManager.status.value === 'connected' && Array.isArray(data?.updates)) {
+        applyHomepageBatch(data)
+      }
     },
-    {
-      onBatchDataUpdate: (data: any) => {
-        if (data?.updates?.length) {
-          applyHomepageBatch(data)
-        }
-      },
-      onAlarm: handleHomeAlarm,
-    },
-  )
-}
+    onAlarm: handleHomeAlarm,
+  },
+)
 
 interface HomeAlarmItem {
   id: number | string
@@ -428,10 +413,12 @@ type HomeAlarmSource = CurrentAlarmData | AlarmMessage['data']
 
 const alarmInfoList = ref<HomeAlarmItem[]>([])
 const refreshingAlarms = ref(false)
+const alarmLoadState = ref<'loading' | 'ready' | 'error'>('loading')
 const alarmPullDistance = ref(0)
 const alarmTouchStartY = ref<number | null>(null)
 const ALARM_PULL_TRIGGER = 48
 let alarmListVersion = 0
+let alarmRequestVersion = 0
 const alarmLevelText: Record<number, string> = {
   1: 'Critical Alarm',
   2: 'Warning Alarm',
@@ -464,22 +451,35 @@ const toHomeAlarm = (alarm: HomeAlarmSource): HomeAlarmItem => {
 
 const fetchHomeAlarms = async () => {
   const requestVersion = alarmListVersion
+  const requestToken = ++alarmRequestVersion
   refreshingAlarms.value = true
   try {
     const response = await getCurrentAlarms({ page: 1, page_size: 8 })
+    if (requestToken !== alarmRequestVersion) return
     if (response.success && requestVersion === alarmListVersion) {
       alarmInfoList.value = (response.data?.list ?? []).map(toHomeAlarm)
+      alarmLoadState.value = 'ready'
+    } else if (requestVersion === alarmListVersion) {
+      alarmInfoList.value = []
+      alarmLoadState.value = 'error'
     }
   } catch (error) {
+    if (requestToken === alarmRequestVersion && requestVersion === alarmListVersion) {
+      alarmInfoList.value = []
+      alarmLoadState.value = 'error'
+    }
     console.error('Failed to fetch current alarms:', error)
   } finally {
-    refreshingAlarms.value = false
-    alarmPullDistance.value = 0
+    if (requestToken === alarmRequestVersion) {
+      refreshingAlarms.value = false
+      alarmPullDistance.value = 0
+    }
   }
 }
 
 function handleHomeAlarm(alarm: AlarmMessage['data']) {
   alarmListVersion += 1
+  alarmLoadState.value = 'ready'
   const id = alarm.alarm_id
   if (alarm.status === 0) {
     alarmInfoList.value = alarmInfoList.value.filter((item) => String(item.id) !== String(id))
@@ -504,31 +504,41 @@ const handleAlarmTouchMove = (event: TouchEvent) => {
 
 const handleAlarmTouchEnd = () => {
   if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) {
-    if (isDemoMode) demoControls?.refreshAlarms()
-    else fetchHomeAlarms()
+    fetchHomeAlarms()
   } else {
     alarmPullDistance.value = 0
   }
   alarmTouchStartY.value = null
 }
 
-if (!isDemoMode) {
-  fetchHomeAlarms()
-}
+fetchHomeAlarms()
+watch(wsManager.status, (status) => {
+  if (status === 'connected') fetchHomeAlarms()
+  else {
+    alarmListVersion += 1
+    alarmRequestVersion += 1
+    refreshingAlarms.value = false
+    alarmInfoList.value = []
+    alarmLoadState.value = 'error'
+  }
+})
 
 // ─── 图表数据（Power Curve + Energy Chart）────────────────────
 const chartXAxisData = ref<string[]>([])
+const historyState = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
+const historyNotice = computed(() => historyState.value === 'error'
+  ? 'Historical data unavailable' : historyState.value === 'loading' ? 'Loading history...' : 'No history data')
 
 const lineChartSeries = ref([
-  { name: 'PV', data: [] as (number | null)[], color: homepageChartColor('PV') },
-  { name: 'Diesel', data: [] as (number | null)[], color: homepageChartColor('DG') },
-  { name: 'BESS', data: [] as (number | null)[], color: homepageChartColor('BESS') },
+  { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as (number | null)[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
 ])
 
-const exampleSeries = ref([
-  { name: 'PV', data: [] as (number | null)[], color: homepageChartColor('PV') },
-  { name: 'Diesel', data: [] as (number | null)[], color: homepageChartColor('DG') },
-  { name: 'BESS', data: [] as (number | null)[], color: homepageChartColor('BESS') },
+const energySeries = ref([
+  { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
+  { name: 'DG', data: [] as (number | null)[], color: 'rgba(246, 200, 95, 1)' },
+  { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
 ])
 
 const xAxiosOption = computed(() => ({ xAxiosData: chartXAxisData.value }))
@@ -536,63 +546,83 @@ const yAxiosOption = { yUnit: 'kWh' }
 const lineChartYAxiosOption = { yUnit: 'kW' }
 
 const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
-const statistics = useEnergyStatistics(() => !isDemoMode)
+const statistics = useEnergyStatistics(() => true, { realtime: false })
 let chartRequestToken = 0
 let chartAbortController: AbortController | undefined
+let activeChartKey: string | undefined
 
 const fetchHomeChartData = async () => {
+  if (statistics.loading.value) {
+    chartRequestToken += 1
+    chartAbortController?.abort()
+    activeChartKey = undefined
+    historyState.value = 'loading'
+    return
+  }
   const metrics = statistics.metrics.value
   const series = statisticRequests(metrics)
+  const key = JSON.stringify(metrics)
+  if (activeChartKey === key) return
   const myToken = ++chartRequestToken
   chartAbortController?.abort()
   chartAbortController = new AbortController()
+  const controller = chartAbortController
+  activeChartKey = undefined
   chartXAxisData.value = []
   lineChartSeries.value = []
-  exampleSeries.value = []
-  if (!series.length) return
+  energySeries.value = []
+  if (!series.length) {
+    historyState.value = 'empty'
+    return
+  }
+  historyState.value = 'loading'
+  activeChartKey = key
   const range = getRecentHoursRange(6)
   try {
     const res = await batchQueryHistory({
       start_time: range.start!, end_time: range.end!,
       limit_per_series: STATISTIC_HISTORY_LIMIT, series,
-    }, chartAbortController.signal)
-    if (myToken !== chartRequestToken || !res.success) return
+    }, controller.signal)
+    if (myToken !== chartRequestToken) return
+    if (!res.success) {
+      historyState.value = 'error'
+      return
+    }
     const chart = buildStatisticChartData(metrics, res.data?.series ?? [])
     chartXAxisData.value = chart.timestamps.map(fmtLabel)
+    historyState.value = chart.timestamps.length ? 'ready' : 'empty'
     lineChartSeries.value = [
-      { name: 'PV', data: chart.values('pvPower'), color: homepageChartColor('PV') },
-      { name: 'Diesel', data: chart.values('dgPower'), color: homepageChartColor('DG') },
-      { name: 'BESS', data: chart.values('essPower'), color: homepageChartColor('BESS') },
+      { name: 'PV', data: chart.values('pvPower'), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: chart.values('dgPower'), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS', data: chart.values('essPower'), color: 'rgba(29, 134, 255, 1)' },
     ]
-    exampleSeries.value = [
-      { name: 'PV', data: chart.values('pvEnergy'), color: homepageChartColor('PV') },
-      { name: 'Diesel', data: chart.values('dgEnergy'), color: homepageChartColor('DG') },
-      { name: 'BESS Discharge', data: chart.values('essEnergy'), color: homepageChartColor('BESS') },
+    energySeries.value = [
+      { name: 'PV', data: chart.values('pvEnergy'), color: 'rgba(105, 203, 255, 1)' },
+      { name: 'DG', data: chart.values('dgEnergy'), color: 'rgba(246, 200, 95, 1)' },
+      { name: 'ESS Discharge', data: chart.values('essEnergy'), color: 'rgba(29, 134, 255, 1)' },
     ]
   } catch (error) {
-    if (myToken !== chartRequestToken || chartAbortController.signal.aborted) return
+    if (myToken !== chartRequestToken || controller.signal.aborted) return
+    historyState.value = 'error'
     console.error('Failed to fetch home chart data:', error)
+  } finally {
+    if (myToken === chartRequestToken) activeChartKey = undefined
   }
 }
 
-let demoControls: ReturnType<typeof useHomepageDemo> | null = null
-
-if (isDemoMode) {
-  demoControls = useHomepageDemo({
-    applyHomepageBatch,
-    alarmInfoList,
-    chartXAxisData,
-    lineChartSeries,
-    exampleSeries,
-  })
-} else {
-  watch(statistics.metrics, fetchHomeChartData, { immediate: true })
-}
+watch([statistics.loading, statistics.metrics], fetchHomeChartData, { immediate: true })
+let historyTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  historyTimer = setInterval(fetchHomeChartData, 60_000)
+})
 
 onUnmounted(() => {
   // 标记旧请求失效，防止卸载后回调写入已销毁组件
   chartRequestToken += 1
   chartAbortController?.abort()
+  alarmListVersion += 1
+  alarmRequestVersion += 1
+  if (historyTimer) clearInterval(historyTimer)
 })
 
 // Carousel引用
@@ -612,6 +642,15 @@ const handleNext = () => {
 </script>
 
 <style scoped lang="scss">
+.home-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--vt-text-secondary);
+  font-size: 0.14rem;
+}
+
 .home {
   position: relative;
   width: 100%;
@@ -619,7 +658,6 @@ const handleNext = () => {
   display: flex;
   justify-content: space-between;
   z-index: 2;
-  --energy-card-unit-weight: var(--vt-font-weight-normal);
 
   &::before {
     content: '';
@@ -628,18 +666,15 @@ const handleNext = () => {
     left: -0.2rem;
     width: calc(100% + 0.4rem);
     height: calc(100% + 0.4rem);
-    background: var(--vt-bg-home);
+    background: url('@/assets/images/home-bg.png') no-repeat center center;
     background-size: 100% 100%;
-    background-position: center;
-    background-repeat: no-repeat;
-    pointer-events: none;
     z-index: 1;
   }
 
   .home-left {
     position: relative;
     z-index: 2;
-    width: calc(100% - 3.8rem);
+    width: calc(100% - 3.9rem);
     height: 100%;
     min-width: 0;
     min-height: 0;
@@ -651,7 +686,7 @@ const handleNext = () => {
     .home-left-top {
       width: 100%;
       height: 0.8rem;
-      /* padding-top: 0.255rem; */
+      padding-top: 0.1rem;
       display: flex;
       justify-content: space-between;
       z-index: 1;
@@ -662,8 +697,6 @@ const handleNext = () => {
     }
 
     .home-left-middle {
-      position: relative;
-      z-index: 1;
       width: 100%;
       height: calc(69% - 1.2rem);
       flex: 1;
@@ -681,8 +714,6 @@ const handleNext = () => {
     }
 
     .home-left-bottom {
-      position: relative;
-      z-index: 2;
       width: 100%;
       height: 30.89%;
       display: flex;
@@ -704,7 +735,7 @@ const handleNext = () => {
     position: relative;
     z-index: 2;
 
-    width: 3.6rem;
+    width: 3.7rem;
     height: 100%;
     min-width: 0;
     min-height: 0;
@@ -873,9 +904,9 @@ const handleNext = () => {
 
         .home-alarmsItem {
           min-height: 0.6rem;
-          border-bottom: 0.01rem dashed var(--vt-border-color-dashed);
+          border-bottom: 0.01rem solid rgba(255, 255, 255, 0.2);
           display: grid;
-          grid-template-columns: 0.5rem 0.46rem minmax(0, 1fr);
+          grid-template-columns: 0.4rem 0.46rem minmax(0, 1fr);
           column-gap: 0.1rem;
           align-items: center;
 
@@ -907,6 +938,8 @@ const handleNext = () => {
             -webkit-box-orient: vertical;
             -webkit-line-clamp: 2;
           }
+
+
         }
       }
     }

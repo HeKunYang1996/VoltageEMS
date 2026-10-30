@@ -88,13 +88,13 @@ const handleShrink = () => {
   position: relative;
   height: 100vh;
   padding: 0.2rem 0;
-  background: var(--vt-bg-chrome);
-  box-shadow: var(--vt-shadow-sidebar);
+  background: var(--vt-bg-glass-strong);
   border-right: 0.01rem solid;
-  border-right-color: var(--vt-border-color);
+  border-image-source: var(--vt-border-gradient-strong);
   backdrop-filter: var(--vt-backdrop-blur);
   display: flex;
   flex-direction: column;
+  background: #54628c66;
   transition: width 0.3s ease-in-out;
   width: 2.2rem;
 
@@ -107,19 +107,20 @@ const handleShrink = () => {
     display: flex;
     justify-content: center;
     align-items: center;
-    margin: 0.2rem auto 0.44rem;
+    margin: 0.2rem auto;
 
     .sidebar__header-img {
       background-repeat: no-repeat;
-      background-image: url('@/assets/images/home-topology/voltage-mgs.svg');
-      width: 1.23rem;
-      height: 0.56rem;
+      background-image: url('@/assets/images/sidebar-logo.png');
+      width: 1rem;
+      height: 0.686rem;
       background-size: 100% 100%;
 
       &.collapse {
+        background-image: url('@/assets/images/sidebar-logo-collapse.png');
         width: 0.5rem;
-        background-size: contain;
-        background-position: center;
+        height: 0.686rem;
+        background-size: 100% auto;
       }
     }
   }

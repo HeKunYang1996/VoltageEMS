@@ -4,6 +4,7 @@ import { getPointsTables } from '@/api/channelsManagement'
 import type { LeftTableItem, RightTableItem } from '@/types/deviceMonitoring'
 import useTopologySubscribe from '@/composables/useTopologySubscribe'
 import wsManager from '@/utils/websocket'
+import { parseSampleTimestamp } from '@/utils/common'
 
 /** Full native T/S point tables, resolved from the selected device's active routing. */
 export function useInstanceChannelMonitoring(getInstanceIds: () => number[]) {
@@ -82,12 +83,16 @@ export function useInstanceChannelMonitoring(getInstanceIds: () => number[]) {
     if (wsManager.status.value !== 'connected' || update.channel_id !== selectedChannelId.value ||
       update.source !== 'comsrv') return
     if (update.data_type === 'T') leftTableData.value.forEach((item) => {
-      item.value = update.values[String(item.pointId)] ?? null
-      item.updateTime = update.ts?.[String(item.pointId)] ?? null
+      const field = String(item.pointId)
+      const sampleTs = parseSampleTimestamp(update.ts?.[field])
+      item.updateTime = sampleTs
+      item.value = sampleTs === null ? null : (update.values[field] ?? null)
     })
     if (update.data_type === 'S') rightTableData.value.forEach((item) => {
-      item.status = update.values[String(item.pointId)] ?? null
-      item.updateTime = update.ts?.[String(item.pointId)] ?? null
+      const field = String(item.pointId)
+      const sampleTs = parseSampleTimestamp(update.ts?.[field])
+      item.updateTime = sampleTs
+      item.status = sampleTs === null ? null : (update.values[field] ?? null)
     })
   }
 
