@@ -42,8 +42,15 @@ async fn create_test_database() -> Result<sqlx::SqlitePool> {
 
 /// Create test app router with in-memory RTDB
 async fn create_test_app() -> Result<axum::Router> {
-    let pool = create_test_database().await?;
+    Ok(create_test_app_with_pool().await?.0)
+}
 
+async fn create_test_app_with_pool() -> Result<(axum::Router, sqlx::SqlitePool)> {
+    let pool = create_test_database().await?;
+    Ok((create_test_router(pool.clone()), pool))
+}
+
+fn create_test_router(pool: sqlx::SqlitePool) -> axum::Router {
     // Create in-memory RTDB (MemoryRtdb implements Rtdb trait)
     let rtdb = Arc::new(MemoryRtdb::new());
 
@@ -63,11 +70,20 @@ async fn create_test_app() -> Result<axum::Router> {
     ));
 
     // Create rule engine state
-    let state = Arc::new(RuleEngineState::new(pool, scheduler));
+    let state = Arc::new(RuleEngineState::new(pool.clone(), scheduler));
 
     // Create router
-    let router = create_rule_routes(state);
-    Ok(router)
+    create_rule_routes(state)
+}
+
+fn configured_flow() -> serde_json::Value {
+    json!({
+        "nodes": [
+            {"id":"start", "type":"start", "data":{"wires":{"default":["end"]}}},
+            {"id":"end", "type":"end", "data":{}}
+        ],
+        "edges": [{"id":"start-end", "source":"start", "target":"end"}]
+    })
 }
 
 /// Helper function to make HTTP requests and extract response
@@ -409,6 +425,235 @@ async fn test_delete_rule_success() -> Result<()> {
 // ============================================================================
 
 #[tokio::test]
+async fn test_empty_or_invalid_flow_cannot_be_enabled() -> Result<()> {
+    let (app, pool) = create_test_app_with_pool().await?;
+    let (_, created) =
+        make_request(&app, "POST", "/api/rules", Some(json!({"name":"Draft"}))).await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+    // Include malformed legacy records, empty topologies and invalid entry nodes.
+    for nodes in [
+        "{}",
+        "null",
+        "not json",
+        r#"{"start_node":"start","nodes":{}}"#,
+        r#"{"start_node":"start","nodes":{"start":{"type":"end"}}}"#,
+        r#"{"start_node":"missing","nodes":{"start":{"type":"start","wires":{}}}}"#,
+    ] {
+        sqlx::query("UPDATE rules SET nodes_json = ?, updated_at = '2000-01-01' WHERE id = ?")
+            .bind(nodes)
+            .bind(id)
+            .execute(&pool)
+            .await?;
+        let (status, body) =
+            make_request(&app, "POST", &format!("/api/rules/{id}/enable"), None).await?;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{nodes}: {body:?}"
+        );
+        assert_eq!(body["success"], false);
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("请先配置")
+        );
+        let stored: (bool, String) =
+            sqlx::query_as("SELECT enabled, updated_at FROM rules WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(stored, (false, "2000-01-01".into()));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_cannot_enable_a_draft_or_partially_save_other_fields() -> Result<()> {
+    let (app, pool) = create_test_app_with_pool().await?;
+    let (_, created) = make_request(
+        &app,
+        "POST",
+        "/api/rules",
+        Some(json!({"name":"Original draft"})),
+    )
+    .await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+    let (status, body) = make_request(
+        &app,
+        "PUT",
+        &format!("/api/rules/{id}"),
+        Some(json!({"enabled":true,"name":"Changed name","priority":42})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
+    assert_eq!(body["success"], false);
+    let stored: (bool, String, i64, String, Option<String>) = sqlx::query_as(
+        "SELECT enabled, name, priority, nodes_json, flow_json FROM rules WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        stored,
+        (false, "Original draft".into(), 0, "{}".into(), None)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_concurrent_writer_does_not_turn_flow_validation_into_database_locked() -> Result<()> {
+    use std::time::Duration;
+    let directory = tempfile::tempdir()?;
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(directory.path().join("rules.db"))
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(2));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(options)
+        .await?;
+    common::test_utils::schema::init_rules_schema(&pool).await?;
+    let app = create_test_router(pool.clone());
+    let (_, created) = make_request(
+        &app,
+        "POST",
+        "/api/rules",
+        Some(json!({"name":"Concurrent draft"})),
+    )
+    .await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+
+    // Another service owns SQLite's writer lock while this request starts.
+    let mut writer = pool.begin_with("BEGIN IMMEDIATE").await?;
+    sqlx::query("UPDATE rules SET description = 'Background update' WHERE id = ?")
+        .bind(id)
+        .execute(&mut *writer)
+        .await?;
+    let mut update = tokio::spawn(async move {
+        make_request(
+            &app,
+            "PUT",
+            &format!("/api/rules/{id}"),
+            Some(json!({"enabled":true,"priority":25})),
+        )
+        .await
+    });
+    let early_response = tokio::time::timeout(Duration::from_millis(200), &mut update).await;
+    writer.commit().await?;
+    let (status, body) = match early_response {
+        Ok(result) => result??,
+        Err(_) => update.await??,
+    };
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
+    assert_eq!(body["success"], false);
+    let stored: (bool, i64, Option<String>) =
+        sqlx::query_as("SELECT enabled, priority, description FROM rules WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(stored, (false, 0, Some("Background update".into())));
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_save_flow_and_enable_together_and_preserve_it_on_invalid_edit() -> Result<()> {
+    let (app, pool) = create_test_app_with_pool().await?;
+    let (_, created) = make_request(
+        &app,
+        "POST",
+        "/api/rules",
+        Some(json!({"name":"Configured rule"})),
+    )
+    .await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+    let flow = configured_flow();
+    let (status, body) = make_request(
+        &app,
+        "PUT",
+        &format!("/api/rules/{id}"),
+        Some(json!({"enabled":true,"flow_json":flow})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let before: (bool, String, String, Option<String>) =
+        sqlx::query_as("SELECT enabled, name, nodes_json, flow_json FROM rules WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+    let columns = voltage_rules::flow_column_values(&flow)?;
+    assert!(before.0);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&before.2)?,
+        serde_json::from_str::<serde_json::Value>(&columns.nodes_json)?
+    );
+    assert_eq!(before.3.as_deref(), Some(columns.flow_json.as_str()));
+
+    // The parser accepts this document, but it has no usable execution entry.
+    let unusable_flow = json!({"nodes":[{"id":" ","type":"start","data":{}}]});
+    let (status, body) = make_request(
+        &app,
+        "PUT",
+        &format!("/api/rules/{id}"),
+        Some(json!({"name":"Changed name","flow_json":unusable_flow})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
+    let after: (bool, String, String, Option<String>) =
+        sqlx::query_as("SELECT enabled, name, nodes_json, flow_json FROM rules WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(before, after);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_legacy_execution_flow_can_be_enabled_without_editor_document() -> Result<()> {
+    let (app, pool) = create_test_app_with_pool().await?;
+    let (_, created) = make_request(
+        &app,
+        "POST",
+        "/api/rules",
+        Some(json!({"name":"Legacy rule"})),
+    )
+    .await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+    let columns = voltage_rules::flow_column_values(&configured_flow())?;
+    // Historical compact-only rules intentionally have no editor document.
+    sqlx::query("UPDATE rules SET nodes_json = ?, flow_json = NULL WHERE id = ?")
+        .bind(columns.nodes_json)
+        .bind(id)
+        .execute(&pool)
+        .await?;
+    let (status, body) =
+        make_request(&app, "POST", &format!("/api/rules/{id}/enable"), None).await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let enabled: bool = sqlx::query_scalar("SELECT enabled FROM rules WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await?;
+    assert!(enabled);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_draft_can_be_disabled_and_missing_rule_returns_404() -> Result<()> {
+    let app = create_test_app().await?;
+    let (_, created) =
+        make_request(&app, "POST", "/api/rules", Some(json!({"name":"Draft"}))).await?;
+    let id = created["data"]["id"].as_i64().unwrap();
+    let (status, body) =
+        make_request(&app, "POST", &format!("/api/rules/{id}/disable"), None).await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let (status, body) = make_request(&app, "POST", "/api/rules/99999/enable", None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body:?}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_enable_disable_rule() -> Result<()> {
     let app = create_test_app().await?;
 
@@ -421,6 +666,16 @@ async fn test_enable_disable_rule() -> Result<()> {
     )
     .await?;
     let rule_id = create_body["data"]["id"].as_i64().unwrap();
+
+    // A draft must have its execution flow configured before enabling.
+    let (status, body) = make_request(
+        &app,
+        "PUT",
+        &format!("/api/rules/{rule_id}"),
+        Some(json!({"flow_json": configured_flow()})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
 
     // Enable the rule
     let (status, body) = make_request(

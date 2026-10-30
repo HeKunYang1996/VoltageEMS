@@ -335,21 +335,24 @@ pub async fn find_rule_by_name(pool: &SqlitePool, rule_name: &str) -> Result<Opt
 }
 
 /// Check whether a rule already exists for the given (service_type, channel_id, data_type, point_id)
-/// combination. Returns the first matching rule (enabled or disabled) if found.
+/// combination. Includes disabled rules; editing can exclude the current rule.
 pub async fn find_rule_by_point(
     pool: &SqlitePool,
     service_type: &str,
     channel_id: i64,
     data_type: &str,
     point_id: i64,
+    exclude_id: Option<i64>,
 ) -> Result<Option<AlertRule>> {
     sqlx::query_as::<_, AlertRule>(
-        "SELECT * FROM alert_rule WHERE service_type = ? AND channel_id = ? AND data_type = ? AND point_id = ? LIMIT 1",
+        "SELECT * FROM alert_rule WHERE service_type = ? AND channel_id = ? AND data_type = ? AND point_id = ? AND (? IS NULL OR id != ?) LIMIT 1",
     )
     .bind(service_type)
     .bind(channel_id)
     .bind(data_type)
     .bind(point_id)
+    .bind(exclude_id)
+    .bind(exclude_id)
     .fetch_optional(pool)
     .await
     .context("find rule by point")

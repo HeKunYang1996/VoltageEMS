@@ -64,8 +64,6 @@ pub fn create_rule_routes<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stat
         // Scheduler control
         .route("/api/scheduler/status", get(scheduler_status::<R, S>))
         .route("/api/scheduler/reload", post(scheduler_reload::<R, S>))
-        // Apply HTTP request logging middleware
-        .layer(axum::middleware::from_fn(common::logging::http_request_logger))
         .with_state(state)
 }
 
@@ -511,7 +509,8 @@ pub async fn get_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'static>(
     responses(
         (status = 200, description = "Rule updated successfully", body = serde_json::Value,
          example = json!({ "success": true, "data": { "id": "1", "status": "updated" } })),
-        (status = 404, description = "Rule not found")
+        (status = 404, description = "Rule not found"),
+        (status = 422, description = "Invalid update or missing execution flow for an enabled rule")
     ),
     tag = "rules"
 ))]
@@ -520,10 +519,13 @@ pub async fn update_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stati
     Path(id): Path<i64>,
     Json(req): Json<UpdateRuleRequest>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
+    // Reserve the write lock before reading, so concurrent WAL writers cannot
+    // invalidate a deferred read snapshot when the transaction upgrades to write.
+    let mut transaction = state.pool.begin_with("BEGIN IMMEDIATE").await?;
     // Check rule exists (properly propagate database errors)
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM rules WHERE id = ?)")
         .bind(id)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *transaction)
         .await
         .map_err(|e| {
             ModSrvError::DatabaseError(format!("Failed to check rule existence: {}", e))
@@ -604,13 +606,16 @@ pub async fn update_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stati
     }
     query = query.bind(id);
 
-    if let Err(e) = query.execute(&state.pool).await {
+    if let Err(e) = query.execute(&mut *transaction).await {
         error!("Update rule {}: {}", id, e);
         return Err(ModSrvError::InternalError(format!(
             "Failed to update rule in database: {}",
             e
         )));
     }
+
+    validate_enabled_rule(&mut transaction, id).await?;
+    transaction.commit().await?;
 
     // Reload scheduler to pick up changes
     if let Err(e) = state.scheduler.reload_rules().await {
@@ -661,18 +666,52 @@ pub async fn delete_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stati
     )))
 }
 
+/// Validate the prospective persisted state before committing an enable/update.
+/// Compact-only legacy rules are valid without an editor flow_json document.
+async fn validate_enabled_rule(
+    connection: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<(), ModSrvError> {
+    let (enabled, nodes_json): (bool, String) =
+        sqlx::query_as("SELECT enabled, nodes_json FROM rules WHERE id = ?")
+            .bind(id)
+            .fetch_optional(connection)
+            .await?
+            .ok_or_else(|| ModSrvError::RuleNotFound(id.to_string()))?;
+    if !enabled {
+        return Ok(());
+    }
+
+    let invalid_flow =
+        || ModSrvError::InvalidRule("请先配置有效的规则流程，再启用规则".to_string());
+    let flow: voltage_rules::RuleFlow =
+        serde_json::from_str(&nodes_json).map_err(|_| invalid_flow())?;
+    if flow.start_node.trim().is_empty()
+        || !matches!(
+            flow.nodes.get(&flow.start_node),
+            Some(RuleNode::Start { .. })
+        )
+    {
+        return Err(invalid_flow());
+    }
+    Ok(())
+}
+
 /// Enable a rule (joins the scheduler on the next tick).
 ///
 /// Sets `enabled=true` in the `rules` table and refreshes the scheduler's
 /// in-memory enabled set. The rule's next evaluation lands within
 /// `tick_ms` (default 100ms). Convenience over PUT with `{"enabled":
-/// true}`. Returns 404 if the rule id doesn't exist.
+/// true}`. Requires a configured execution flow; otherwise returns 422 without
+/// changing the enabled state. Returns 404 if the rule id doesn't exist.
 #[cfg_attr(feature = "swagger-ui", utoipa::path(
     post,
     path = "/api/rules/{id}/enable",
     params(("id" = i64, Path, description = "Rule identifier")),
     responses(
-        (status = 200, description = "Rule enabled", body = serde_json::Value)
+        (status = 200, description = "Rule enabled", body = serde_json::Value),
+        (status = 422, description = "Rule execution flow is not configured"),
+        (status = 404, description = "Rule not found")
     ),
     tag = "rules"
 ))]
@@ -680,12 +719,13 @@ pub async fn enable_rule<R: Rtdb + Send + Sync + 'static, S: StateStore + 'stati
     State(state): State<Arc<RuleEngineState<R, S>>>,
     Path(id): Path<i64>,
 ) -> Result<Json<SuccessResponse<serde_json::Value>>, ModSrvError> {
-    if let Err(e) = rule_repository::set_rule_enabled(&state.pool, id, true).await {
-        error!("Failed to enable rule {}: {}", id, e);
-        return Err(ModSrvError::InternalError(
-            "Failed to enable rule".to_string(),
-        ));
-    }
+    let mut transaction = state.pool.begin().await?;
+    sqlx::query("UPDATE rules SET enabled = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(id)
+        .execute(&mut *transaction)
+        .await?;
+    validate_enabled_rule(&mut transaction, id).await?;
+    transaction.commit().await?;
 
     // Reload scheduler
     if let Err(e) = state.scheduler.reload_rules().await {

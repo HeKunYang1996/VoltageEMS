@@ -257,8 +257,6 @@ pub fn create_routes(state: Arc<AppState>) -> Router {
         )
         .route("/api/admin/logs/files", get(list_log_files))
         .route("/api/admin/logs/view", get(view_log_file))
-        // Apply HTTP request logging middleware
-        .layer(axum::middleware::from_fn(common::logging::http_request_logger))
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB request body limit
         .with_state(state)
 }

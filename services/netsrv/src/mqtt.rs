@@ -380,7 +380,13 @@ async fn handle_write(state: Arc<AppState>, payload: Bytes) {
 
     let modsrv_url = state.config.read().await.modsrv_url.clone();
     let url = format!("{}/api/instances/write", modsrv_url.trim_end_matches('/'));
-    let response = state.http_client.post(url).json(&req).send().await;
+    let response = state
+        .http_client
+        .post(url)
+        .header(common::logging::INTERNAL_REQUEST_HEADER, "netsrv")
+        .json(&req)
+        .send()
+        .await;
 
     match response {
         Ok(resp) if resp.status().is_success() => {
@@ -452,7 +458,14 @@ async fn handle_call_alarm(state: Arc<AppState>, payload: Bytes) {
         "timestamp": Utc::now().timestamp()
     });
 
-    let (result, message) = match state.http_client.post(&url).json(&post_body).send().await {
+    let (result, message) = match state
+        .http_client
+        .post(&url)
+        .header(common::logging::INTERNAL_REQUEST_HEADER, "netsrv")
+        .json(&post_body)
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => {
             ("success".to_string(), "告警数据请求成功".to_string())
         },
@@ -560,7 +573,13 @@ pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyho
     let modsrv_url = state.config.read().await.modsrv_url.clone();
     let instances_url = format!("{}/api/instances/properties", modsrv_url);
 
-    let list = match state.http_client.get(&instances_url).send().await {
+    let list = match state
+        .http_client
+        .get(&instances_url)
+        .header(common::logging::INTERNAL_REQUEST_HEADER, "netsrv")
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(body) => {
                 let raw_list = body
@@ -616,7 +635,13 @@ pub async fn do_inst_sync(state: Arc<AppState>, msg_id: Option<String>) -> anyho
     };
 
     let topology_url = format!("{}/api/station/topology", modsrv_url);
-    let flow_json = match state.http_client.get(&topology_url).send().await {
+    let flow_json = match state
+        .http_client
+        .get(&topology_url)
+        .header(common::logging::INTERNAL_REQUEST_HEADER, "netsrv")
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => {
             let body = resp
                 .json::<serde_json::Value>()

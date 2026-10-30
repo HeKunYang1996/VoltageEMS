@@ -40,6 +40,7 @@ futures = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
+reqwest = { workspace = true }
 sha2 = { workspace = true }
 
 # JWT authentication

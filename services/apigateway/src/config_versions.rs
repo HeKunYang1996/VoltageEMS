@@ -27,6 +27,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::auth::Claims;
+use crate::config_services::restart_core_services;
 use crate::state::AppState;
 
 const DEFAULT_DATA_DIR: &str = "/app/data";
@@ -116,7 +117,7 @@ fn imports_dir() -> PathBuf {
     history_dir().join("imports")
 }
 
-struct OperationGuard;
+pub(crate) struct OperationGuard;
 
 impl Drop for OperationGuard {
     fn drop(&mut self) {
@@ -145,7 +146,7 @@ impl Drop for StagingDir {
 }
 
 #[derive(Debug)]
-struct ConfigFailure {
+pub(crate) struct ConfigFailure {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -175,7 +176,7 @@ impl IntoResponse for ConfigFailure {
     }
 }
 
-fn acquire_operation() -> Result<OperationGuard, ConfigFailure> {
+pub(crate) fn acquire_operation() -> Result<OperationGuard, ConfigFailure> {
     if CONFIG_OPERATION
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -1651,41 +1652,12 @@ async fn preserve_local_auth(
     Ok(())
 }
 
-fn restart_core_services() -> Vec<Value> {
-    let services = [
-        "voltageems-comsrv",
-        "voltageems-modsrv",
-        "voltageems-hissrv",
-        "voltageems-netsrv",
-        "voltageems-alarmsrv",
-    ];
-    services
-        .iter()
-        .map(|service| {
-            match std::process::Command::new("docker")
-                .args(["restart", service])
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    json!({"service": service, "success": true})
-                },
-                Ok(output) => json!({
-                    "service": service,
-                    "success": false,
-                    "error": String::from_utf8_lossy(&output.stderr)
-                }),
-                Err(e) => json!({"service": service, "success": false, "error": e.to_string()}),
-            }
-        })
-        .collect()
-}
-
-fn rollback_snapshot(snapshot: &VersionRow) -> Value {
+async fn rollback_snapshot(snapshot: &VersionRow) -> Value {
     match std::fs::read(&snapshot.archive_path)
         .and_then(|archive| extract_archive(&archive, &data_dir()))
     {
         Ok(_) => {
-            let restart_results = restart_core_services();
+            let restart_results = restart_core_services().await;
             let succeeded = restart_results
                 .iter()
                 .all(|result| result["success"].as_bool().unwrap_or(false));
@@ -1786,7 +1758,7 @@ async fn apply_archive(
     match copy_staged_data(staging.path(), &data_dir()) {
         Ok(()) => {},
         Err(e) => {
-            let rollback = rollback_snapshot(&rollback_version);
+            let rollback = rollback_snapshot(&rollback_version).await;
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
@@ -1801,19 +1773,28 @@ async fn apply_archive(
                 .into_response());
         },
     }
-    let restart_results = restart_core_services();
+    let restart_results = restart_core_services().await;
     let all_restarted = restart_results
         .iter()
         .all(|result| result["success"].as_bool().unwrap_or(false));
     if !all_restarted {
-        let rollback = rollback_snapshot(&rollback_version);
+        let failed_services: Vec<&str> = restart_results
+            .iter()
+            .filter(|result| result["success"] != true)
+            .filter_map(|result| result["service"].as_str())
+            .collect();
+        let message = format!(
+            "Configuration was applied, but services failed to become locally ready: {}",
+            failed_services.join(", ")
+        );
+        let rollback = rollback_snapshot(&rollback_version).await;
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "success": false,
                 "error": {
                     "code": "CONFIG_SERVICE_RESTART_FAILED",
-                    "message": "Configuration was applied, but one or more services failed to restart",
+                    "message": message,
                     "details": {
                         "restart_results": restart_results,
                         "rollback": rollback
@@ -1853,10 +1834,14 @@ async fn apply_archive(
     }))
 }
 
+/// Returns success only after all five containers are Running and local APIs are ready,
+/// including comsrv SHM and modsrv's action writer. Remote device/MQTT connectivity is not required.
+/// Allow at least 180 seconds at the client/proxy for restart and recovery.
 #[utoipa::path(post, path = "/api/v1/config/imports/{import_id}/apply", tag = "Config",
     security(("bearer_auth" = [])),
     params(("import_id" = String, Path, description = "Validated import ID")),
-    responses((status = 200, description = "Configuration imported")))]
+    responses((status = 200, description = "Configuration imported and all services are locally ready"),
+              (status = 503, description = "Local service readiness failed; includes restart and recovery results")))]
 pub async fn apply_import(
     State(state): State<std::sync::Arc<AppState>>,
     Extension(claims): Extension<Claims>,
@@ -1976,10 +1961,13 @@ pub async fn apply_import(
     }
 }
 
+/// Returns success only after all five containers are Running and local APIs are ready,
+/// including comsrv SHM and modsrv's action writer. Remote device/MQTT connectivity is not required.
 #[utoipa::path(post, path = "/api/v1/config/versions/{version_id}/restore", tag = "Config",
     security(("bearer_auth" = [])),
     params(("version_id" = String, Path, description = "Configuration version ID")),
-    responses((status = 200, description = "Configuration restored")))]
+    responses((status = 200, description = "Configuration restored and all services are locally ready"),
+              (status = 503, description = "Local service readiness failed; includes restart and recovery results")))]
 pub async fn restore_version(
     State(state): State<std::sync::Arc<AppState>>,
     Extension(claims): Extension<Claims>,

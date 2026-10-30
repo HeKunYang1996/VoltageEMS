@@ -28,6 +28,7 @@ use utoipa_swagger_ui::{Config, SwaggerUi};
 
 mod auth;
 mod config;
+mod config_services;
 mod config_versions;
 mod db;
 mod middleware_auth;
@@ -184,7 +185,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/users/{id}", delete(routes_auth::admin_delete_user))
         .route("/stats", get(routes_auth::get_auth_stats))
         .route("/cleanup-tokens", post(routes_auth::cleanup_tokens))
-        // nginx auth_request endpoints — one per permission level
+        // Shared token validation endpoints — one per permission level
         .route("/validate", get(routes_auth::validate_token))
         .route("/validate/engineer", get(routes_auth::validate_engineer_token))
         .route("/validate/admin", get(routes_auth::validate_admin_token))

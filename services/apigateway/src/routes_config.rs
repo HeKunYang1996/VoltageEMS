@@ -155,52 +155,37 @@ pub async fn check_config() -> impl IntoResponse {
 /// Issues a Docker restart for comsrv, modsrv, hissrv, netsrv, and alarmsrv.
 /// Required after any configuration change — whether a single-point PUT or a
 /// ZIP import. There is a brief unavailability window during restart; startup
-/// ordering (comsrv must precede modsrv) is handled internally. Returns
-/// per-service success/failure.
+/// ordering (comsrv must precede modsrv) is handled internally. Waits for all
+/// containers to be Running and local APIs (including required SHM components)
+/// to be ready, independently of remote device/MQTT connectivity.
 #[utoipa::path(post, path = "/api/v1/config/restart-services", tag = "Config",
     security(("bearer_auth" = [])),
-    responses((status = 200, description = "Service restart results")))]
+    responses((status = 200, description = "All services are locally ready"),
+              (status = 503, description = "One or more services failed to become ready")))]
 pub async fn restart_services() -> impl IntoResponse {
-    let services = [
-        "voltageems-comsrv",
-        "voltageems-modsrv",
-        "voltageems-hissrv",
-        "voltageems-netsrv",
-        "voltageems-alarmsrv",
-    ];
-    let mut results = Vec::new();
-
-    for svc in &services {
-        let output = std::process::Command::new("docker")
-            .args(["restart", svc])
-            .output();
-
-        match output {
-            Ok(o) if o.status.success() => {
-                info!("Restarted service: {}", svc);
-                results.push(json!({"service": svc, "success": true}));
-            },
-            Ok(o) => {
-                let err = String::from_utf8_lossy(&o.stderr).to_string();
-                error!("Restart {} failed: {}", svc, err);
-                results.push(json!({"service": svc, "success": false, "error": err}));
-            },
-            Err(e) => {
-                error!("Docker command error for {}: {}", svc, e);
-                results.push(json!({"service": svc, "success": false, "error": e.to_string()}));
-            },
-        }
-    }
+    let _guard = match crate::config_versions::acquire_operation() {
+        Ok(guard) => guard,
+        Err(error) => return error.into_response(),
+    };
+    let results = crate::config_services::restart_core_services().await;
 
     let all_ok = results
         .iter()
         .all(|r| r["success"].as_bool().unwrap_or(false));
-    Json(json!({
-        "success": all_ok,
-        "message": if all_ok { "服务重启成功" } else { "部分服务重启失败" },
-        "data": { "results": results }
-    }))
-    .into_response()
+    let status = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "success": all_ok,
+            "message": if all_ok { "服务重启成功" } else { "部分服务重启失败" },
+            "data": { "results": results }
+        })),
+    )
+        .into_response()
 }
 
 // ── POST /api/v1/config/upgrade ───────────────────────────────────────────────

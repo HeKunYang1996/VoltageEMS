@@ -17,7 +17,7 @@ test = false
 
 [dependencies]
 # Local dependencies
-common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum", "dependency"] }
+common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum", "dependency", "audit-auth"] }
 errors = { path = "../../libs/errors", features = ["axum-support"] }
 voltage-config = { path = "../../libs/voltage-config" }
 voltage-model = { path = "../../libs/voltage-model" }

@@ -862,12 +862,25 @@ pub fn get_log_level() -> String {
 fn redact_sensitive_fields(json_str: &str) -> String {
     use serde_json::{Value, json};
 
-    const SENSITIVE_KEYS: &[&str] = &["password", "token", "api_key", "secret", "authorization"];
+    const SENSITIVE_KEYS: &[&str] = &[
+        "password",
+        "passwd",
+        "token",
+        "api_key",
+        "apikey",
+        "secret",
+        "authorization",
+        "private_key",
+        "client_key",
+        "credential",
+        "cookie",
+        "pem",
+        "certificate",
+    ];
 
     // Try to parse as JSON
     let Ok(mut value) = serde_json::from_str::<Value>(json_str) else {
-        // If not valid JSON, return as-is
-        return json_str.to_string();
+        return "<omitted: invalid JSON>".to_string();
     };
 
     // Recursive redaction function
@@ -897,7 +910,8 @@ fn redact_sensitive_fields(json_str: &str) -> String {
     redact_recursive(&mut value);
 
     // Serialize back to string (compact format)
-    serde_json::to_string(&value).unwrap_or_else(|_| json_str.to_string())
+    serde_json::to_string(&value)
+        .unwrap_or_else(|_| "<omitted: JSON serialization failed>".to_string())
 }
 
 /// Truncate body string to maximum length
@@ -909,18 +923,18 @@ fn redact_sensitive_fields(json_str: &str) -> String {
 /// ```rust,ignore
 /// let long_body = "a".repeat(1000);
 /// let truncated = truncate_body(&long_body, 500);
-/// // Result: "aaa...aaa[truncated 500 bytes]"
+/// // Result: "aaa...[truncated 500 bytes]"
 /// ```
 fn truncate_body(body: &str, max_length: usize) -> String {
     if body.len() <= max_length {
         body.to_string()
     } else {
-        let truncated_bytes = body.len() - max_length;
-        format!(
-            "{}[truncated {} bytes]",
-            &body[..max_length],
-            truncated_bytes
-        )
+        let mut end = max_length;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        let truncated_bytes = body.len() - end;
+        format!("{}...[truncated {} bytes]", &body[..end], truncated_bytes)
     }
 }
 
@@ -934,9 +948,10 @@ fn truncate_body(body: &str, max_length: usize) -> String {
 ///
 /// # Design Decisions
 ///
-/// - **Body Recording at DEBUG**: Request body is only read and logged at DEBUG level
-/// - **Sensitive Field Redaction**: password, token, api_key, secret, authorization are filtered
-/// - **Body Truncation**: Body limited to 500 characters to prevent log bloat
+/// - **Body Recording**: Structured operation logs capture bounded JSON previews;
+///   the API access log includes a shorter request preview at DEBUG level
+/// - **Sensitive Field Redaction**: credential fields are filtered before storage
+/// - **Body Truncation**: DEBUG access log body limited to 500 bytes to prevent log bloat
 /// - **Simplified Fields**: Removed redundant headers (user_agent, content_type, content_length, is_error)
 /// - **No Duplicate Logging**: INFO and DEBUG levels are mutually exclusive
 ///
@@ -976,10 +991,7 @@ fn truncate_body(body: &str, max_length: usize) -> String {
 /// ```
 pub const INTERNAL_REQUEST_HEADER: &str = "x-voltage-internal-service";
 
-#[cfg(feature = "sqlite")]
-fn trusted_audit_identity(
-    req: &axum::extract::Request,
-) -> (Option<crate::operation_log::AuditActor>, Option<String>) {
+fn trusted_internal_service(req: &axum::extract::Request) -> Option<String> {
     use axum::extract::ConnectInfo;
     use std::net::SocketAddr;
 
@@ -987,30 +999,17 @@ fn trusted_audit_identity(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .is_some_and(|peer| peer.0.ip().is_loopback());
-    if !trusted_proxy {
-        return (None, None);
+    if !trusted_proxy
+        || req.headers().contains_key("x-forwarded-for")
+        || req.headers().contains_key("x-real-ip")
+    {
+        return None;
     }
-    let actor = req
-        .headers()
-        .get("x-voltage-audit-user-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<i64>().ok())
-        .zip(
-            req.headers()
-                .get("x-voltage-audit-username")
-                .and_then(|value| value.to_str().ok()),
-        )
-        .map(|(user_id, username)| crate::operation_log::AuditActor {
-            user_id,
-            username: crate::operation_log::decode_header_value(username),
-        });
-    let service = req
-        .headers()
+    req.headers()
         .get(INTERNAL_REQUEST_HEADER)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    (actor, service)
+        .map(str::to_owned)
 }
 
 fn is_internal_broadcast_request(req: &axum::extract::Request) -> bool {
@@ -1019,11 +1018,115 @@ fn is_internal_broadcast_request(req: &axum::extract::Request) -> bool {
             req.uri().path(),
             "/api/v1/broadcast" | "/netApi/alarm/broadcast"
         )
-        && req
-            .headers()
-            .get(INTERNAL_REQUEST_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|service| !service.is_empty())
+        && trusted_internal_service(req).is_some()
+}
+
+fn is_json_content_type(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            let media_type = value.trim().to_ascii_lowercase();
+            media_type == "application/json" || media_type.ends_with("+json")
+        })
+}
+
+fn preview_json_body(bytes: &[u8], max_display: usize) -> String {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return "<omitted: invalid JSON>".to_string();
+    };
+    if !matches!(
+        value,
+        serde_json::Value::Object(_) | serde_json::Value::Array(_)
+    ) {
+        return "<omitted: JSON is not an object or array>".to_string();
+    }
+    let serialized = value.to_string();
+    truncate_body(&redact_sensitive_fields(&serialized), max_display)
+}
+
+async fn capture_request_json(
+    req: axum::extract::Request,
+    max_read: usize,
+    max_display: usize,
+) -> (axum::extract::Request, Option<String>) {
+    use axum::body::{Body, HttpBody};
+
+    if !is_json_content_type(req.headers()) {
+        return (req, None);
+    }
+    match req.body().size_hint().exact() {
+        Some(0) => return (req, None),
+        Some(size) if size > max_read as u64 => {
+            return (
+                req,
+                Some(format!("<omitted: body exceeds {max_read} bytes>")),
+            );
+        },
+        None => return (req, Some("<omitted: body size unknown>".to_string())),
+        _ => {},
+    }
+    let (parts, body) = req.into_parts();
+    match axum::body::to_bytes(body, max_read).await {
+        Ok(bytes) => {
+            let preview = preview_json_body(&bytes, max_display);
+            (
+                axum::extract::Request::from_parts(parts, Body::from(bytes)),
+                Some(preview),
+            )
+        },
+        Err(error) => {
+            tracing::warn!("Body read failure: {}", error);
+            (
+                axum::extract::Request::from_parts(parts, Body::empty()),
+                Some("<omitted: body read failed>".to_string()),
+            )
+        },
+    }
+}
+
+#[cfg(feature = "sqlite")]
+async fn capture_response_json(
+    response: axum::response::Response,
+    max_read: usize,
+    max_display: usize,
+) -> (axum::response::Response, Option<String>) {
+    use axum::body::{Body, HttpBody};
+
+    if !is_json_content_type(response.headers()) {
+        return (response, None);
+    }
+    match response.body().size_hint().exact() {
+        Some(0) => return (response, None),
+        Some(size) if size > max_read as u64 => {
+            return (
+                response,
+                Some(format!("<omitted: body exceeds {max_read} bytes>")),
+            );
+        },
+        None => {
+            return (response, Some("<omitted: body size unknown>".to_string()));
+        },
+        _ => {},
+    }
+    let (parts, body) = response.into_parts();
+    match axum::body::to_bytes(body, max_read).await {
+        Ok(bytes) => {
+            let preview = preview_json_body(&bytes, max_display);
+            (
+                axum::response::Response::from_parts(parts, Body::from(bytes)),
+                Some(preview),
+            )
+        },
+        Err(error) => {
+            tracing::warn!("Response body read failure: {}", error);
+            (
+                axum::response::Response::from_parts(parts, Body::empty()),
+                Some("<omitted: body read failed>".to_string()),
+            )
+        },
+    }
 }
 
 pub async fn http_request_logger(
@@ -1033,13 +1136,13 @@ pub async fn http_request_logger(
     use std::time::Instant;
     use tracing::{Level, debug, info, level_enabled};
 
-    const MAX_BODY_LENGTH: usize = 500;
-    const MAX_BODY_READ: usize = 2048;
+    const MAX_BODY_READ: usize = 64 * 1024;
+    const MAX_BODY_PREVIEW: usize = 2048;
 
     // Internal alarm fan-out is high-frequency implementation traffic. The
     // originating user API call remains logged; only explicitly marked
     // downstream broadcast requests are omitted.
-    if is_internal_broadcast_request(&req) {
+    if is_internal_broadcast_request(&req) || req.uri().path() == "/api/v1/auth/refresh" {
         return next.run(req).await;
     }
 
@@ -1057,39 +1160,34 @@ pub async fn http_request_logger(
             .chars()
             .take(512)
             .collect::<String>();
-        let (actor, internal) = trusted_audit_identity(&req);
+        let internal = trusted_internal_service(&req);
         let request_id = req
             .headers()
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
             .filter(|value| value.len() <= 128)
             .map(str::to_owned);
-        (route, actor, internal, request_id)
+        (route, internal, request_id)
     };
     let start = Instant::now();
     #[cfg(feature = "sqlite")]
     let audit_started_at_ms = crate::operation_log::now_ms();
 
-    // Decide whether to read body (DEBUG + modifying method + small JSON only)
-    let should_read_body = level_enabled!(Level::DEBUG)
-        && matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
-        && req
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|ct| ct.contains("application/json"))
-        && req
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0)
-            <= MAX_BODY_READ;
+    #[cfg(feature = "sqlite")]
+    let should_audit = crate::operation_log::should_record(&method, uri.path());
+    #[cfg(not(feature = "sqlite"))]
+    let should_audit = false;
 
-    let (req, body_str) = if should_read_body {
-        extract_request_body(req, MAX_BODY_READ, MAX_BODY_LENGTH).await
+    // Auth bodies can contain reusable credentials and tokens. Only capture
+    // exact-size JSON bodies up to 64 KiB, leaving larger and streamed bodies intact.
+    let should_read_body = (should_audit || level_enabled!(Level::DEBUG))
+        && matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
+        && !uri.path().starts_with("/api/v1/auth/");
+
+    let (req, request_body) = if should_read_body {
+        capture_request_json(req, MAX_BODY_READ, MAX_BODY_PREVIEW).await
     } else {
-        (req, "-".to_string())
+        (req, None)
     };
 
     let response = next.run(req).await;
@@ -1097,9 +1195,19 @@ pub async fn http_request_logger(
     let status = response.status();
 
     #[cfg(feature = "sqlite")]
-    if crate::operation_log::should_record(&method, uri.path()) {
-        let (route, proxy_actor, internal, request_id) = audit_details;
-        let response_actor = response
+    let (response, response_body) = if should_audit
+        && !uri.path().starts_with("/api/v1/auth/")
+        && uri.path() != "/api/v1/operation-logs"
+    {
+        capture_response_json(response, MAX_BODY_READ, MAX_BODY_PREVIEW).await
+    } else {
+        (response, None)
+    };
+
+    #[cfg(feature = "sqlite")]
+    if should_audit {
+        let (route, internal, request_id) = audit_details;
+        let actor = response
             .extensions()
             .get::<crate::operation_log::AuditActor>();
         let submitted_username = response
@@ -1107,11 +1215,6 @@ pub async fn http_request_logger(
             .get::<crate::operation_log::AuditSubmittedUsername>()
             .map(|value| value.0.as_str());
         let service = AUDIT_SERVICE.get().map(String::as_str).unwrap_or("unknown");
-        let actor = response_actor.or_else(|| {
-            (service != "apigateway")
-                .then_some(proxy_actor.as_ref())
-                .flatten()
-        });
         let actor_type = if actor.is_some() {
             "user"
         } else if submitted_username.is_some() {
@@ -1137,6 +1240,8 @@ pub async fn http_request_logger(
                 .then_some(actor.is_some() && submitted_username.is_none()),
             duration_ms: duration.as_millis().min(i64::MAX as u128) as i64,
             request_id: request_id.as_deref(),
+            request_body: request_body.as_deref(),
+            response_body: response_body.as_deref(),
         })
         .await;
         if let Err(error) = result {
@@ -1156,14 +1261,14 @@ pub async fn http_request_logger(
         );
     }
 
-    if body_str != "-" {
+    if let Some(body_str) = request_body.as_deref() {
         debug!(
             target: "api_access",
             method = %method,
             path = %uri.path(),
             status = %status.as_u16(),
             duration_ms = %duration.as_millis(),
-            request_body = %body_str,
+            request_body = %truncate_body(body_str, 500),
             "HTTP request (detailed)"
         );
     } else if !matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
@@ -1178,36 +1283,6 @@ pub async fn http_request_logger(
     }
 
     response
-}
-
-/// Extract and redact request body for logging.
-///
-/// Reads the body, applies sensitive field redaction, truncates to max length,
-/// and reconstructs the request with the original bytes.
-async fn extract_request_body(
-    req: axum::extract::Request,
-    max_read: usize,
-    max_display: usize,
-) -> (axum::extract::Request, String) {
-    use axum::body::Body;
-
-    let (parts, body) = req.into_parts();
-    let bytes = match axum::body::to_bytes(body, max_read).await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!("Body read failure: {}", e);
-            let new_req = axum::extract::Request::from_parts(parts, Body::empty());
-            return (new_req, "-".to_string());
-        },
-    };
-
-    let body_str = match std::str::from_utf8(&bytes) {
-        Ok(s) => truncate_body(&redact_sensitive_fields(s), max_display),
-        Err(_) => "<binary data>".to_string(),
-    };
-
-    let new_req = axum::extract::Request::from_parts(parts, Body::from(bytes));
-    (new_req, body_str)
 }
 
 // ============================================================================
@@ -1271,7 +1346,7 @@ mod tests {
 
     #[cfg(feature = "sqlite")]
     #[test]
-    fn audit_headers_require_loopback_peer() {
+    fn client_audit_headers_are_never_used_as_identity() {
         use axum::extract::ConnectInfo;
 
         let mut request = axum::extract::Request::builder()
@@ -1280,29 +1355,47 @@ mod tests {
             .header("x-voltage-audit-username", "%E6%B5%8B%E8%AF%95")
             .body(Body::empty())
             .unwrap();
-        assert!(trusted_audit_identity(&request).0.is_none());
-        request.extensions_mut().insert(ConnectInfo(
-            "192.0.2.5:1234".parse::<std::net::SocketAddr>().unwrap(),
-        ));
-        assert!(trusted_audit_identity(&request).0.is_none());
+        assert!(trusted_internal_service(&request).is_none());
         request.extensions_mut().insert(ConnectInfo(
             "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
         ));
-        let (actor, _) = trusted_audit_identity(&request);
-        let actor = actor.unwrap();
-        assert_eq!(actor.user_id, 42);
-        assert_eq!(actor.username, "测试");
+        assert!(trusted_internal_service(&request).is_none());
+    }
+
+    #[test]
+    fn proxied_broadcast_cannot_skip_operation_log() {
+        use axum::extract::ConnectInfo;
+
+        let mut request = axum::extract::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/netApi/alarm/broadcast")
+            .header(INTERNAL_REQUEST_HEADER, "netsrv")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        assert!(is_internal_broadcast_request(&request));
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", "192.0.2.1".parse().unwrap());
+        assert!(!is_internal_broadcast_request(&request));
     }
 
     #[test]
     fn skips_only_marked_internal_broadcast_requests() {
+        use axum::extract::ConnectInfo;
+
         for path in ["/api/v1/broadcast", "/netApi/alarm/broadcast"] {
-            let request = axum::extract::Request::builder()
+            let mut request = axum::extract::Request::builder()
                 .method("POST")
                 .uri(path)
                 .header(INTERNAL_REQUEST_HEADER, "alarmsrv")
                 .body(Body::empty())
                 .unwrap();
+            request.extensions_mut().insert(ConnectInfo(
+                "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+            ));
             assert!(is_internal_broadcast_request(&request));
         }
 
@@ -1313,12 +1406,15 @@ mod tests {
             .unwrap();
         assert!(!is_internal_broadcast_request(&manual_broadcast));
 
-        let marked_user_request = axum::extract::Request::builder()
+        let mut marked_user_request = axum::extract::Request::builder()
             .method("POST")
             .uri("/api/v1/config")
             .header(INTERNAL_REQUEST_HEADER, "alarmsrv")
             .body(Body::empty())
             .unwrap();
+        marked_user_request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+        ));
         assert!(!is_internal_broadcast_request(&marked_user_request));
     }
 
@@ -1373,7 +1469,7 @@ mod tests {
     fn test_truncate_body_long_string() {
         let body = "hello world";
         let result = truncate_body(body, 5);
-        assert_eq!(result, "hello[truncated 6 bytes]");
+        assert_eq!(result, "hello...[truncated 6 bytes]");
     }
 
     #[test]
@@ -1387,7 +1483,7 @@ mod tests {
     fn test_truncate_body_max_zero() {
         let body = "hello";
         let result = truncate_body(body, 0);
-        assert_eq!(result, "[truncated 5 bytes]");
+        assert_eq!(result, "...[truncated 5 bytes]");
     }
 
     #[test]
@@ -1486,8 +1582,112 @@ mod tests {
     fn test_redact_invalid_json() {
         let invalid_json = "not valid json";
         let result = redact_sensitive_fields(invalid_json);
-        // Should return as-is
-        assert_eq!(result, "not valid json");
+        assert_eq!(result, "<omitted: invalid JSON>");
+    }
+
+    #[test]
+    fn audit_preview_redacts_nested_credentials_and_omits_invalid_json() {
+        let body =
+            br#"{"name":"sample","options":{"private_key":"secret-key","refresh_token":"abc"}}"#;
+        let preview = preview_json_body(body, 2048);
+        assert!(preview.contains("sample"));
+        assert!(!preview.contains("secret-key"));
+        assert!(!preview.contains("abc"));
+        assert_eq!(preview_json_body(b"{", 2048), "<omitted: invalid JSON>");
+    }
+
+    #[test]
+    fn body_preview_truncates_at_utf8_boundary() {
+        assert_eq!(truncate_body("中文abc", 4), "中...[truncated 6 bytes]");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn json_capture_preserves_request_and_response_bodies() {
+        use axum::body::to_bytes;
+        use axum::response::IntoResponse;
+
+        let request = axum::extract::Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"name":"sample","password":"secret"}"#))
+            .unwrap();
+        let (request, preview) = capture_request_json(request, 2048, 2048).await;
+        assert_eq!(
+            preview.as_deref(),
+            Some(r#"{"name":"sample","password":"***REDACTED***"}"#)
+        );
+        assert_eq!(
+            to_bytes(request.into_body(), 2048).await.unwrap().as_ref(),
+            br#"{"name":"sample","password":"secret"}"#
+        );
+
+        let response = axum::Json(serde_json::json!({"success": true, "access_token": "secret"}))
+            .into_response();
+        let (response, preview) = capture_response_json(response, 2048, 2048).await;
+        assert_eq!(
+            preview.as_deref(),
+            Some(r#"{"access_token":"***REDACTED***","success":true}"#)
+        );
+        let body = to_bytes(response.into_body(), 2048).await.unwrap();
+        let original: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(original["access_token"], "secret");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn oversized_json_preview_redacts_then_truncates_without_changing_bodies() {
+        use axum::body::to_bytes;
+        use axum::response::IntoResponse;
+
+        let request_body = serde_json::json!({
+            "api_key": "request-secret",
+            "data": "x".repeat(10_000)
+        })
+        .to_string();
+        let request = axum::extract::Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(request_body.clone()))
+            .unwrap();
+        let (request, preview) = capture_request_json(request, 64 * 1024, 2048).await;
+        let preview = preview.unwrap();
+        assert!(preview.contains("***REDACTED***"));
+        assert!(!preview.contains("request-secret"));
+        assert!(preview.contains("...[truncated "));
+        assert_eq!(
+            to_bytes(request.into_body(), 64 * 1024).await.unwrap(),
+            request_body
+        );
+
+        let response_body = serde_json::json!({
+            "access_token": "response-secret",
+            "data": "y".repeat(10_000)
+        });
+        let response = axum::Json(response_body.clone()).into_response();
+        let (response, preview) = capture_response_json(response, 64 * 1024, 2048).await;
+        let preview = preview.unwrap();
+        assert!(preview.contains("***REDACTED***"));
+        assert!(!preview.contains("response-secret"));
+        assert!(preview.contains("...[truncated "));
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            response_body
+        );
+
+        let huge_body = serde_json::json!({ "data": "z".repeat(70_000) }).to_string();
+        let request = axum::extract::Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(huge_body.clone()))
+            .unwrap();
+        let (request, preview) = capture_request_json(request, 64 * 1024, 2048).await;
+        assert_eq!(
+            preview.as_deref(),
+            Some("<omitted: body exceeds 65536 bytes>")
+        );
+        assert_eq!(
+            to_bytes(request.into_body(), 80_000).await.unwrap(),
+            huge_body
+        );
     }
 
     #[test]

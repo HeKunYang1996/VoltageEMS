@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Local dependencies
-common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum", "openapi"] }
+common = { path = "../../libs/common", default-features = false, features = ["redis", "sqlite", "axum", "openapi", "audit-auth"] }
 errors = { path = "../../libs/errors", features = ["axum-support"] }
 voltage-config = { path = "../../libs/voltage-config", features = ["openapi"] }
 voltage-model = { path = "../../libs/voltage-model" }

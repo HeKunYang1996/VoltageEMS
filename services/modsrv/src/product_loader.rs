@@ -336,7 +336,7 @@ mod tests {
             let topology = product.topology.as_ref().unwrap();
             assert_eq!(topology.connections[0].products, ["Hybrid_Inverter", "PCS"]);
             assert_eq!(topology.connections[0].min, 1);
-            assert_eq!(topology.connections[0].max, Some(1));
+            assert_eq!(topology.connections[0].max, None);
             assert!(!product.measurements.is_empty());
             assert_eq!(
                 product.measurements[0]

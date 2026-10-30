@@ -393,7 +393,7 @@ mod tests {
         let topology = battery.topology.as_ref().expect("Battery topology");
         assert_eq!(topology.connections[0].products, ["Hybrid_Inverter", "PCS"]);
         assert_eq!(topology.connections[0].min, 1);
-        assert_eq!(topology.connections[0].max, Some(1));
+        assert_eq!(topology.connections[0].max, None);
         assert!(!battery.measurements.is_empty());
         assert!(battery.measurements.iter().any(|point| {
             point
