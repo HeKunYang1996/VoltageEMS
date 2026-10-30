@@ -20,9 +20,9 @@
           Value Monitoring
         </el-button>
       </div>
-      <div v-if="topoStore.pvGroups.length > 1" class="device-group-selector">
+      <div v-if="topoStore.pvGroups.length" class="device-group-selector">
         <span>PV System:</span>
-        <el-select v-model="topoStore.selectedPvGroupId" size="small" fit-input-width :title="topoStore.selectedPvGroup?.displayName ?? ''">
+        <el-select v-model="topoStore.selectedPvGroupId" size="small" fit-input-width :title="selectedSystemName">
           <el-option v-for="group in topoStore.pvGroups" :key="group.id" :label="group.displayName" :value="group.id">
             <span class="select-option-text" :title="group.displayName">{{ group.displayName }}</span>
           </el-option>
@@ -46,6 +46,7 @@ import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 const route = useRoute()
 const router = useRouter()
 const topoStore = useDeviceTopologyStore()
+const selectedSystemName = computed(() => topoStore.selectedPvGroup?.displayName ?? '')
 
 // 根据当前路由计算激活的标签
 const activeTab = computed(() => {

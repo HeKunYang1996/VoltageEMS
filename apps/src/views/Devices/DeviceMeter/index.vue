@@ -1,6 +1,6 @@
 <template>
   <div class="devices-meter vt-page-shell">
-    <div v-if="meterInstances.length > 1" class="devices-meter__header">
+    <div v-if="meterInstances.length" class="devices-meter__header">
       <div class="device-instance-selector">
         <span>Meter:</span>
         <el-select
@@ -62,7 +62,7 @@ watch(meterInstances, (items) => {
   margin-left: auto;
 }
 .device-instance-selector .el-select {
-  width: 1.8rem;
+  width: 2rem;
 }
 .devices-meter__content {
   min-height: 0;

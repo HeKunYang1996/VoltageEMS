@@ -8,7 +8,9 @@ export const batchQueryHistory = async (
   signal?: AbortSignal,
 ): Promise<ApiResponse<BatchQueryData>> => {
   const response = await Request.post<BatchQueryData>(
-    '/hisApi/data/batch-query', data, signal ? { signal } : undefined,
+    // Each history view owns its loading and cancellation scope. The global
+    // duplicate-request handler must not cancel another view's history query.
+    '/hisApi/data/batch-query', data, { signal, skipGlobalLoading: true },
   )
   // hissrv returns `time`; keep the existing frontend `timestamp` contract.
   if (response.data?.series) {

@@ -7,9 +7,12 @@
       </el-select>
     </div>
     <LoadingBg :loading="loading">
-      <el-empty v-if="error" description="Unable to load device points" />
-      <el-empty v-else-if="!loading && !channelIds.length" description="No mapped device channel" />
-      <DeviceMonitoringTable v-else :left-table-data="leftTableData" :right-table-data="rightTableData" />
+      <el-empty v-if="error" :image="''" description="Unable to load device points" />
+      <DeviceMonitoringTable
+        v-else
+        :left-table-data="leftTableData"
+        :right-table-data="rightTableData"
+      />
     </LoadingBg>
   </div>
 </template>

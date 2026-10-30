@@ -3,11 +3,13 @@ import { getInstancePoints } from '@/api/devicesManagement'
 import type { InstanceMeasurementItem } from '@/types/deviceConfiguration'
 import useTopologySubscribe from '@/composables/useTopologySubscribe'
 import wsManager from '@/utils/websocket'
+import { parseSampleTimestamp } from '@/utils/common'
 
 /** Product measurement definitions and values for exactly the selected instance. */
-export function useInstanceMeasurements(getInstanceId: () => number | undefined) {
+export function useInstanceMeasurements(getInstanceId: () => number | undefined, options: { realtime?: boolean } = {}) {
   const measurements = ref<InstanceMeasurementItem[]>([])
   const values = ref<Record<string, number | string | null>>({})
+  const timestamps = ref<Record<string, number | null>>({})
   const loading = ref(false)
   const error = ref(false)
   let version = 0
@@ -16,6 +18,7 @@ export function useInstanceMeasurements(getInstanceId: () => number | undefined)
     const current = ++version
     measurements.value = []
     values.value = {}
+    timestamps.value = {}
     error.value = false
     loading.value = instanceId !== undefined
     if (instanceId === undefined) return
@@ -37,14 +40,24 @@ export function useInstanceMeasurements(getInstanceId: () => number | undefined)
     channel_id: number
     data_type: string
     values: Record<string, number | string | null>
+    ts?: Record<string, number | string | null>
   }) {
     if (wsManager.status.value !== 'connected' || update.channel_id !== getInstanceId() ||
       update.data_type !== 'M' || update.source !== 'inst') return
-    values.value = update.values
+    const nextValues: Record<string, number | string | null> = {}
+    const nextTimestamps: Record<string, number | null> = {}
+    for (const [field, rawValue] of Object.entries(update.values)) {
+      const sampleTs = parseSampleTimestamp(update.ts?.[field])
+      nextTimestamps[field] = sampleTs
+      nextValues[field] = sampleTs === null ? null : rawValue
+    }
+    values.value = nextValues
+    timestamps.value = nextTimestamps
   }
 
   useTopologySubscribe(
     () => {
+      if (options.realtime === false) return []
       const id = getInstanceId()
       return id === undefined ? [] : [id]
     },
@@ -55,9 +68,12 @@ export function useInstanceMeasurements(getInstanceId: () => number | undefined)
     },
   )
   watch(wsManager.status, (status) => {
-    if (status !== 'connected') values.value = {}
+    if (status !== 'connected') {
+      values.value = {}
+      timestamps.value = {}
+    }
   }, { flush: 'sync' })
   onScopeDispose(() => { version++ })
 
-  return { measurements, values, loading, error }
+  return { measurements, values, timestamps, loading, error, applyUpdate }
 }

@@ -197,7 +197,8 @@ export interface HomepageBatchMessage extends WebSocketMessage {
     updates: Array<{
       id: number
       name: string
-      values: number
+      values: number | null
+      ts?: number | null
       unit: string
       imgurl?: string
     }>

@@ -21,7 +21,8 @@
       <div class="home-left-bottom">
         <div class="home-left-LineChart">
           <ModuleCard title="Power Curve">
-            <LineChart
+            <div v-if="historyState !== 'ready'" class="home-chart-empty">{{ historyNotice }}</div>
+            <LineChart v-else
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="lineChartYAxiosOption"
               :series="lineChartSeries"
@@ -30,10 +31,11 @@
         </div>
         <div class="home-left-EnergyChart">
           <ModuleCard title="Energy Chart">
-            <StackedBarChart
+            <div v-if="historyState !== 'ready'" class="home-chart-empty">{{ historyNotice }}</div>
+            <StackedBarChart v-else
               :xAxiosOption="xAxiosOption"
               :yAxiosOption="yAxiosOption"
-              :series="exampleSeries"
+              :series="energySeries"
             />
           </ModuleCard>
         </div>
@@ -138,7 +140,9 @@
               />
               <div class="alarms__item-msg" :title="item.alarmMsg">{{ item.alarmMsg }}</div>
             </div>
-            <div v-if="!alarmInfoList.length && !refreshingAlarms" class="home-alarmsEmpty">No current alarms</div>
+            <div v-if="!alarmInfoList.length" class="home-alarmsEmpty">
+              {{ refreshingAlarms ? 'Loading alarms...' : alarmLoadState === 'ready' ? 'No current alarms' : 'Alarm data unavailable' }}
+            </div>
           </div>
         </ModuleCard>
       </div>
@@ -150,14 +154,8 @@
 import type { EnergyCard } from '@/types/home'
 import { HOMEPAGE_POINT_IDS } from '@/types/home'
 import useWebSocket from '@/composables/useWebSocket'
-import {
-  isHomepageDemoMode,
-  shouldSubscribeHomepageWebSocket,
-  useHomepageDemo,
-} from '@/composables/useHomepageDemo'
-import { formatNumber } from '@/utils/common'
+import { formatNumber, parseSampleTimestamp } from '@/utils/common'
 
-const isDemoMode = isHomepageDemoMode()
 
 import ModuleCard from '@/components/card/ModuleCard.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
@@ -170,7 +168,8 @@ import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } f
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
-import { watch, onUnmounted } from 'vue'
+import { watch, onMounted, onUnmounted } from 'vue'
+import wsManager from '@/utils/websocket'
 
 import alarmL1 from '@/assets/icons/home-alarm-L1.svg'
 import alarmL2 from '@/assets/icons/home-alarm-L2.svg'
@@ -214,7 +213,7 @@ function getIconByImgurl(imgurl?: string): string {
 interface PointInfo {
   id: number
   name: string
-  values: string | number
+  values: number | null
   unit: string
   imgurl?: string
 }
@@ -286,10 +285,11 @@ const tuopuData = computed(() => {
       ? {
           ...p,
           name: p.name ?? defaultName,
+          rawValue: p.values,
           value: displayValue(p.values),
           unit: p.unit ?? defaultUnit,
         }
-      : { id: undefined, name: defaultName, value: '-' as const, unit: defaultUnit }
+      : { id: undefined, name: defaultName, rawValue: null, value: '-' as const, unit: defaultUnit }
   return {
     pv: {
       P: fmt(
@@ -365,38 +365,42 @@ const deviceInfoList = computed<DeviceSlide[]>(() =>
 
 /** 应用 homepage_batch 推送数据*/
 function applyHomepageBatch(data: {
-  updates?: Array<{ id: number; name: string; values?: number; unit: string; imgurl?: string }>
+  updates?: Array<{ id: number; name: string; values?: number | null; ts?: number | null; unit: string; imgurl?: string }>
 }) {
   const updates = data?.updates ?? []
-
+  // Every batch is a full snapshot. Removed points must not retain old readings.
+  Object.keys(pointStore).forEach((id) => { delete pointStore[Number(id)] })
   for (const u of updates) {
     pointStore[u.id] = {
       id: u.id,
       name: u.name,
-      values: u.values !== null && u.values !== undefined ? formatNumber(u.values) : '-',
+      // A push timestamp is not a measurement timestamp. Initial SHM zeros have no sample.
+      values: parseSampleTimestamp(u.ts) !== null && typeof u.values === 'number' && Number.isFinite(u.values)
+        ? u.values : null,
       unit: u.unit,
       imgurl: u.imgurl,
     }
   }
 }
 
-/** 首页 WebSocket 订阅：进入订阅、离开取消（演示模式跳过） */
-if (shouldSubscribeHomepageWebSocket()) {
-  useWebSocket(
-    {
-      source: 'homepage',
-      interval: 1000,
+/** Homepage cards and topology always use backend custom bindings. */
+watch(wsManager.status, (status) => {
+  if (status !== 'connected') Object.keys(pointStore).forEach((id) => { delete pointStore[Number(id)] })
+}, { flush: 'sync' })
+useWebSocket(
+  {
+    source: 'homepage',
+    interval: 1000,
+  },
+  {
+    onBatchDataUpdate: (data: any) => {
+      if (wsManager.status.value === 'connected' && Array.isArray(data?.updates)) {
+        applyHomepageBatch(data)
+      }
     },
-    {
-      onBatchDataUpdate: (data: any) => {
-        if (data?.updates?.length) {
-          applyHomepageBatch(data)
-        }
-      },
-      onAlarm: handleHomeAlarm,
-    },
-  )
-}
+    onAlarm: handleHomeAlarm,
+  },
+)
 
 interface HomeAlarmItem {
   id: number | string
@@ -409,10 +413,12 @@ type HomeAlarmSource = CurrentAlarmData | AlarmMessage['data']
 
 const alarmInfoList = ref<HomeAlarmItem[]>([])
 const refreshingAlarms = ref(false)
+const alarmLoadState = ref<'loading' | 'ready' | 'error'>('loading')
 const alarmPullDistance = ref(0)
 const alarmTouchStartY = ref<number | null>(null)
 const ALARM_PULL_TRIGGER = 48
 let alarmListVersion = 0
+let alarmRequestVersion = 0
 const alarmLevelText: Record<number, string> = {
   1: 'Critical Alarm',
   2: 'Warning Alarm',
@@ -445,22 +451,35 @@ const toHomeAlarm = (alarm: HomeAlarmSource): HomeAlarmItem => {
 
 const fetchHomeAlarms = async () => {
   const requestVersion = alarmListVersion
+  const requestToken = ++alarmRequestVersion
   refreshingAlarms.value = true
   try {
     const response = await getCurrentAlarms({ page: 1, page_size: 8 })
+    if (requestToken !== alarmRequestVersion) return
     if (response.success && requestVersion === alarmListVersion) {
       alarmInfoList.value = (response.data?.list ?? []).map(toHomeAlarm)
+      alarmLoadState.value = 'ready'
+    } else if (requestVersion === alarmListVersion) {
+      alarmInfoList.value = []
+      alarmLoadState.value = 'error'
     }
   } catch (error) {
+    if (requestToken === alarmRequestVersion && requestVersion === alarmListVersion) {
+      alarmInfoList.value = []
+      alarmLoadState.value = 'error'
+    }
     console.error('Failed to fetch current alarms:', error)
   } finally {
-    refreshingAlarms.value = false
-    alarmPullDistance.value = 0
+    if (requestToken === alarmRequestVersion) {
+      refreshingAlarms.value = false
+      alarmPullDistance.value = 0
+    }
   }
 }
 
 function handleHomeAlarm(alarm: AlarmMessage['data']) {
   alarmListVersion += 1
+  alarmLoadState.value = 'ready'
   const id = alarm.alarm_id
   if (alarm.status === 0) {
     alarmInfoList.value = alarmInfoList.value.filter((item) => String(item.id) !== String(id))
@@ -485,20 +504,30 @@ const handleAlarmTouchMove = (event: TouchEvent) => {
 
 const handleAlarmTouchEnd = () => {
   if (alarmPullDistance.value >= ALARM_PULL_TRIGGER) {
-    if (isDemoMode) demoControls?.refreshAlarms()
-    else fetchHomeAlarms()
+    fetchHomeAlarms()
   } else {
     alarmPullDistance.value = 0
   }
   alarmTouchStartY.value = null
 }
 
-if (!isDemoMode) {
-  fetchHomeAlarms()
-}
+fetchHomeAlarms()
+watch(wsManager.status, (status) => {
+  if (status === 'connected') fetchHomeAlarms()
+  else {
+    alarmListVersion += 1
+    alarmRequestVersion += 1
+    refreshingAlarms.value = false
+    alarmInfoList.value = []
+    alarmLoadState.value = 'error'
+  }
+})
 
 // ─── 图表数据（Power Curve + Energy Chart）────────────────────
 const chartXAxisData = ref<string[]>([])
+const historyState = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
+const historyNotice = computed(() => historyState.value === 'error'
+  ? 'Historical data unavailable' : historyState.value === 'loading' ? 'Loading history...' : 'No history data')
 
 const lineChartSeries = ref([
   { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
@@ -506,7 +535,7 @@ const lineChartSeries = ref([
   { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
 ])
 
-const exampleSeries = ref([
+const energySeries = ref([
   { name: 'PV', data: [] as (number | null)[], color: 'rgba(105, 203, 255, 1)' },
   { name: 'DG', data: [] as (number | null)[], color: 'rgba(246, 200, 95, 1)' },
   { name: 'ESS', data: [] as (number | null)[], color: 'rgba(29, 134, 255, 1)' },
@@ -517,63 +546,83 @@ const yAxiosOption = { yUnit: 'kWh' }
 const lineChartYAxiosOption = { yUnit: 'kW' }
 
 const fmtLabel = (ts: string) => dayjs(ts).format('HH:mm')
-const statistics = useEnergyStatistics(() => !isDemoMode)
+const statistics = useEnergyStatistics(() => true, { realtime: false })
 let chartRequestToken = 0
 let chartAbortController: AbortController | undefined
+let activeChartKey: string | undefined
 
 const fetchHomeChartData = async () => {
+  if (statistics.loading.value) {
+    chartRequestToken += 1
+    chartAbortController?.abort()
+    activeChartKey = undefined
+    historyState.value = 'loading'
+    return
+  }
   const metrics = statistics.metrics.value
   const series = statisticRequests(metrics)
+  const key = JSON.stringify(metrics)
+  if (activeChartKey === key) return
   const myToken = ++chartRequestToken
   chartAbortController?.abort()
   chartAbortController = new AbortController()
+  const controller = chartAbortController
+  activeChartKey = undefined
   chartXAxisData.value = []
   lineChartSeries.value = []
-  exampleSeries.value = []
-  if (!series.length) return
+  energySeries.value = []
+  if (!series.length) {
+    historyState.value = 'empty'
+    return
+  }
+  historyState.value = 'loading'
+  activeChartKey = key
   const range = getRecentHoursRange(6)
   try {
     const res = await batchQueryHistory({
       start_time: range.start!, end_time: range.end!,
       limit_per_series: STATISTIC_HISTORY_LIMIT, series,
-    }, chartAbortController.signal)
-    if (myToken !== chartRequestToken || !res.success) return
+    }, controller.signal)
+    if (myToken !== chartRequestToken) return
+    if (!res.success) {
+      historyState.value = 'error'
+      return
+    }
     const chart = buildStatisticChartData(metrics, res.data?.series ?? [])
     chartXAxisData.value = chart.timestamps.map(fmtLabel)
+    historyState.value = chart.timestamps.length ? 'ready' : 'empty'
     lineChartSeries.value = [
       { name: 'PV', data: chart.values('pvPower'), color: 'rgba(105, 203, 255, 1)' },
       { name: 'DG', data: chart.values('dgPower'), color: 'rgba(246, 200, 95, 1)' },
       { name: 'ESS', data: chart.values('essPower'), color: 'rgba(29, 134, 255, 1)' },
     ]
-    exampleSeries.value = [
+    energySeries.value = [
       { name: 'PV', data: chart.values('pvEnergy'), color: 'rgba(105, 203, 255, 1)' },
       { name: 'DG', data: chart.values('dgEnergy'), color: 'rgba(246, 200, 95, 1)' },
       { name: 'ESS Discharge', data: chart.values('essEnergy'), color: 'rgba(29, 134, 255, 1)' },
     ]
   } catch (error) {
-    if (myToken !== chartRequestToken || chartAbortController.signal.aborted) return
+    if (myToken !== chartRequestToken || controller.signal.aborted) return
+    historyState.value = 'error'
     console.error('Failed to fetch home chart data:', error)
+  } finally {
+    if (myToken === chartRequestToken) activeChartKey = undefined
   }
 }
 
-let demoControls: ReturnType<typeof useHomepageDemo> | null = null
-
-if (isDemoMode) {
-  demoControls = useHomepageDemo({
-    applyHomepageBatch,
-    alarmInfoList,
-    chartXAxisData,
-    lineChartSeries,
-    exampleSeries,
-  })
-} else {
-  watch(statistics.metrics, fetchHomeChartData, { immediate: true })
-}
+watch([statistics.loading, statistics.metrics], fetchHomeChartData, { immediate: true })
+let historyTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  historyTimer = setInterval(fetchHomeChartData, 60_000)
+})
 
 onUnmounted(() => {
   // 标记旧请求失效，防止卸载后回调写入已销毁组件
   chartRequestToken += 1
   chartAbortController?.abort()
+  alarmListVersion += 1
+  alarmRequestVersion += 1
+  if (historyTimer) clearInterval(historyTimer)
 })
 
 // Carousel引用
@@ -593,6 +642,15 @@ const handleNext = () => {
 </script>
 
 <style scoped lang="scss">
+.home-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--vt-text-secondary);
+  font-size: 0.14rem;
+}
+
 .home {
   position: relative;
   width: 100%;

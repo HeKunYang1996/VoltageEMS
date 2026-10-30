@@ -27,13 +27,20 @@ describe('selected instance measurement values', () => {
       result = useInstanceMeasurements(() => instanceId.value)
       return () => h('div')
     } }))
-    function push(source: string, id: number, values: Record<string, number>) {
+    function push(
+      source: string,
+      id: number,
+      values: Record<string, number>,
+      ts?: Record<string, number>,
+    ) {
       const calls = vi.mocked(wsManager.subscribe).mock.calls
       calls[calls.length - 1][1].onBatchDataUpdate!({ updates: [
-        { source, channel_id: id, data_type: 'M', values },
+        { source, channel_id: id, data_type: 'M', values, ts },
       ] } as any)
     }
     push('inst', 1, { 3: 42 })
+    expect(result.values.value).toEqual({ 3: null })
+    push('inst', 1, { 3: 42 }, { 3: 1_700_000_000_000 })
     expect(result.values.value).toEqual({ 3: 42 })
     instanceId.value = 2
     expect(result.values.value).toEqual({})
@@ -45,8 +52,10 @@ describe('selected instance measurement values', () => {
     push('inst', 1, { 7: 88 })
     push(undefined as any, 2, { 7: 77 })
     expect(result.values.value).toEqual({})
-    push('inst', 2, { 7: 0 })
+    push('inst', 2, { 7: 0 }, { 7: 1_700_000_000_000 })
     expect(result.values.value).toEqual({ 7: 0 })
+    push('inst', 2, { 7: 0 }, { 7: 0 })
+    expect(result.values.value).toEqual({ 7: null })
     wsManager.status.value = 'disconnected'
     expect(result.values.value).toEqual({})
     wrapper.unmount()
@@ -67,4 +76,16 @@ describe('selected instance measurement values', () => {
     expect(result.measurements.value).toEqual([])
     wrapper.unmount()
   })
+  it('loads metadata without subscribing when used by homepage history', async () => {
+    vi.mocked(getInstancePoints).mockResolvedValue({ success: true, data: { measurements: [] } } as any)
+    const wrapper = mount(defineComponent({ setup() {
+      useInstanceMeasurements(() => 1, { realtime: false })
+      return () => h('div')
+    } }))
+    await flushPromises()
+    expect(getInstancePoints).toHaveBeenCalledWith(1)
+    expect(wsManager.subscribe).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
 })

@@ -4,6 +4,23 @@
  * @param value 要格式化的值
  * @returns 格式化后的字符串
  */
+/** Backend uses ts <= 0 when no valid sample exists (SHM init / missing :ts sidecar). */
+export function parseSampleTimestamp(ts: number | string | null | undefined): number | null {
+  if (ts === null || ts === undefined) return null
+  const n = typeof ts === 'string' ? Number(ts) : ts
+  if (!Number.isFinite(n) || n <= 0) return null
+  return n
+}
+
+/** Format a live measurement only when its sample timestamp is valid. */
+export function formatSampleValue(
+  value: number | string | null | undefined,
+  ts: number | string | null | undefined,
+): string {
+  if (parseSampleTimestamp(ts) === null) return '-'
+  return formatNumber(value)
+}
+
 export function formatNumber(value: number | string | null | undefined): string {
   if (value === null || value === undefined) return '-'
   if (typeof value === 'string') {
@@ -32,9 +49,8 @@ export function formatNumber(value: number | string | null | undefined): string 
  * @returns 格式化后的时间字符串
  */
 export function formatTimestamp(timestamp: number | string | null | undefined): string {
-  if (timestamp === null || timestamp === undefined) return '-'
-  const ts = typeof timestamp === 'string' ? Number(timestamp) : timestamp
-  if (isNaN(ts) || ts <= 0) return '-'
+  const ts = parseSampleTimestamp(timestamp)
+  if (ts === null) return '-'
   try {
     return new Date(ts).toLocaleString()
   } catch {

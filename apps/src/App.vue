@@ -9,12 +9,12 @@ import { useUserStore } from '@/stores/user'
 import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import { storeToRefs } from 'pinia'
 import AppSkeleton from '@/components/common/AppSkeleton.vue'
-import { DEMO_ALARM_NUM } from '@/mocks/homepageDemo'
 
 const locale = en
-const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true'
 const router = useRouter()
 const globalStore = useGlobalStore()
+// Persisted counts are not current backend alarm data.
+globalStore.alarmNum = 0
 const userStore = useUserStore()
 const topoStore = useDeviceTopologyStore()
 const { appInitializing } = storeToRefs(globalStore)
@@ -39,6 +39,7 @@ const initWebSocket = async () => {
       },
       onDisconnect: () => {
         console.log('[main] websocket disconnected')
+        globalStore.alarmNum = 0
       },
       onError: (error) => {
         console.error('[main] websocket error:', error)
@@ -89,7 +90,6 @@ const initWebSocket = async () => {
         console.log('[main] alarm:', alarm)
       },
       onAlarmNum: (alarmNum) => {
-        if (isDemoMode) return
         console.log('[main] alarm count updated:', alarmNum)
         globalStore.alarmNum = alarmNum.current_alarms
       },
@@ -103,9 +103,6 @@ watch(
   () => userStore.isLoggedIn,
   (isLoggedIn) => {
     if (isLoggedIn) {
-      if (isDemoMode) {
-        globalStore.alarmNum = DEMO_ALARM_NUM
-      }
       console.log('[main] user logged in, connecting websocket')
       initWebSocket()
     } else {

@@ -33,6 +33,7 @@
 
       <!-- 图表区域 -->
       <div class="curves__charts-outer">
+      <div v-if="historyError" role="alert">Historical data unavailable</div>
       <LoadingBg :loading="isLoading">
       <div class="curves__charts">
         <!-- 概览卡片 -->
@@ -162,7 +163,9 @@ const stationInfoList = computed(() => [
   { title: 'DG', icon: DG, value: statistics.live.value.dgPower, unit: 'kW' },
 ].map((item) => ({ ...item, value: item.value === null ? '--' : formatNumber(item.value) })))
 const isLoading = ref(false)
+const historyError = ref(false)
 let fetchAbortController: AbortController | null = null
+let activeQueryKey: string | undefined
 let requestVersion = 0
 const xAxisData = ref<string[]>([])
 const loadEnergySeriesData = ref<ChartSeries[]>([])
@@ -198,11 +201,24 @@ const formatLabel = (timestamp: string) => dayjs(timestamp).format(
 )
 
 const fetchAllChartData = async () => {
+  if (statistics.loading.value) {
+    requestVersion++
+    fetchAbortController?.abort()
+    activeQueryKey = undefined
+    isLoading.value = true
+    historyError.value = false
+    return
+  }
   const metrics = statistics.metrics.value
   const series = statisticRequests(metrics)
+  const key = JSON.stringify([metrics, selectedTimeBtn.value, rangeArray.value])
+  if (activeQueryKey === key) return
   const version = ++requestVersion
   fetchAbortController?.abort()
   fetchAbortController = new AbortController()
+  const controller = fetchAbortController
+  activeQueryKey = undefined
+  historyError.value = false
   totalLoadEnergy.value = '--'
   loadEnergyCoverage.value = ''
   xAxisData.value = []
@@ -213,11 +229,13 @@ const fetchAllChartData = async () => {
   const range = getTimeRange()
   isLoading.value = series.length > 0 && range !== null
   if (!series.length || !range) return
+  activeQueryKey = key
   try {
     const response = await batchQueryHistory({
       ...range, limit_per_series: STATISTIC_HISTORY_LIMIT, series,
-    }, fetchAbortController.signal)
-    if (version !== requestVersion || !response.success) return
+    }, controller.signal)
+    if (version !== requestVersion) return
+    if (!response.success) throw new Error('History query failed')
     const chart = buildStatisticChartData(metrics, response.data?.series ?? [])
     xAxisData.value = chart.timestamps.map(formatLabel)
     totalLoadEnergy.value = chart.loadEnergy === null ? '--' : formatNumber(chart.loadEnergy)
@@ -237,19 +255,24 @@ const fetchAllChartData = async () => {
       { name: 'DG', data: chart.values('dgPower'), color: '#F6C85F' },
     ]
   } catch (error: unknown) {
-    if (version !== requestVersion || fetchAbortController.signal.aborted) return
+    if (version !== requestVersion || controller.signal.aborted) return
+    historyError.value = true
     console.error('Failed to load overview chart data:', error)
   } finally {
-    if (version === requestVersion) isLoading.value = false
+    if (version === requestVersion) {
+      isLoading.value = false
+      activeQueryKey = undefined
+    }
   }
 }
 
 // Fetch whatever equipment exists; PV/ESS/Diesel are independently optional.
-watch(statistics.metrics, fetchAllChartData, { immediate: true })
+watch([statistics.loading, statistics.metrics], fetchAllChartData, { immediate: true })
 onUnmounted(() => { requestVersion++; fetchAbortController?.abort() })
 const handleTimeBtnClick = (event: MouseEvent) => {
   const btn = (event.target as HTMLElement).closest('.curves__toolbar-time-btn') as HTMLElement | null
   if (!btn?.dataset.value) return
+  if (btn.dataset.value === selectedTimeBtn.value) return
   selectedTimeBtn.value = btn.dataset.value as typeof selectedTimeBtn.value
   rangeArray.value = []
   fetchAllChartData()

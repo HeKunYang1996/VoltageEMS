@@ -20,7 +20,7 @@
               <DynamicScrollerItem :item="item" :active="true" :index="index">
                 <div class="vtable__row">
                   <div class="vtable__cell vtable__cell--name">{{ item.name }}</div>
-                  <div class="vtable__cell vtable__cell--value">{{ formatNumber(item.value) }}</div>
+                  <div class="vtable__cell vtable__cell--value">{{ formatSampleValue(item.value, item.updateTime) }}</div>
                   <div class="vtable__cell vtable__cell--unit">{{ item.unit }}</div>
                   <div class="vtable__cell vtable__cell--time">
                     {{ formatTimestamp(item.updateTime) }}
@@ -49,7 +49,7 @@
               <DynamicScrollerItem :item="item" :active="true" :index="index">
                 <div class="vtable__row">
                   <div class="vtable__cell vtable__cell--name">{{ item.name }}</div>
-                  <div class="vtable__cell vtable__cell--status">{{ item.status ?? '-' }}</div>
+                  <div class="vtable__cell vtable__cell--status">{{ formatSampleValue(item.status, item.updateTime) }}</div>
                   <div class="vtable__cell vtable__cell--time">
                     {{ formatTimestamp(item.updateTime) }}
                   </div>
@@ -67,7 +67,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import type { LeftTableItem, RightTableItem } from '@/types/deviceMonitoring'
 import { pxToResponsive } from '@/utils/responsive'
-import { formatNumber, formatTimestamp } from '@/utils/common'
+import { formatSampleValue, formatTimestamp } from '@/utils/common'
 
 defineProps<{
   leftTableData: LeftTableItem[]

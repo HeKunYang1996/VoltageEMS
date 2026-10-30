@@ -15,6 +15,7 @@ vi.mock('@/components/charts/lineChart.vue', () => ({ default: { name: 'lineChar
 vi.mock('@/components/charts/DoughnutChart.vue', () => ({ default: { template: '<div />' } }))
 
 const metrics = ref<StatisticMetrics>({})
+const loading = ref(false)
 const live = ref({ pvPower: null as number | null, essPower: null as number | null, dgPower: null as number | null })
 const loadMetric = (instanceId: number) => ({ instanceId, terms: [{ pointId: '14', factor: 1 }], counter: true })
 const response = (id: number, start: number, end: number) => ({ success: true, data: { series: [{
@@ -30,8 +31,9 @@ describe('statistics overview consumption', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     metrics.value = { loadEnergy: loadMetric(1) }
+    loading.value = false
     live.value = { pvPower: null, essPower: null, dgPower: null }
-    mock.statistics.mockReturnValue({ metrics: computed(() => metrics.value), live })
+    mock.statistics.mockReturnValue({ metrics: computed(() => metrics.value), live, loading })
   })
 
   it('loads a meter without PV/ESS/Diesel and keeps realtime cards from replacing range energy', async () => {
@@ -84,5 +86,41 @@ describe('statistics overview consumption', () => {
     await flushPromises()
     expect(batchQueryHistory).toHaveBeenCalledTimes(1)
     wrapper.unmount()
+  })
+
+  it('waits for all point tables instead of repeatedly cancelling startup queries', async () => {
+    loading.value = true
+    vi.mocked(batchQueryHistory).mockResolvedValue(response(4, 10, 12) as any)
+    const wrapper = mount(Overview, options)
+    for (let id = 1; id <= 4; id++) {
+      metrics.value = { loadEnergy: loadMetric(id) }
+      await flushPromises()
+      expect(batchQueryHistory).not.toHaveBeenCalled()
+    }
+    loading.value = false
+    await flushPromises()
+    expect(batchQueryHistory).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('keeps an identical pending query and exposes genuine history failures', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let fail!: (reason: Error) => void
+    vi.mocked(batchQueryHistory).mockImplementation(() => new Promise((_, reject) => { fail = reject }))
+    const wrapper = mount(Overview, options)
+    try {
+      const signal = vi.mocked(batchQueryHistory).mock.calls[0][1]!
+      metrics.value = { loadEnergy: loadMetric(1) }
+      await wrapper.find('[data-value="6h"]').trigger('click')
+      await flushPromises()
+      expect(batchQueryHistory).toHaveBeenCalledTimes(1)
+      expect(signal.aborted).toBe(false)
+      fail(new Error('database unavailable'))
+      await flushPromises()
+      expect(wrapper.find('[role="alert"]').text()).toBe('Historical data unavailable')
+    } finally {
+      wrapper.unmount()
+      log.mockRestore()
+    }
   })
 })
