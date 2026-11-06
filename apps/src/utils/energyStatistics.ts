@@ -1,5 +1,10 @@
 import type { InstanceMeasurementItem } from '@/types/deviceConfiguration'
-import type { BatchQueryResponse, BatchSeriesItem } from '@/types/Statistics/OverView'
+import type {
+  BatchQueryData,
+  BatchQueryRequest,
+  BatchQueryResponse,
+  BatchSeriesItem,
+} from '@/types/Statistics/OverView'
 
 export type StatisticMetricName =
   | 'pvPower' | 'pvEnergy' | 'essPower' | 'essEnergy' | 'soc'
@@ -12,7 +17,67 @@ export interface StatisticMetric {
 }
 
 export type StatisticMetrics = Partial<Record<StatisticMetricName, StatisticMetric>>
-export const STATISTIC_HISTORY_LIMIT = 5000
+/** Maximum bucket count allowed by hissrv batch-query. */
+export const MAX_HISTORY_SEGMENTS = 5000
+/** @deprecated Use interval_seconds via resolveHistoryIntervalSeconds instead. */
+export const STATISTIC_HISTORY_LIMIT = MAX_HISTORY_SEGMENTS
+/** Target chart points for Statistics/Curves (formerly limit_per_series: 300). */
+export const CURVES_HISTORY_TARGET_POINTS = 300
+
+export interface HistoryQueryMeta {
+  start_time: string
+  end_time: string
+  interval_seconds: number
+}
+
+export function expectedHistorySegmentCount(
+  startTime: string,
+  endTime: string,
+  intervalSeconds: number,
+): number {
+  const spanMs = Date.parse(endTime) - Date.parse(startTime)
+  if (!Number.isFinite(spanMs) || spanMs <= 0 || intervalSeconds <= 0) return 0
+  return Math.floor(spanMs / (intervalSeconds * 1000))
+}
+
+/** Pick interval_seconds so bucket count stays within maxPoints (default 5000). */
+export function resolveHistoryIntervalSeconds(
+  startTime: string,
+  endTime: string,
+  maxPoints = MAX_HISTORY_SEGMENTS,
+): number {
+  const spanSec = Math.max(
+    1,
+    Math.floor((Date.parse(endTime) - Date.parse(startTime)) / 1000),
+  )
+  const cap = Math.max(1, Math.min(maxPoints, MAX_HISTORY_SEGMENTS))
+  return Math.max(1, Math.ceil(spanSec / cap))
+}
+
+export function buildBatchQueryRequest(
+  range: { start_time: string; end_time: string },
+  series: BatchSeriesItem[],
+  maxPoints = MAX_HISTORY_SEGMENTS,
+): BatchQueryRequest {
+  return {
+    ...range,
+    interval_seconds: resolveHistoryIntervalSeconds(range.start_time, range.end_time, maxPoints),
+    series,
+  }
+}
+
+export function historyQueryMetaFromResponse(
+  range: { start_time: string; end_time: string },
+  data?: BatchQueryData | null,
+): HistoryQueryMeta {
+  return {
+    start_time: range.start_time,
+    end_time: range.end_time,
+    interval_seconds:
+      data?.interval_seconds ??
+      resolveHistoryIntervalSeconds(range.start_time, range.end_time),
+  }
+}
 
 function unitFactor(unit: string | null, expected: 'power' | 'energy' | 'soc'): number | undefined {
   const units = expected === 'power' ? { w: 0.001, kw: 1, mw: 1000 }
@@ -84,6 +149,7 @@ export function counterIntervals(values: (number | null)[]): (number | null)[] {
 export function statisticHistory(
   metric: StatisticMetric | undefined,
   responses: BatchQueryResponse[],
+  query?: HistoryQueryMeta,
 ): { values: Map<string, number | null>; total: number | null; coverage: { start: string; end: string } | null } {
   if (!metric) return { values: new Map(), total: null, coverage: null }
   const series = metric.terms.map((term) => responses.find((item) =>
@@ -101,9 +167,15 @@ export function statisticHistory(
     return total
   })
   const values = metric.counter ? counterIntervals(samples) : samples
-  // A limited response can omit the end of the requested range. Never report
-  // its partial difference as the whole range's consumption.
-  const complete = series.every((item) => item && item.count < STATISTIC_HISTORY_LIMIT && item.count === item.data.length)
+  const expected =
+    query === undefined
+      ? undefined
+      : expectedHistorySegmentCount(query.start_time, query.end_time, query.interval_seconds)
+  // Aggregated buckets must cover the full requested window before counter totals are trusted.
+  const complete =
+    expected !== undefined &&
+    expected > 0 &&
+    series.every((item) => item && item.count === expected)
   const intervals = values.slice(1)
   const total = metric.counter && complete && intervals.length && intervals.every((v) => v !== null)
     ? intervals.reduce<number>((sum, value) => sum + (value ?? 0), 0) : null
@@ -111,9 +183,13 @@ export function statisticHistory(
   return { values: new Map(timestamps.map((timestamp, index) => [timestamp, values[index]])), total, coverage }
 }
 
-export function buildStatisticChartData(metrics: StatisticMetrics, responses: BatchQueryResponse[]) {
+export function buildStatisticChartData(
+  metrics: StatisticMetrics,
+  responses: BatchQueryResponse[],
+  query?: HistoryQueryMeta,
+) {
   const histories = Object.fromEntries(Object.entries(metrics).map(([name, metric]) =>
-    [name, statisticHistory(metric, responses)])) as Partial<Record<StatisticMetricName, ReturnType<typeof statisticHistory>>>
+    [name, statisticHistory(metric, responses, query)])) as Partial<Record<StatisticMetricName, ReturnType<typeof statisticHistory>>>
   const timestamps = [...new Set(Object.values(histories).flatMap((history) => [...history.values.keys()]))]
     .sort((a, b) => Date.parse(a) - Date.parse(b))
   const values = (name: StatisticMetricName) => timestamps.map((timestamp) => {

@@ -115,6 +115,7 @@ import { useDeviceTopologyStore } from '@/stores/deviceTopology'
 import dayjs from 'dayjs'
 import { getRecentHoursRange, getRecentDaysRange, getRecentWeekRange } from '@/utils/date.ts'
 import type { BatchQueryResponse } from '@/types/Statistics/OverView'
+import { buildBatchQueryRequest, CURVES_HISTORY_TARGET_POINTS } from '@/utils/energyStatistics'
 import type { InstanceMeasurementItem } from '@/types/deviceConfiguration'
 
 // ─── 类型定义 ───────────────────────────────────────────────
@@ -367,9 +368,14 @@ const fetchDevicesData = async (devs: DeviceConfig[]) => {
             redis_key: dev.redisKey, point_id: point.id,
           })))
         }
-        const results = await Promise.all(chunks.map((series) => batchQueryHistory({
-          ...range, limit_per_series: 300, series,
-        }, controller.signal)))
+        const results = await Promise.all(
+          chunks.map((series) =>
+            batchQueryHistory(
+              buildBatchQueryRequest(range, series, CURVES_HISTORY_TARGET_POINTS),
+              controller.signal,
+            ),
+          ),
+        )
         if (controller.signal.aborted || generation !== queryGeneration || disposed) return
         if (results.some((result) => !result.success)) throw new Error('History query failed')
         const newMap = new Map(chartDataMap.value)
