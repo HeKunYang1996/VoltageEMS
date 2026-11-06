@@ -191,11 +191,6 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
   const xUnit = props.xAxiosOption.xUnit || ''
   const yUnit = props.yAxiosOption.yUnit || ''
 
-  // 背景柱
-  const totalData = props.xAxiosOption.xAxiosData.map((_, index) => {
-    return props.series.reduce((sum, s) => sum + (s.data[index] || 0), 0)
-  })
-
   const tooltipSize = isFullScreen
     ? {
         width: pxToResponsive(300),
@@ -368,40 +363,17 @@ function getChartOption({ isFullScreen = false }: { isFullScreen?: boolean }) {
       }
 
   // series（使用 ECharts 原生百分比 barWidth，自适应容器宽度）
-  const seriesData = [
-    {
-      name: 'background',
-      type: 'bar',
-      barWidth: '60%',
-      barGap: '-100%',
-      itemStyle: {
-        color: 'rgba(255,255,255,0)',
-      },
-      data: totalData,
-      showBackground: true,
-      backgroundStyle: {
-        color: 'rgba(252, 252, 253, 0.04)',
-      },
-      silent: true,
-      emphasis: { disabled: true },
-      tooltip: { show: false },
-      label: { show: false },
-      z: 0,
+  const seriesData = props.series.map((s) => ({
+    name: s.name,
+    type: 'bar',
+    data: s.data,
+    stack: 'data',
+    emphasis: { focus: 'series' },
+    barWidth: '60%',
+    itemStyle: {
+      color: s.color,
     },
-    ...props.series.map((s) => ({
-      name: s.name,
-      type: 'bar',
-      data: s.data,
-      stack: 'data',
-      emphasis: { focus: 'series' },
-      barWidth: '60%',
-      barGap: '-85%',
-      itemStyle: {
-        color: s.color,
-      },
-      z: 1,
-    })),
-  ]
+  }))
 
   // tooltip
   const tooltip = isFullScreen

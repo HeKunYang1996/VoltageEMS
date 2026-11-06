@@ -8,13 +8,17 @@ export interface BatchSeriesItem {
 export interface BatchQueryRequest {
   start_time: string
   end_time: string
+  /** Bucket width in seconds (positive integer). When set, limit_per_series is ignored. */
+  interval_seconds?: number
+  /** Legacy; ignored when interval_seconds is provided. */
   limit_per_series?: number
   series: BatchSeriesItem[]
 }
 
-// 单个数据点
+// 单个数据点（hissrv 返回 time；前端统一归一为 timestamp）
 export interface HistoryDataPoint {
-  timestamp: string
+  timestamp?: string
+  time?: string
   value: number | null
 }
 
@@ -30,6 +34,9 @@ export interface BatchQueryResponse {
 export interface BatchQueryData {
   start_time: string
   end_time: string
+  interval_seconds?: number
+  /** Bucket aggregation mode; currently "last". */
+  aggregation?: string
   series: BatchQueryResponse[]
 }
 

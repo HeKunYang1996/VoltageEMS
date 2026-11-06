@@ -134,7 +134,12 @@ import { getRecentHoursRange, getRecentDaysRange, getRecentWeekRange } from '@/u
 import { formatNumber } from '@/utils/common'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useEnergyStatistics } from '@/composables/useEnergyStatistics'
-import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } from '@/utils/energyStatistics'
+import {
+  buildBatchQueryRequest,
+  buildStatisticChartData,
+  historyQueryMetaFromResponse,
+  statisticRequests,
+} from '@/utils/energyStatistics'
 
 interface ChartSeries {
   name: string
@@ -231,12 +236,11 @@ const fetchAllChartData = async () => {
   if (!series.length || !range) return
   activeQueryKey = key
   try {
-    const response = await batchQueryHistory({
-      ...range, limit_per_series: STATISTIC_HISTORY_LIMIT, series,
-    }, controller.signal)
+    const response = await batchQueryHistory(buildBatchQueryRequest(range, series), controller.signal)
     if (version !== requestVersion) return
-    if (!response.success) throw new Error('History query failed')
-    const chart = buildStatisticChartData(metrics, response.data?.series ?? [])
+    if (!response.success) throw new Error(response.message || 'History query failed')
+    const queryMeta = historyQueryMetaFromResponse(range, response.data)
+    const chart = buildStatisticChartData(metrics, response.data?.series ?? [], queryMeta)
     xAxisData.value = chart.timestamps.map(formatLabel)
     totalLoadEnergy.value = chart.loadEnergy === null ? '--' : formatNumber(chart.loadEnergy)
     if (chart.loadEnergyCoverage) {

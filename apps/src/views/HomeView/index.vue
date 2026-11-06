@@ -164,7 +164,12 @@ import { batchQueryHistory } from '@/api/Statistic/overview'
 import dayjs from 'dayjs'
 import { getRecentHoursRange } from '@/utils/date'
 import { useEnergyStatistics } from '@/composables/useEnergyStatistics'
-import { buildStatisticChartData, statisticRequests, STATISTIC_HISTORY_LIMIT } from '@/utils/energyStatistics'
+import {
+  buildBatchQueryRequest,
+  buildStatisticChartData,
+  historyQueryMetaFromResponse,
+  statisticRequests,
+} from '@/utils/energyStatistics'
 import { getCurrentAlarms } from '@/api/alarm'
 import type { CurrentAlarmData } from '@/types/alarm'
 import type { AlarmMessage } from '@/types/websocket'
@@ -577,18 +582,17 @@ const fetchHomeChartData = async () => {
   }
   historyState.value = 'loading'
   activeChartKey = key
-  const range = getRecentHoursRange(6)
+  const recent = getRecentHoursRange(6)
+  const range = { start_time: recent.start!, end_time: recent.end! }
   try {
-    const res = await batchQueryHistory({
-      start_time: range.start!, end_time: range.end!,
-      limit_per_series: STATISTIC_HISTORY_LIMIT, series,
-    }, controller.signal)
+    const res = await batchQueryHistory(buildBatchQueryRequest(range, series), controller.signal)
     if (myToken !== chartRequestToken) return
     if (!res.success) {
       historyState.value = 'error'
       return
     }
-    const chart = buildStatisticChartData(metrics, res.data?.series ?? [])
+    const queryMeta = historyQueryMetaFromResponse(range, res.data)
+    const chart = buildStatisticChartData(metrics, res.data?.series ?? [], queryMeta)
     chartXAxisData.value = chart.timestamps.map(fmtLabel)
     historyState.value = chart.timestamps.length ? 'ready' : 'empty'
     lineChartSeries.value = [
@@ -606,7 +610,10 @@ const fetchHomeChartData = async () => {
     historyState.value = 'error'
     console.error('Failed to fetch home chart data:', error)
   } finally {
-    if (myToken === chartRequestToken) activeChartKey = undefined
+    if (myToken === chartRequestToken) {
+      activeChartKey = undefined
+      if (historyState.value === 'loading') historyState.value = 'error'
+    }
   }
 }
 
