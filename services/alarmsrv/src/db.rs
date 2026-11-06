@@ -7,6 +7,10 @@ use chrono::{TimeZone, Utc};
 use sqlx::SqlitePool;
 use tracing::{debug, info};
 
+#[cfg(test)]
+#[path = "db_tests.rs"]
+mod tests;
+
 use crate::device_names::{self, DeviceNames};
 use crate::models::{
     Alert, AlertEvent, AlertQueryParams, AlertRule, AlertRuleView, EventQueryParams, PagedData,
@@ -16,6 +20,37 @@ use crate::models::{
 // ============================================================================
 // Schema creation
 // ============================================================================
+
+// History keeps the original rule ID and snapshot after the rule is deleted.
+const ALERT_EVENT_SCHEMA: &str = r#"
+        CREATE TABLE IF NOT EXISTS alert_event (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id         INTEGER,
+            rule_snapshot   TEXT,
+            service_type    TEXT,
+            channel_id      INTEGER,
+            data_type       TEXT,
+            point_id        INTEGER,
+            rule_name       TEXT,
+            warning_level   INTEGER,
+            operator        TEXT,
+            threshold_value REAL,
+            device_name     TEXT,
+            point_name      TEXT,
+            unit            TEXT,
+            trigger_value   REAL,
+            recovery_value  REAL,
+            event_type      TEXT    NOT NULL,
+            triggered_at    INTEGER,
+            recovered_at    INTEGER,
+            duration        INTEGER
+        )
+"#;
+
+const ALERT_EVENT_COLUMNS: &str = "id, rule_id, rule_snapshot, service_type, channel_id, \
+    data_type, point_id, rule_name, warning_level, operator, threshold_value, \
+    device_name, point_name, unit, trigger_value, recovery_value, event_type, \
+    triggered_at, recovered_at, duration";
 
 pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
@@ -72,41 +107,70 @@ pub async fn create_tables(pool: &SqlitePool) -> Result<()> {
     add_column_if_missing(pool, "alert", "point_name", "TEXT").await?;
     add_column_if_missing(pool, "alert", "unit", "TEXT").await?;
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS alert_event (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            rule_id         INTEGER,
-            rule_snapshot   TEXT,
-            service_type    TEXT,
-            channel_id      INTEGER,
-            data_type       TEXT,
-            point_id        INTEGER,
-            rule_name       TEXT,
-            warning_level   INTEGER,
-            operator        TEXT,
-            threshold_value REAL,
-            device_name     TEXT,
-            point_name      TEXT,
-            unit            TEXT,
-            trigger_value   REAL,
-            recovery_value  REAL,
-            event_type      TEXT    NOT NULL,
-            triggered_at    INTEGER,
-            recovered_at    INTEGER,
-            duration        INTEGER,
-            FOREIGN KEY (rule_id) REFERENCES alert_rule(id)
-        )
-        "#,
-    )
-    .execute(pool)
-    .await
-    .context("create alert_event table")?;
+    sqlx::query(ALERT_EVENT_SCHEMA)
+        .execute(pool)
+        .await
+        .context("create alert_event table")?;
     add_column_if_missing(pool, "alert_event", "device_name", "TEXT").await?;
     add_column_if_missing(pool, "alert_event", "point_name", "TEXT").await?;
     add_column_if_missing(pool, "alert_event", "unit", "TEXT").await?;
 
+    migrate_alert_event_rule_reference(pool).await?;
+
     info!("Alert tables ready");
+    Ok(())
+}
+
+/// Remove the old live-rule dependency without losing historical IDs, snapshots,
+/// indexes, triggers or the AUTOINCREMENT high-water mark.
+async fn migrate_alert_event_rule_reference(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let has_rule_fk: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('alert_event') WHERE \"table\" = 'alert_rule')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !has_rule_fk {
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    let schema_objects: Vec<String> = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master WHERE tbl_name = 'alert_event' \
+         AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let sequence: Option<i64> =
+        sqlx::query_scalar("SELECT seq FROM sqlite_sequence WHERE name = 'alert_event'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    sqlx::query(&ALERT_EVENT_SCHEMA.replace("IF NOT EXISTS alert_event", "alert_event_new"))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(&format!(
+        "INSERT INTO alert_event_new ({ALERT_EVENT_COLUMNS}) \
+         SELECT {ALERT_EVENT_COLUMNS} FROM alert_event"
+    ))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DROP TABLE alert_event")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("ALTER TABLE alert_event_new RENAME TO alert_event")
+        .execute(&mut *tx)
+        .await?;
+    for sql in schema_objects {
+        sqlx::query(&sql).execute(&mut *tx).await?;
+    }
+    if let Some(sequence) = sequence {
+        sqlx::query("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'alert_event'")
+            .bind(sequence)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    info!("Migrated alert history to retain events independently of live rules");
     Ok(())
 }
 
@@ -473,13 +537,18 @@ pub async fn set_rule_enabled(pool: &SqlitePool, id: i64, enabled: bool) -> Resu
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn delete_rule(pool: &SqlitePool, id: i64) -> Result<bool> {
+/// Resolve active alerts and delete the rule in one transaction. The caller
+/// broadcasts recoveries only after the transaction has committed.
+pub async fn delete_rule(pool: &SqlitePool, id: i64) -> Result<Option<Vec<Alert>>> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let resolved = resolve_alerts_by_rule_id_tx(&mut tx, id).await?;
     let result = sqlx::query("DELETE FROM alert_rule WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("delete rule")?;
-    Ok(result.rows_affected() > 0)
+    tx.commit().await.context("commit delete rule")?;
+    Ok((result.rows_affected() > 0).then_some(resolved))
 }
 
 // ============================================================================
@@ -695,9 +764,19 @@ pub async fn resolve_alert(pool: &SqlitePool, alert: &Alert, recovery_value: f64
 /// Resolves all alerts for a rule (used when rule is disabled or deleted).
 /// Returns the list of resolved alert IDs.
 pub async fn resolve_alerts_by_rule_id(pool: &SqlitePool, rule_id: i64) -> Result<Vec<Alert>> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let alerts = resolve_alerts_by_rule_id_tx(&mut tx, rule_id).await?;
+    tx.commit().await.context("commit bulk resolve")?;
+    Ok(alerts)
+}
+
+async fn resolve_alerts_by_rule_id_tx(
+    conn: &mut sqlx::SqliteConnection,
+    rule_id: i64,
+) -> Result<Vec<Alert>> {
     let alerts = sqlx::query_as::<_, Alert>("SELECT * FROM alert WHERE rule_id = ?")
         .bind(rule_id)
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await
         .context("get alerts by rule_id")?;
 
@@ -706,8 +785,6 @@ pub async fn resolve_alerts_by_rule_id(pool: &SqlitePool, rule_id: i64) -> Resul
     }
 
     let now = Utc::now().timestamp();
-    let mut tx = pool.begin().await.context("begin transaction")?;
-
     for alert in &alerts {
         let duration = now - alert.triggered_at;
 
@@ -739,18 +816,17 @@ pub async fn resolve_alerts_by_rule_id(pool: &SqlitePool, rule_id: i64) -> Resul
         .bind(alert.triggered_at)
         .bind(now)
         .bind(duration)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .context("insert alert_event in bulk resolve")?;
 
         sqlx::query("DELETE FROM alert WHERE id = ?")
             .bind(alert.id)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .context("delete alert in bulk resolve")?;
     }
 
-    tx.commit().await.context("commit bulk resolve")?;
     Ok(alerts)
 }
 

@@ -251,12 +251,13 @@ pub async fn on_rule_updated(state: &Arc<AppState>, rule_id: i64) {
     }
 }
 
-/// Called when a rule is deleted – resolves its active alerts first.
-pub async fn on_rule_deleted(state: &Arc<AppState>, rule: &crate::models::AlertRule) {
-    let resolved = db::resolve_alerts_by_rule_id(&state.db, rule.id)
-        .await
-        .unwrap_or_default();
-    for alert in &resolved {
+/// Broadcast recoveries after the rule deletion and alert resolution commit.
+pub async fn on_rule_deleted(
+    state: &Arc<AppState>,
+    rule: &crate::models::AlertRule,
+    resolved: &[crate::models::Alert],
+) {
+    for alert in resolved {
         state
             .broadcaster
             .send_alarm_recovery(

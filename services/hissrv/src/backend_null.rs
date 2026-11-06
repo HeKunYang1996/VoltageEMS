@@ -61,6 +61,7 @@ impl StorageBackend for NullBackend {
         _start_time: DateTime<Utc>,
         _end_time: DateTime<Utc>,
         _limit_per_series: i64,
+        _interval_seconds: Option<i64>,
     ) -> anyhow::Result<Vec<SeriesResult>> {
         anyhow::bail!("存储后端未配置")
     }

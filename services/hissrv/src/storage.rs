@@ -45,14 +45,20 @@ pub trait StorageBackend: Send + Sync + 'static {
     ///
     /// Returns one `SeriesResult` per requested series (in the same order).
     /// Each series contains at most `limit_per_series` data points ordered by
-    /// time ascending.  Series with no data are included with an empty `data`
+    /// time ascending, sampling the full range and retaining its first/last
+    /// points when capped (a limit of one returns only the latest point).
+    /// Series with no data are included with an empty `data`
     /// vec so the caller always gets a result for every requested key/point.
+    /// With interval_seconds, return start-anchored time buckets instead:
+    /// last value per bucket, null for gaps, including a partial final bucket.
+    /// The interval takes precedence over the legacy point limit.
     async fn query_batch(
         &self,
         series: &[(String, String)],
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
         limit_per_series: i64,
+        interval_seconds: Option<i64>,
     ) -> anyhow::Result<Vec<SeriesResult>>;
 
     /// Delete rows older than `older_than_days`. Returns deleted row count.

@@ -2,6 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+#[cfg(test)]
+#[path = "batch_query_tests.rs"]
+mod batch_query_tests;
+
 // ── Core data types ───────────────────────────────────────────────────────────
 
 /// One measurement point ready to be written to storage.
@@ -31,6 +35,35 @@ pub struct HistoryRecord {
 
 // ── Batch query models ────────────────────────────────────────────────────────
 
+pub const MAX_BATCH_POINTS: i64 = 5000;
+
+/// Number of start-anchored time buckets. Keep subsecond windows and partial
+/// final buckets, without multiplying an untrusted interval by milliseconds.
+pub fn interval_bucket_count(
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    interval_seconds: i64,
+) -> anyhow::Result<i64> {
+    if interval_seconds <= 0 {
+        anyhow::bail!("interval_seconds 必须是大于 0 的整数");
+    }
+    if end <= start {
+        anyhow::bail!("end_time 必须晚于 start_time");
+    }
+    let span = end - start;
+    let seconds = span.num_seconds();
+    let partial = seconds % interval_seconds != 0 || span != chrono::Duration::seconds(seconds);
+    let buckets = seconds / interval_seconds + i64::from(partial);
+    if buckets > MAX_BATCH_POINTS {
+        anyhow::bail!(
+            "当前时间范围和 interval_seconds 需要 {} 个时间段，超过每条曲线 {} 段的上限，请增大间隔或缩短时间范围",
+            buckets,
+            MAX_BATCH_POINTS
+        );
+    }
+    Ok(buckets)
+}
+
 /// One (redis_key, point_id) pair in a batch query request.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct BatchSeriesItem {
@@ -48,20 +81,26 @@ pub struct BatchSeriesItem {
         { "redis_key": "inst:9:M",  "point_id": "102" },
         { "redis_key": "inst:12:M", "point_id": "201" }
     ],
-    "limit_per_series": 500
+    "interval_seconds": 300
 }))]
 pub struct BatchQueryRequest {
     pub start_time: String,
     pub end_time: String,
     /// 最多 20 条 series
     pub series: Vec<BatchSeriesItem>,
-    /// 每条 series 最多返回的数据点数，默认 1000，最大 5000
+    /// 未指定 interval_seconds 时生效：每条 series 最多返回的点数，默认 1000，最大 5000。
+    /// 超限时按顺序等间隔抽取真实样本并保留首尾；为 1 时返回最新点。
     pub limit_per_series: Option<i64>,
+    /// 可选的时间粒度，单位秒，必须大于 0。指定后优先于 limit_per_series：
+    /// 从 start_time 起分桶，每桶取最后一条记录的值，空桶为 null。
+    /// 每条曲线最多 5000 桶，超限返回 400，不会自动截断或改变间隔。
+    pub interval_seconds: Option<i64>,
 }
 
 /// One data point in a batch query response.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SeriesPoint {
+    /// 无时间粒度时为原始时间；有时间粒度时为时间桶起点。
     pub time: String,
     pub value: Option<f64>,
 }
@@ -71,6 +110,7 @@ pub struct SeriesPoint {
 pub struct SeriesResult {
     pub redis_key: String,
     pub point_id: String,
+    /// 返回点数；时间粒度模式包含 value 为 null 的空段。
     pub count: usize,
     pub data: Vec<SeriesPoint>,
 }
@@ -81,6 +121,11 @@ pub struct BatchQueryResponse {
     pub start_time: String,
     pub end_time: String,
     pub series: Vec<SeriesResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval_seconds: Option<i64>,
+    /// 时间粒度模式固定为 last，旧模式省略。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregation: Option<&'static str>,
 }
 
 /// Query string parameters for `GET /hisApi/data/query`.

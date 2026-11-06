@@ -526,11 +526,12 @@ async fn delete_rule(State(state): State<Arc<AppState>>, Path(id): Path<i64>) ->
         },
     };
 
-    monitor::on_rule_deleted(&state, &rule).await;
-
     match db::delete_rule(&state.db, id).await {
-        Ok(true) => Json(ApiResponse::ok("Rule deleted", json!({ "rule_id": id }))).into_response(),
-        Ok(false) => not_found("Rule not found"),
+        Ok(Some(resolved)) => {
+            monitor::on_rule_deleted(&state, &rule, &resolved).await;
+            Json(ApiResponse::ok("Rule deleted", json!({ "rule_id": id }))).into_response()
+        },
+        Ok(None) => not_found("Rule not found"),
         Err(e) => {
             error!("delete_rule: {}", e);
             server_error("Failed to delete rule")

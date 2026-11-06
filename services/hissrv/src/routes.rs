@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::{Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json, Response},
     routing::{get, post},
 };
 use serde_json::{Value, json};
@@ -17,11 +17,12 @@ use crate::backend_null::NullBackend;
 use crate::db_config;
 use crate::models::{
     BatchQueryRequest, BatchQueryResponse, DataStats, HistoryRecord, LatestParams,
-    QueryRangeParams, QueryResult, SeriesResult, ServiceConfig, StorageConfigRequest,
-    StorageSettings, StorageTestRequest,
+    MAX_BATCH_POINTS, QueryRangeParams, QueryResult, SeriesResult, ServiceConfig,
+    StorageConfigRequest, StorageSettings, StorageTestRequest, interval_bucket_count,
 };
 use crate::state::AppState;
 use crate::storage::StorageBackend;
+use common::api_types::AppError;
 
 // ============================================================================
 // Internal: lightweight connectivity probe (no schema init, no data write)
@@ -408,12 +409,17 @@ async fn query_latest(
 /// Batch range query – fetch multiple (redis_key, point_id) series in one request.
 ///
 /// Returns one result entry per requested series (in the same order), even if
-/// a series has no data in the given range.  Each series contains at most
-/// `limit_per_series` data points ordered by time ascending.
+/// a series has no data in the given range.
+/// Without interval_seconds, limit_per_series retains the legacy sample limit.
+/// With interval_seconds, return one point per start-anchored time bucket:
+/// time is the bucket start, value is its last recorded value, and gaps are null.
+/// The interval takes precedence over limit_per_series. The final bucket includes
+/// end_time. Interval metadata and aggregation="last" are returned only in this mode.
 ///
 /// Limits:
 /// - Maximum 20 series per request
 /// - `limit_per_series` default 1000, max 5000
+/// - At most 5000 time buckets per series; excessive ranges return 400
 #[utoipa::path(
     post,
     path = "/hisApi/data/batch-query",
@@ -428,16 +434,16 @@ async fn query_latest(
 async fn batch_query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchQueryRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json<Value>, Response> {
     const MAX_SERIES: usize = 20;
     const DEFAULT_LIMIT: i64 = 1000;
-    const MAX_LIMIT: i64 = 5000;
 
     if req.series.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": "series 列表不能为空"})),
-        ));
+        )
+            .into_response());
     }
     if req.series.len() > MAX_SERIES {
         return Err((
@@ -446,7 +452,7 @@ async fn batch_query(
                 "success": false,
                 "message": format!("series 数量不能超过 {} 条，当前 {} 条", MAX_SERIES, req.series.len())
             })),
-        ));
+        ).into_response());
     }
 
     let start_time = crate::models::parse_time(&req.start_time).map_err(|e| {
@@ -454,24 +460,32 @@ async fn batch_query(
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": format!("start_time 格式错误: {}", e)})),
         )
+            .into_response()
     })?;
     let end_time = crate::models::parse_time(&req.end_time).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": format!("end_time 格式错误: {}", e)})),
         )
+            .into_response()
     })?;
     if end_time <= start_time {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": "end_time 必须晚于 start_time"})),
-        ));
+        )
+            .into_response());
+    }
+
+    if let Some(interval) = req.interval_seconds {
+        interval_bucket_count(start_time, end_time, interval)
+            .map_err(|error| AppError::bad_request(error.to_string()).into_response())?;
     }
 
     let limit = req
         .limit_per_series
         .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1, MAX_LIMIT);
+        .clamp(1, MAX_BATCH_POINTS);
 
     let pairs: Vec<(String, String)> = req
         .series
@@ -481,7 +495,7 @@ async fn batch_query(
 
     let backend = state.storage.read().await.clone();
     match backend
-        .query_batch(&pairs, start_time, end_time, limit)
+        .query_batch(&pairs, start_time, end_time, limit, req.interval_seconds)
         .await
     {
         Ok(series) => {
@@ -489,6 +503,8 @@ async fn batch_query(
                 start_time: req.start_time,
                 end_time: req.end_time,
                 series,
+                interval_seconds: req.interval_seconds,
+                aggregation: req.interval_seconds.map(|_| "last"),
             };
             Ok(Json(json!({
                 "success": true,
@@ -501,7 +517,8 @@ async fn batch_query(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"success": false, "message": e.to_string()})),
-            ))
+            )
+                .into_response())
         },
     }
 }

@@ -152,9 +152,16 @@ impl StorageBackend for TimescaleDbBackend {
         start_time: chrono::DateTime<Utc>,
         end_time: chrono::DateTime<Utc>,
         limit_per_series: i64,
+        interval_seconds: Option<i64>,
     ) -> anyhow::Result<Vec<SeriesResult>> {
         self.inner
-            .query_batch(series, start_time, end_time, limit_per_series)
+            .query_batch(
+                series,
+                start_time,
+                end_time,
+                limit_per_series,
+                interval_seconds,
+            )
             .await
     }
 

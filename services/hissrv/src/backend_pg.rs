@@ -14,6 +14,10 @@ use crate::models::{
 };
 use crate::storage::StorageBackend;
 
+#[cfg(test)]
+#[path = "backend_pg_tests.rs"]
+mod tests;
+
 pub struct PostgresBackend {
     pub pool: PgPool,
 }
@@ -257,6 +261,7 @@ impl StorageBackend for PostgresBackend {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
         limit_per_series: i64,
+        interval_seconds: Option<i64>,
     ) -> anyhow::Result<Vec<SeriesResult>> {
         if series.is_empty() {
             return Ok(vec![]);
@@ -265,33 +270,25 @@ impl StorageBackend for PostgresBackend {
         let keys: Vec<&str> = series.iter().map(|(k, _)| k.as_str()).collect();
         let pids: Vec<&str> = series.iter().map(|(_, p)| p.as_str()).collect();
 
-        // Single query with ROW_NUMBER() window function to enforce per-series limit.
-        // UNNEST($3, $4) produces a set of (redis_key, point_id) pairs that act as
-        // an IN-filter, avoiding N round-trips while still bounding result size.
-        let rows = sqlx::query_as::<_, (DateTime<Utc>, String, String, Option<f64>)>(
-            "SELECT time, redis_key, point_id, value
-             FROM (
-                 SELECT time, redis_key, point_id, value,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY redis_key, point_id
-                            ORDER BY time ASC
-                        ) AS rn
-                 FROM history
-                 WHERE time >= $1 AND time <= $2
-                   AND (redis_key, point_id) IN (
-                       SELECT * FROM UNNEST($3::TEXT[], $4::TEXT[])
-                   )
-             ) sub
-             WHERE rn <= $5
-             ORDER BY redis_key, point_id, time ASC",
-        )
-        .bind(start_time)
-        .bind(end_time)
-        .bind(&keys)
-        .bind(&pids)
-        .bind(limit_per_series)
-        .fetch_all(&self.pool)
-        .await?;
+        let buckets = interval_seconds
+            .map(|interval| crate::models::interval_bucket_count(start_time, end_time, interval))
+            .transpose()?;
+        let sql = if interval_seconds.is_some() {
+            include_str!("interval_query.sql")
+        } else {
+            include_str!("batch_query.sql")
+        };
+        let query = sqlx::query_as::<_, (DateTime<Utc>, String, String, Option<f64>)>(sql)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(&keys)
+            .bind(&pids)
+            .bind(interval_seconds.unwrap_or(limit_per_series));
+        let query = match buckets {
+            Some(count) => query.bind(count),
+            None => query,
+        };
+        let rows = query.fetch_all(&self.pool).await?;
 
         // Group fetched rows by (redis_key, point_id), preserving the request order.
         let mut map: std::collections::HashMap<(&str, &str), Vec<SeriesPoint>> =
@@ -308,7 +305,10 @@ impl StorageBackend for PostgresBackend {
         let results = series
             .iter()
             .map(|(k, p)| {
-                let data = map.remove(&(k.as_str(), p.as_str())).unwrap_or_default();
+                let data = map
+                    .get(&(k.as_str(), p.as_str()))
+                    .cloned()
+                    .unwrap_or_default();
                 let count = data.len();
                 SeriesResult {
                     redis_key: k.clone(),

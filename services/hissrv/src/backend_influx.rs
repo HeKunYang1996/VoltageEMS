@@ -64,6 +64,7 @@ impl StorageBackend for InfluxDbBackend {
         _start_time: DateTime<Utc>,
         _end_time: DateTime<Utc>,
         _limit_per_series: i64,
+        _interval_seconds: Option<i64>,
     ) -> anyhow::Result<Vec<SeriesResult>> {
         anyhow::bail!("InfluxDB backend is not yet implemented")
     }
