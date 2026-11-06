@@ -123,8 +123,7 @@ step "1/5" "准备多架构 Builder: ${BUILDER_NAME}"
 if [[ "$MODE" == "local" ]]; then
     info "本地单平台模式，使用默认 builder"
 else
-    # 检查是否已存在可用 builder
-    if ! docker buildx ls | grep -q "^${BUILDER_NAME}"; then
+    create_multiarch_builder() {
         info "创建新 builder（docker-container driver，支持跨平台）"
         docker buildx create \
             --name "$BUILDER_NAME" \
@@ -132,9 +131,19 @@ else
             --driver-opt network=host \
             --use
         docker buildx inspect --bootstrap >/dev/null 2>&1
-    else
+    }
+
+    # 用 inspect 判断是否存在（比 grep ls 可靠，避免 ANSI/列格式导致误判后重复 create）
+    if docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
         docker buildx use "$BUILDER_NAME"
         info "复用已有 builder: ${BUILDER_NAME}"
+        if ! docker buildx inspect --bootstrap >/dev/null 2>&1; then
+            info "builder 未就绪，移除后重建: ${BUILDER_NAME}"
+            docker buildx rm "$BUILDER_NAME" >/dev/null 2>&1 || true
+            create_multiarch_builder
+        fi
+    else
+        create_multiarch_builder
     fi
     ok "Builder 就绪"
 fi
@@ -221,13 +230,14 @@ case "$MODE" in
             scp "$EXPORT_TAR" "${REMOTE_HOST}:${REMOTE_TAR}"
             ok "上传完成"
             info "在远程主机上加载并运行..."
-            ssh "$REMOTE_HOST" bash -s -- "$IMAGE_NAME" "$TAG" "$HOST_PORT" "$REMOTE_TAR" <<'REMOTE_SCRIPT'
-IMAGE=$1; TAG=$2; PORT=$3; TAR_PATH=$4; FULL="${IMAGE}:${TAG}"
+            ssh "$REMOTE_HOST" bash -s -- "$IMAGE_NAME" "$TAG" "$REMOTE_TAR" <<'REMOTE_SCRIPT'
+IMAGE=$1; TAG=$2; TAR_PATH=$3; FULL="${IMAGE}:${TAG}"
 docker stop "$IMAGE" 2>/dev/null || true
 docker rm   "$IMAGE" 2>/dev/null || true
 docker load -i "$TAR_PATH"
-docker run -d --name "$IMAGE" --restart unless-stopped -p "${PORT}:8080" "$FULL"
-echo "Remote container started: $IMAGE"
+# nginx.conf 反代 127.0.0.1:600x，须与宿主机同网络命名空间（与 docker-compose network_mode: host 一致）
+docker run -d --name "$IMAGE" --restart unless-stopped --network host "$FULL"
+echo "Remote container started: $IMAGE (host network, http://127.0.0.1:8080)"
 REMOTE_SCRIPT
             ok "远程部署完成"
         else

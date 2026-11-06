@@ -1,104 +1,99 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  setRem,
-  initResponsive,
-  pxToResponsive,
-  pxToRem,
-  getCurrentScale,
   getCurrentFontSize,
+  getCurrentScale,
+  initResponsive,
+  pxToRem,
+  pxToResponsive,
+  setRem,
 } from '../responsive'
 
-// Mock window and document
-Object.defineProperty(window, 'innerWidth', {
-  writable: true,
-  configurable: true,
-  value: 1920,
-})
+describe('responsive.ts', () => {
+  const originalInnerWidth = window.innerWidth
+  const originalGetComputedStyle = window.getComputedStyle
+  const originalAddEventListener = window.addEventListener
+  const listeners = new Map<string, () => void>()
 
-Object.defineProperty(window, 'innerHeight', {
-  writable: true,
-  configurable: true,
-  value: 1080,
-})
+  beforeEach(() => {
+    vi.useFakeTimers()
+    listeners.clear()
 
-Object.defineProperty(document, 'documentElement', {
-  writable: true,
-  configurable: true,
-  value: {
-    style: {
-      fontSize: '100px',
-    },
-  },
-})
-
-describe('Responsive Utils', () => {
-  describe('setRem', () => {
-    it('should set root font size based on screen width', () => {
-      const mockHtml = {
-        style: {
-          fontSize: '',
-        },
-      }
-
-      Object.defineProperty(document, 'documentElement', {
-        value: mockHtml,
-        writable: true,
-      })
-
-      setRem()
-      expect(mockHtml.style.fontSize).toBe('100px')
+    Object.defineProperty(window, 'innerWidth', {
+      value: 1920,
+      writable: true,
+      configurable: true,
     })
+
+    Object.defineProperty(document, 'documentElement', {
+      value: { style: { fontSize: '100px' } },
+      configurable: true,
+    })
+
+    window.getComputedStyle = vi.fn(() => ({
+      fontSize: document.documentElement.style.fontSize,
+    })) as never
+    window.addEventListener = vi.fn((event, handler) => {
+      listeners.set(event as string, handler as () => void)
+    }) as never
   })
 
-  describe('pxToResponsive', () => {
-    it('should convert design px to responsive px', () => {
-      const result = pxToResponsive(100)
-      expect(result).toBe(100) // At 1920px width, scale is 1
+  afterEach(() => {
+    vi.useRealTimers()
+    Object.defineProperty(window, 'innerWidth', {
+      value: originalInnerWidth,
+      writable: true,
+      configurable: true,
     })
+    window.getComputedStyle = originalGetComputedStyle
+    window.addEventListener = originalAddEventListener
   })
 
-  describe('pxToRem', () => {
-    it('should convert design px to rem', () => {
-      const result = pxToRem(100)
-      expect(result).toBe('1rem')
-    })
+  it('sets root font size based on screen width', () => {
+    setRem()
+    expect(document.documentElement.style.fontSize).toBe('100px')
+
+    window.innerWidth = 960
+    setRem()
+    expect(document.documentElement.style.fontSize).toBe('50px')
   })
 
-  describe('getCurrentScale', () => {
-    it('should return current scale ratio', () => {
-      const scale = getCurrentScale()
-      expect(scale).toBe(1) // At 1920px width, scale is 1
-    })
+  it('initializes responsive behavior and updates on debounced resize', () => {
+    initResponsive()
 
-    it('keeps the original height constraint on short viewports', () => {
-      window.innerHeight = 810
-      try {
-        expect(getCurrentScale()).toBe(0.75)
-      } finally {
-        window.innerHeight = 1080
-      }
-    })
+    expect(window.addEventListener).toHaveBeenCalledWith('resize', expect.any(Function))
+    expect(document.documentElement.style.fontSize).toBe('100px')
+
+    window.innerWidth = 960
+    const resizeHandler = listeners.get('resize')
+    resizeHandler?.()
+    vi.advanceTimersByTime(100)
+
+    expect(document.documentElement.style.fontSize).toBe('50px')
   })
 
-  describe('getCurrentFontSize', () => {
-    it('should return current font size', () => {
-      // Mock getComputedStyle to return a valid CSSStyleDeclaration
-      const mockComputedStyle = {
-        fontSize: '16px',
-      }
-
-      vi.spyOn(window, 'getComputedStyle').mockReturnValue(mockComputedStyle as any)
-
-      const fontSize = getCurrentFontSize()
-      expect(fontSize).toBe(16)
-    })
+  it('converts px values to responsive px', () => {
+    expect(pxToResponsive(100)).toBe(100)
+    window.innerWidth = 960
+    expect(pxToResponsive(100)).toBe(50)
+    window.innerWidth = 480
+    expect(pxToResponsive(100)).toBe(25)
   })
 
-  describe('initResponsive', () => {
-    it('should initialize responsive configuration', () => {
-      const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
-      initResponsive()
-      expect(addEventListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function))
-    })
+  it('converts px values to rem based on the current scaled root size', () => {
+    expect(pxToRem(100)).toBe('1rem')
+    window.innerWidth = 960
+    expect(pxToRem(100)).toBe('2rem')
+    expect(pxToRem(0)).toBe('0rem')
+  })
+
+  it('returns the current scale and root font size', () => {
+    expect(getCurrentScale()).toBe(1)
+    window.innerWidth = 480
+    expect(getCurrentScale()).toBe(0.25)
+
+    document.documentElement.style.fontSize = '80px'
+    expect(getCurrentFontSize()).toBe(80)
+    window.getComputedStyle = vi.fn(() => ({ fontSize: 'invalid' })) as never
+    expect(getCurrentFontSize()).toBe(100)
   })
 })

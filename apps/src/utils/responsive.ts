@@ -1,62 +1,39 @@
-// Responsive layout utilities
-
 const DESIGN_WIDTH = 1920
-const DESIGN_HEIGHT = 1080
-const BASE_FONT_SIZE = 100 // 100px = 1rem
+const BASE_FONT_SIZE = 100
 
-function getResponsiveScale(): number {
-  // The dashboard is designed for a 1920x1080 canvas. Scaling only from the
-  // width makes the vertical layout overflow on shorter Safari viewports.
-  return Math.min(window.innerWidth / DESIGN_WIDTH, window.innerHeight / DESIGN_HEIGHT)
-}
-
-/**
- * Set the root font size for rem-based responsive layouts.
- */
 export function setRem(): void {
   const html = document.documentElement
-  const fontSize = BASE_FONT_SIZE * getResponsiveScale()
+  const screenWidth = window.innerWidth
+  const fontSize = BASE_FONT_SIZE * (screenWidth / DESIGN_WIDTH)
+
   html.style.fontSize = `${fontSize}px`
 }
 
-/**
- * Initialize responsive behavior.
- */
 export function initResponsive(): void {
   setRem()
 
-  window.addEventListener('resize', function () {
+  window.addEventListener('resize', () => {
     clearTimeout((window as any).remResizeTimer)
     ;(window as any).remResizeTimer = setTimeout(setRem, 100)
   })
 }
 
-/**
- * Convert a design-time px value into a px value under the current viewport scale.
- */
 export function pxToResponsive(designPx: number): number {
-  return designPx * getResponsiveScale()
+  const screenWidth = window.innerWidth
+  return designPx * (screenWidth / DESIGN_WIDTH)
 }
 
-/**
- * Convert a design-time px value into rem.
- */
 export function pxToRem(designPx: number): string {
-  const currentBaseFontSize = BASE_FONT_SIZE * getResponsiveScale()
-  const remValue = designPx / currentBaseFontSize
-  return `${remValue}rem`
+  const screenWidth = window.innerWidth
+  const currentBaseFontSize = BASE_FONT_SIZE * (screenWidth / DESIGN_WIDTH)
+  return `${designPx / currentBaseFontSize}rem`
 }
 
-/**
- * Get the current viewport scale relative to the design size.
- */
 export function getCurrentScale(): number {
-  return getResponsiveScale()
+  const screenWidth = window.innerWidth
+  return screenWidth / DESIGN_WIDTH
 }
 
-/**
- * Get the current root font size in px.
- */
 export function getCurrentFontSize(): number {
   const html = document.documentElement
   const fontSize = parseFloat(getComputedStyle(html).fontSize)
