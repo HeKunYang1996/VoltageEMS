@@ -203,7 +203,7 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             name: darwin-aarch64
             archive: tar.gz
           - target: x86_64-pc-windows-msvc
