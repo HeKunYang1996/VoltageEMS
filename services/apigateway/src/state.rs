@@ -8,6 +8,7 @@ use crate::models::RefreshTokenInfo;
 use crate::ws::WsHub;
 
 pub struct AppState {
+    pub cloud_link: Arc<crate::cloud_link::CloudLink>,
     pub db: SqlitePool,
     #[allow(dead_code)]
     pub rtdb: Arc<voltage_rtdb::RedisRtdb>,

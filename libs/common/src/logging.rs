@@ -867,6 +867,8 @@ fn redact_sensitive_fields(json_str: &str) -> String {
         "passwd",
         "token",
         "api_key",
+        "activation",
+        "cloud_link_key",
         "apikey",
         "secret",
         "authorization",
@@ -889,7 +891,7 @@ fn redact_sensitive_fields(json_str: &str) -> String {
             Value::Object(map) => {
                 for (key, val) in map.iter_mut() {
                     let key_lower = key.to_lowercase();
-                    if SENSITIVE_KEYS.iter().any(|&k| key_lower.contains(k)) {
+                    if key_lower == "key" || SENSITIVE_KEYS.iter().any(|&k| key_lower.contains(k)) {
                         // Replace sensitive value with redacted marker
                         *val = json!("***REDACTED***");
                     } else {
@@ -1583,6 +1585,17 @@ mod tests {
         let invalid_json = "not valid json";
         let result = redact_sensitive_fields(invalid_json);
         assert_eq!(result, "<omitted: invalid JSON>");
+    }
+
+    #[test]
+    fn cloud_activation_keys_are_redacted_in_audit_previews() {
+        let body = br#"{"url":"http://cloud.local","key":"ABCD1234567890123456789WXYZ","activation":"another-secret","CLOUD_LINK_KEY":"saved-secret","key_count":3}"#;
+        let preview = preview_json_body(body, 2048);
+        assert!(!preview.contains("ABCD1234567890123456789WXYZ"));
+        assert!(!preview.contains("another-secret"));
+        assert!(!preview.contains("saved-secret"));
+        assert!(preview.contains("http://cloud.local"));
+        assert!(preview.contains(r#""key_count":3"#));
     }
 
     #[test]

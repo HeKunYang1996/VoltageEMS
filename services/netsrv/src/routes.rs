@@ -8,6 +8,7 @@ use axum::{
     response::Json,
     routing::{delete, get, post},
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use tracing::error;
 use utoipa::OpenApi;
@@ -576,17 +577,69 @@ async fn cert_delete(
 // Device sync
 // ============================================================================
 
-/// 主动向平台发送设备列表同步消息（inst-sync-reply）。
-///
-/// msgId 自动设为当前毫秒级时间戳，数据从 modsrv 实时拉取。
+#[derive(Serialize)]
+struct InstSyncError {
+    success: bool,
+    message: String,
+}
+
+impl InstSyncError {
+    fn response(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            status,
+            Json(Self {
+                success: false,
+                message: message.into(),
+            }),
+        )
+    }
+}
+
+async fn require_sync_registration(
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<InstSyncError>)> {
+    let url = format!(
+        "{}/api/v1/internal/cloud-link/status",
+        state.env.apigateway_url.trim_end_matches('/')
+    );
+    let check = state
+        .http_client
+        .get(url)
+        .query(&[("device_sn", state.device.device_sn.as_str())])
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await;
+
+    match check {
+        Ok(response) => match response.status() {
+            StatusCode::NO_CONTENT => return Ok(()),
+            StatusCode::CONFLICT => {
+                return Err(InstSyncError::response(
+                    StatusCode::CONFLICT,
+                    "Device is not activated. Activate it before synchronizing.",
+                ));
+            },
+            status => error!(%status, "Activation status check failed"),
+        },
+        Err(error) => error!(error = %error.without_url(), "Activation status check failed"),
+    }
+    Err(InstSyncError::response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Unable to verify device activation status. Please try again.",
+    ))
+}
+
+/// Publish the current device list and topology to the cloud for an activated device.
 #[utoipa::path(post, path = "/netApi/inst-sync", tag = "MQTT",
     responses(
-        (status = 200, description = "已发布 inst-sync-reply"),
-        (status = 503, description = "MQTT 未连接或 modsrv 不可达"),
+        (status = 200, description = "inst-sync-reply submitted for MQTT publication"),
+        (status = 409, description = "Device is not activated"),
+        (status = 503, description = "Activation status, modsrv, or MQTT is unavailable"),
     ))]
 async fn inst_sync_push(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json<Value>, (StatusCode, Json<InstSyncError>)> {
+    require_sync_registration(&state).await?;
     let msg_id = chrono::Utc::now().timestamp_millis().to_string();
 
     do_inst_sync(Arc::clone(&state), Some(msg_id.clone()))
@@ -600,9 +653,133 @@ async fn inst_sync_push(
         })
         .map_err(|e| {
             error!("inst-sync-push failed: {}", e);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"success": false, "message": e.to_string()})),
-            )
+            InstSyncError::response(StatusCode::SERVICE_UNAVAILABLE, e.to_string())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Query;
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicBool, AtomicU16, AtomicUsize},
+    };
+    use tokio::sync::{Mutex, Notify, RwLock};
+
+    #[tokio::test]
+    async fn instance_sync_requires_confirmed_activation_before_querying_modsrv() {
+        let registration = Arc::new(AtomicU16::new(StatusCode::CONFLICT.as_u16()));
+        let activation_fixture = Arc::clone(&registration);
+        let modsrv_reads = Arc::new(AtomicUsize::new(0));
+        let instance_reads = Arc::clone(&modsrv_reads);
+        let topology_reads = Arc::clone(&modsrv_reads);
+        let upstream = Router::new()
+            .route(
+                "/api/v1/internal/cloud-link/status",
+                get(move |Query(params): Query<HashMap<String, String>>| {
+                    let status = activation_fixture.load(Ordering::Relaxed);
+                    async move {
+                        assert_eq!(
+                            params.get("device_sn").map(String::as_str),
+                            Some("00098888")
+                        );
+                        StatusCode::from_u16(status).unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/api/instances/properties",
+                get(move || {
+                    instance_reads.fetch_add(1, Ordering::Relaxed);
+                    async { Json(json!({"data": {"list": []}})) }
+                }),
+            )
+            .route(
+                "/api/station/topology",
+                get(move || {
+                    topology_reads.fetch_add(1, Ordering::Relaxed);
+                    async { Json(json!({"data": {"flow_json": {}}})) }
+                }),
+            );
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_url = format!("http://{}", upstream_listener.local_addr().unwrap());
+        let upstream_task =
+            tokio::spawn(async move { axum::serve(upstream_listener, upstream).await.unwrap() });
+
+        let redis =
+            common::redis::RedisClient::with_config_no_ping(common::redis::RedisPoolConfig {
+                url: "redis://127.0.0.1:1".into(),
+                min_idle: Some(0),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let device = Arc::new(crate::device::DeviceIdentity::resolve(
+            "MonarchHub",
+            "00098888",
+        ));
+        let topics = Arc::new(device.topics());
+        let (mqtt, _event_loop) =
+            rumqttc::AsyncClient::new(rumqttc::MqttOptions::new("sync-test", "127.0.0.1", 1), 4);
+        let state = Arc::new(AppState {
+            sqlite: sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            rtdb: Arc::new(voltage_rtdb::RedisRtdb::from_client(Arc::new(redis))),
+            env: Arc::new(crate::config::EnvConfig {
+                apigateway_url: upstream_url.clone(),
+                ..Default::default()
+            }),
+            config: Arc::new(RwLock::new(NetConfig {
+                apigateway_url: "http://127.0.0.1:1".into(),
+                modsrv_url: upstream_url,
+                ..Default::default()
+            })),
+            device,
+            topics,
+            mqtt_client: Arc::new(Mutex::new(Some(mqtt))),
+            mqtt_connected: Arc::new(AtomicBool::new(true)),
+            reconnect_signal: Arc::new(Notify::new()),
+            disconnect_requested: Arc::new(AtomicBool::new(false)),
+            http_client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/netApi/inst-sync", listener.local_addr().unwrap());
+        let netsrv_task =
+            tokio::spawn(async move { axum::serve(listener, build_router(state)).await.unwrap() });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        for (gateway_status, http_status, message) in [
+            (
+                StatusCode::CONFLICT,
+                StatusCode::CONFLICT,
+                "Device is not activated. Activate it before synchronizing.",
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Unable to verify device activation status. Please try again.",
+            ),
+        ] {
+            registration.store(gateway_status.as_u16(), Ordering::Relaxed);
+            let response = client.post(&endpoint).send().await.unwrap();
+            assert_eq!(response.status(), http_status);
+            assert_eq!(
+                response.json::<Value>().await.unwrap(),
+                json!({"success": false, "message": message})
+            );
+            assert_eq!(modsrv_reads.load(Ordering::Relaxed), 0);
+        }
+
+        registration.store(StatusCode::NO_CONTENT.as_u16(), Ordering::Relaxed);
+        let response = client.post(&endpoint).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap()["success"], true);
+        assert_eq!(modsrv_reads.load(Ordering::Relaxed), 2);
+        netsrv_task.abort();
+        upstream_task.abort();
+    }
 }

@@ -7,6 +7,8 @@ pub struct EnvConfig {
     pub api_host: String,
     pub api_port: u16,
     pub redis_url: String,
+    /// Local API gateway for service-to-service activation status checks.
+    pub apigateway_url: String,
     /// Shared SQLite database path (same as alarmsrv / apigateway).
     pub db_path: String,
     /// Directory for TLS certificate files. Fixed at container build time;
@@ -29,6 +31,8 @@ impl Default for EnvConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(6006),
             redis_url,
+            apigateway_url: env::var("APIGATEWAY_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:6005".to_string()),
             db_path: env::var("VOLTAGE_DB_PATH")
                 .unwrap_or_else(|_| "/app/data/voltage.db".to_string()),
             cert_dir: env::var("CERT_DIR").unwrap_or_else(|_| "/app/config/cert".to_string()),

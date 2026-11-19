@@ -27,6 +27,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::{Config, SwaggerUi};
 
 mod auth;
+mod cloud_link;
 mod config;
 mod config_services;
 mod config_versions;
@@ -35,6 +36,7 @@ mod middleware_auth;
 mod models;
 mod routes_auth;
 mod routes_broadcast;
+mod routes_cloud_link;
 mod routes_config;
 mod routes_homepage;
 mod routes_network;
@@ -76,6 +78,8 @@ use crate::ws::WsHub;
         routes_auth::validate_admin_token,
         routes_broadcast::broadcast_message,
         routes_broadcast::broadcast_status,
+        routes_cloud_link::get_cloud_link,
+        routes_cloud_link::activate_cloud_link,
         routes_homepage::list_points,
         routes_homepage::get_point,
         routes_homepage::update_point,
@@ -114,12 +118,15 @@ use crate::ws::WsHub;
         models::CalculatedPointUpdate,
         models::NetworkConfig,
         models::NetworkUpdateRequest,
+        cloud_link::ActivateRequest,
+        cloud_link::CloudLinkConfig,
     )),
     tags(
         (name = "Auth", description = "Authentication and user management"),
         (name = "Homepage", description = "Homepage calculated point CRUD"),
         (name = "Network", description = "Network interface configuration"),
         (name = "Config", description = "System configuration export / import / upgrade"),
+        (name = "CloudLink", description = "Cloud device activation"),
         (name = "WebSocket", description = "WebSocket broadcast and status"),
     ),
     modifiers(&SecurityAddon),
@@ -287,6 +294,11 @@ fn build_router(state: Arc<AppState>) -> Router {
     // authenticated. Role-specific sub-routers above add a second layer
     // (Engineer / Admin) on top of this baseline check.
     let protected_v1 = Router::new()
+        .route("/cloud-link", get(routes_cloud_link::get_cloud_link))
+        .route(
+            "/cloud-link/activate",
+            post(routes_cloud_link::activate_cloud_link),
+        )
         .nest("/homepage", homepage_routes)
         .nest("/network", network_routes)
         .nest("/config", config_routes)
@@ -312,6 +324,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/broadcast", post(routes_broadcast::broadcast_message))
         .route("/broadcast/status", get(routes_broadcast::broadcast_status))
         .route("/system/reboot", post(routes_system::schedule_reboot))
+        .route(
+            "/internal/cloud-link/status",
+            get(routes_cloud_link::check_registration_status),
+        )
         .layer(axum::middleware::from_fn(middleware_auth::require_loopback));
 
     let api_v1 = Router::new()
@@ -444,7 +460,19 @@ async fn main() -> anyhow::Result<()> {
     // ── App State ─────────────────────────────────────────────────────────────
     let ws_hub = WsHub::new(Arc::clone(&rtdb), db_pool.clone());
 
+    let env_path = std::env::var_os("VOLTAGE_ENV_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/opt/MonarchEdge/.env".into());
+    let cloud_link = Arc::new(cloud_link::CloudLink::new(env_path)?);
+    if let Err(error) = cloud_link.initialize() {
+        warn!(
+            "Cloud registration configuration initialization failed: {}",
+            error.error.message
+        );
+    }
+
     let state = Arc::new(AppState {
+        cloud_link,
         db: db_pool,
         rtdb,
         config: Arc::new(cfg),
